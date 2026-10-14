@@ -1,0 +1,41 @@
+"""Where DirAI keeps things.
+
+- The tool itself: this folder (one checkout, e.g. ~/DirAI).
+- Per tree (a git repo being served): <tree>/www/ holds the list page and state
+  (index.html, reviews.json, page_sizes.json, page_tokens.json, server_host.txt, logs: all
+  generated) and dirai.json, the tree's settings. dirai.json is local too (gitignored): two clones
+  of one repo (e.g. home and scratch) need different ports, and it holds machine paths.
+      {"port": 8765,                    # this tree's server port
+       "title": "My Work",              # list page heading (default: the folder name)
+       "read_dirs": ["/scratch/..."],   # extra folders page agents may read (the tree is always in)
+       "allow": ["Bash(~/x/run.sh:*)"], # extra allow rules for page agents
+       "slurm": ["-A", "grp", "-p", "cpu"]}  # extra sbatch options for `DirAI start --job`
+- Per user, never in a repo: ~/.config/dirai/ with the owner key (key), the "Always allow"
+  grants (permissions.json) and the list of trees DirAI has started (trees).
+"""
+import json
+import os
+
+TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_DIR = os.path.expanduser(os.environ.get("DIRAI_CONFIG_DIR", "~/.config/dirai"))
+KEY_FILE = os.path.join(CONFIG_DIR, "key")
+PERMS_FILE = os.path.join(CONFIG_DIR, "permissions.json")
+TREES_FILE = os.path.join(CONFIG_DIR, "trees")
+DATA = "www"            # the data folder's name inside a tree (URLs: /www/index.html)
+FIRST_PORT = 8765
+
+
+def data_dir(root):
+    return os.path.join(root, DATA)
+
+
+def tree_config(root):
+    """The tree's www/dirai.json merged over the defaults."""
+    cfg = {"port": None, "title": os.path.basename(os.path.abspath(root)), "read_dirs": [], "allow": [], "slurm": []}
+    try:
+        with open(os.path.join(data_dir(root), "dirai.json")) as f:
+            cfg.update(json.load(f))
+    except (OSError, ValueError):
+        pass
+    cfg["read_dirs"] = [os.path.expanduser(d) for d in cfg["read_dirs"]]
+    return cfg

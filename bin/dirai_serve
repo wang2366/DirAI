@@ -1,0 +1,61 @@
+#!/bin/bash
+# Long-running page server for ONE tree (a git repo): serves its .html pages and their images
+# (only) on the tree's port, open to the network: http://<node>:<port>/www/index.html
+# Rebuilds the tree's www/index.html every 10 min and records itself in <tree>/www/server_host.txt
+# (read by `DirAI status|restart|stop`).
+#
+#   dirai_serve TREE          normally started by `DirAI start` (on your devnode, or as a job)
+# Reload (restart the Python server with the current code, same job/node/port): kill -USR1 <pid>,
+# i.e. `DirAI restart`. Stop: `DirAI stop`.
+set -u
+
+TOOL=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+ROOT=$(cd "${1:?usage: dirai_serve TREE}" && pwd -P)
+DATA=$ROOT/www
+HOST_FILE=$DATA/server_host.txt
+PORT=$(python3 -c "import sys; sys.path.insert(0, '$TOOL'); import dirai_config as c; print(c.tree_config('$ROOT')['port'] or '')")
+[[ -n "$PORT" ]] || { echo "no port in $DATA/dirai.json (run: DirAI init)" >&2; exit 1; }
+mkdir -p "$DATA"
+SERVER_PID=
+
+# On exit: drop the host file only if it still describes this instance, then take the
+# server down with us (trap reset first so kill 0 doesn't re-enter it).
+cleanup() {
+    trap - EXIT HUP INT TERM
+    [[ "$(awk '{print $5}' "$HOST_FILE" 2>/dev/null)" == "$$" ]] && rm -f "$HOST_FILE"
+    kill 0
+}
+
+start_server() {
+    python3 "$TOOL/build_index.py" "$ROOT"
+    python3 "$TOOL/html_server.py" "$ROOT" "$PORT" 0.0.0.0 &
+    SERVER_PID=$!
+}
+
+# SIGUSR1: restart the Python server in place (picks up html_server.py/review.py changes)
+reload() {
+    echo "$(date '+%F %T') reload"
+    kill "$SERVER_PID" 2>/dev/null
+    wait "$SERVER_PID" 2>/dev/null
+    start_server
+}
+
+trap cleanup EXIT INT TERM
+trap reload USR1
+
+start_server
+# fields: node job date time pid reload-capable port
+echo "$(hostname -s) ${SLURM_JOB_ID:-nojob} $(date '+%F %T') $$ reload $PORT" > "$HOST_FILE"
+echo "Serving $ROOT on $(hostname -s):$PORT"
+
+# keep the page list current
+while true; do
+    sleep 600
+    python3 "$TOOL/build_index.py" "$ROOT" >/dev/null
+done &
+
+# wait returns whenever a trapped signal (USR1) arrives; keep waiting after a reload
+while true; do
+    wait
+    sleep 1
+done

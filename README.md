@@ -1,0 +1,59 @@
+# DirAI
+
+Serve any git repo as browsable HTML pages, with a Claude Code assistant on every page.
+
+Each page folder holds an `index.html` (and optional `plan_*.html`). DirAI lists them on the repo's
+`www/index.html`. The owner gets an assistant panel on each page: a comment there starts a
+background `claude -p` session in that folder, which edits the page, reruns scripts or submits
+jobs, then replies in the thread.
+
+## Setup (once per machine)
+
+```bash
+git clone <this repo> ~/DirAI
+ln -s ~/DirAI/bin/DirAI ~/.local/bin/DirAI      # any folder on your PATH
+```
+
+Needs Python 3.6+, `git`, `curl`, and Claude Code (`~/.local/bin/claude`, or set `REVIEW_CLAUDE_CMD`).
+
+## Use (per repo)
+
+```bash
+cd <your repo>        # anywhere inside it
+DirAI init            # www/dirai.json (port), .gitignore lines, CLAUDE.md import of the page rules
+DirAI start           # on this machine; or: DirAI start NODE | --job (its own sbatch job)
+DirAI status | restart | stop | build | list
+```
+
+Each repo (each clone, even of the same repo) runs its own server on its own port, so trees start
+and stop independently. `DirAI list` shows them all.
+
+Opening a page as the owner: connect through an SSH tunnel to the node, then visit
+`/_review/login?key=<~/.config/dirai/key>` once to set the owner cookie.
+
+## Where things live
+
+| Where | What |
+|---|---|
+| this repo | the tool: server, list builder, assistant (`review.py`), panel scripts, `PAGES.md` page rules |
+| `<repo>/www/` | per tree, generated and gitignored: list page, threads (`reviews.json`), caches, `server_host.txt`, logs, and `dirai.json` settings |
+| `~/.config/dirai/` | per user: owner key, "Always allow" grants, shared Claude usage reading, the list of trees |
+
+`www/dirai.json`:
+
+```json
+{"port": 8765, "title": "My Work",
+ "read_dirs": ["/data/shared"],              "allow": ["Bash(~/tools/run.sh:*)"],
+ "slurm": ["-A", "mygroup", "-p", "cpu"]}
+```
+
+`read_dirs`: extra folders page assistants may read (the repo itself always). `allow`: extra
+Claude Code permission rules for them. `slurm`: extra `sbatch` options for `DirAI start --job`.
+
+## Assistant safety
+
+Runs use `claude -p --restricted` with an allow list (`review.py`): file access only inside the repo
+and `read_dirs`, edits only in the page's folder, deletions only through `page_rm.sh`, destructive git
+commands always denied. Blocked actions show in the panel with "Allow once" / "Always allow".
+New tasks pause at 95 % of Claude's 5-hour limit or 98 % of the weekly limit and resume after the
+reset (`claude_usage.py`).

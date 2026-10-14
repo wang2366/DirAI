@@ -1,0 +1,193 @@
+#!/bin/bash
+# DirAI: serve the git repo you are in as browsable HTML pages, with an AI assistant on every page.
+# Run it anywhere inside a repo; it acts on that repo's top-level folder (the "tree").
+#
+#   DirAI init                 set the tree up: www/dirai.json (port), .gitignore lines, CLAUDE.md import
+#   DirAI [start [NODE|--job]] start this tree's server on this machine (default), on NODE,
+#                              or as its own sbatch job (--job)
+#   DirAI status               is it alive? node, port, job time left, URL
+#   DirAI restart              reload in place: same node/port, current code, fresh list page
+#   DirAI stop                 stop this tree's server
+#   DirAI build                rebuild this tree's list page (www/index.html) now
+#   DirAI publish [-n]         publish the tree's committed *.html to its gh-pages branch
+#   DirAI list                 every tree DirAI has started, and whether it is up
+#   DirAI -C DIR <command>     act on the repo holding DIR instead of the current directory
+# Each tree has its own server, port and state (www/), so trees start and stop independently.
+set -uo pipefail
+
+TOOL=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+CONFIG_DIR=${DIRAI_CONFIG_DIR:-$HOME/.config/dirai}
+TREES_FILE=$CONFIG_DIR/trees
+SSH="ssh -o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=10"
+
+if [[ "${1:-}" == -C ]]; then cd "${2:?-C needs a directory}" || exit 1; shift 2; fi
+CMD=${1:-start}
+[[ $# -gt 0 ]] && shift
+
+case "$CMD" in -h|--help|help) sed -n '2,16p' "$0"; exit 0 ;; list) ;; *)
+    ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Not inside a git repo; cd into one (or use DirAI -C DIR)." >&2; exit 1; }
+    ROOT=$(cd "$ROOT" && pwd -P)
+    DATA=$ROOT/www
+    HOST_FILE=$DATA/server_host.txt
+esac
+
+cfg() {   # cfg KEY [TREE]: a value from the tree's dirai.json (lists space-separated)
+    python3 - "$TOOL" "${2:-$ROOT}" "$1" <<'EOF'
+import sys; sys.path.insert(0, sys.argv[1]); import dirai_config as c
+v = c.tree_config(sys.argv[2]).get(sys.argv[3])
+print(" ".join(v) if isinstance(v, list) else ("" if v is None else v))
+EOF
+}
+
+url_host() {   # node name as reachable from elsewhere (adds this cluster's domain if known)
+    local d; d=$(hostname -d 2>/dev/null)
+    [[ -n "$d" ]] && echo "$1.$d" || echo "$1"
+}
+
+read_host() {
+    [[ -s "$HOST_FILE" ]] || return 1
+    read -r NODE JOB STARTED_D STARTED_T PID CAP HPORT < "$HOST_FILE"
+}
+
+run_on() {   # run_on NODE CMD: on this machine if NODE is this host, else over ssh
+    if [[ "$1" == "$(hostname -s)" ]]; then bash -c "$2"; else $SSH "$1" "$2"; fi
+}
+
+register() {
+    mkdir -p "$CONFIG_DIR"
+    grep -qxF "$ROOT" "$TREES_FILE" 2>/dev/null || echo "$ROOT" >> "$TREES_FILE"
+}
+
+status() {
+    local port; port=$(cfg port)
+    echo "tree:    $ROOT"
+    if ! read_host; then
+        echo "DOWN: no $HOST_FILE (server not running, or started <30 s ago)"
+        return 1
+    fi
+    echo "node:    $NODE"
+    echo "url:     http://$(url_host "$NODE"):${HPORT:-$port}/www/index.html"
+    echo "started: $STARTED_D $STARTED_T"
+    if [[ "$JOB" != nojob ]]; then
+        local left; left=$(squeue -h -j "$JOB" -o '%T, %L left' 2>/dev/null)
+        echo "job:     $JOB (${left:-not in queue anymore})"
+    fi
+    echo "list:    built $(date -r "$DATA/index.html" '+%F %T' 2>/dev/null || echo never)"
+    local code; code=$(run_on "$NODE" "curl -s -o /dev/null -m 5 -w '%{http_code}' http://127.0.0.1:${HPORT:-$port}/www/index.html" 2>/dev/null)
+    [[ "$code" == 200 ]] && { echo "ALIVE"; return 0; }
+    echo "NOT ANSWERING (${code:-no answer})"; return 1
+}
+
+port_in_use_by_other_tree() {   # another registered tree with the same port that is up
+    local port=$1 t
+    while read -r t; do
+        [[ -n "$t" && "$t" != "$ROOT" && -s "$t/www/server_host.txt" ]] || continue
+        [[ "$(cfg port "$t")" == "$port" ]] && { echo "$t"; return 0; }
+    done < <(cat "$TREES_FILE" 2>/dev/null)
+    return 1
+}
+
+start() {
+    [[ -s "$DATA/dirai.json" ]] || { echo "This tree isn't set up yet: run  DirAI init  first." >&2; return 1; }
+    local port other; port=$(cfg port)
+    if read_host && status >/dev/null 2>&1; then echo "Already running on $NODE:${HPORT:-$port}"; return 0; fi
+    if other=$(port_in_use_by_other_tree "$port"); then
+        echo "Port $port is already used by $other; change \"port\" in $DATA/dirai.json." >&2; return 1
+    fi
+    register
+    if [[ "${1:-}" == --job ]]; then
+        # extra sbatch options (account, partition, time) from dirai.json "slurm", e.g. ["-A","grp","-p","cpu"]
+        sbatch -J "dirai-$(basename "$ROOT")" -n 1 -c 1 --mem=2G -o "$DATA/serve_node.%j.log" \
+            $(cfg slurm) "$TOOL/bin/dirai_serve" "$ROOT"
+        return
+    fi
+    local node=${1:-}
+    [[ -z "$node" || "$node" == --here ]] && node=$(hostname -s)   # default: where DirAI was run
+    if run_on "$node" "pgrep -u $USER -f '[d]irai_serve $ROOT\$' >/dev/null"; then
+        echo "Already running on $node (server_host.txt may take ~30 s to show up)"; return 0
+    fi
+    run_on "$node" "setsid nohup $TOOL/bin/dirai_serve $ROOT > $DATA/serve_node.log 2>&1 < /dev/null &" &&
+        echo "Started $ROOT on $node:$port (log: $DATA/serve_node.log)"
+    SECONDS=0
+    while (( SECONDS < 120 )); do
+        [[ "$(run_on "$node" "curl -s -o /dev/null -m 3 -w '%{http_code}' http://127.0.0.1:$port/www/index.html" 2>/dev/null)" == 200 ]] &&
+            { echo "Up: http://$(url_host "$node"):$port/www/index.html"; return 0; }
+        sleep 2
+    done
+    echo "Not answering after 2 min; check $DATA/serve_node.log" >&2; return 1
+}
+
+restart() {
+    local port; port=$(cfg port)
+    read_host || { echo "Not running (no $HOST_FILE). Start it with: DirAI start"; return 1; }
+    run_on "$NODE" "kill -USR1 $PID" || return 1
+    sleep 2
+    SECONDS=0
+    while (( SECONDS < 180 )); do   # ask the node directly: server_host.txt can lag on NFS
+        [[ "$(run_on "$NODE" "curl -s -o /dev/null -m 3 -w '%{http_code}' http://127.0.0.1:${HPORT:-$port}/www/index.html" 2>/dev/null)" == 200 ]] &&
+            { echo "Back up on $NODE after $((SECONDS + 2)) s"; return 0; }
+        sleep 2
+    done
+    echo "Not answering after 3 min; check: DirAI status" >&2; return 1
+}
+
+stop() {
+    read_host || { echo "Not running"; return 0; }
+    run_on "$NODE" "kill -TERM $PID"     # its cleanup trap stops the Python server
+    if [[ "$JOB" != nojob ]] && [[ "$(squeue -h -j "$JOB" -o %j 2>/dev/null)" == dirai-* ]]; then
+        scancel "$JOB"   # its own job; never cancels a job you started for something else
+    fi
+    rm -f "$HOST_FILE"
+    echo "Stopped $ROOT"
+}
+
+init() {
+    mkdir -p "$DATA"
+    if [[ ! -s "$DATA/dirai.json" ]]; then
+        local used port t
+        used=$(while read -r t; do [[ -n "$t" ]] && cfg port "$t"; done < <(cat "$TREES_FILE" 2>/dev/null))
+        port=8765
+        while grep -qxF "$port" <<<"$used"; do port=$((port + 1)); done
+        printf '{\n "port": %d,\n "title": "%s",\n "read_dirs": [],\n "allow": []\n}\n' "$port" "$(basename "$ROOT")" > "$DATA/dirai.json"
+        echo "Wrote $DATA/dirai.json (port $port; local to this clone, not committed)."
+    fi
+    local gi=$ROOT/.gitignore line added=0
+    for line in www/dirai.json www/index.html www/server_host.txt 'www/serve_node*.log' www/reviews.json \
+                www/page_sizes.json www/page_sizes.json.lock www/page_tokens.json 'www/*.tmp'; do
+        grep -qxF "$line" "$gi" 2>/dev/null || { [[ $added == 0 ]] && echo "# generated by DirAI" >> "$gi"; echo "$line" >> "$gi"; added=1; }
+    done
+    [[ $added == 1 ]] && echo "Added DirAI's generated files to .gitignore"
+    if ! grep -qF "@~/DirAI/PAGES.md" "$ROOT/CLAUDE.md" 2>/dev/null; then
+        printf '\n@~/DirAI/PAGES.md\n' >> "$ROOT/CLAUDE.md"
+        echo "Added @~/DirAI/PAGES.md to CLAUDE.md (page conventions for Claude sessions)"
+    fi
+    register
+    echo "Ready. Start it with: DirAI start"
+}
+
+list() {
+    local t port
+    [[ -s "$TREES_FILE" ]] || { echo "No trees yet (run DirAI init in a repo)."; return 0; }
+    while read -r t; do
+        [[ -n "$t" ]] || continue
+        port=$(cfg port "$t")
+        if [[ -s "$t/www/server_host.txt" ]]; then
+            read -r n j _ _ _ _ _ < "$t/www/server_host.txt"
+            printf '%-6s %-5s %-8s %s\n' up "$port" "$n" "$t"
+        else
+            printf '%-6s %-5s %-8s %s\n' down "$port" - "$t"
+        fi
+    done < "$TREES_FILE"
+}
+
+case "$CMD" in
+    start)   start "${1:-}" ;;
+    status)  status ;;
+    restart) restart ;;
+    stop)    stop ;;
+    build)   python3 "$TOOL/build_index.py" "$ROOT" ;;
+    init)    init ;;
+    publish) (cd "$ROOT" && "$TOOL/publish_pages.sh" "$@") ;;
+    list)    list ;;
+    *) sed -n '2,16p' "$0"; exit 1 ;;
+esac
