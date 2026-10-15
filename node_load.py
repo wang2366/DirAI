@@ -67,13 +67,17 @@ def _mac_mem():
 
 
 def _processes():
-    """[(pgid, %cpu, rss bytes)] for every process (ps works the same on Linux and macOS)."""
+    """[(pgid, %cpu, rss bytes)] for every process but this ps itself, which runs in the server's
+    process group and would otherwise count as one of DirAI's (ps works the same on Linux and macOS)."""
+    ps = subprocess.Popen(["ps", "-A", "-o", "pid=,pgid=,%cpu=,rss="], stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, universal_newlines=True)
+    out = ps.communicate(timeout=5)[0]
     rows = []
-    for line in _run(["ps", "-A", "-o", "pgid=,%cpu=,rss="]).splitlines():
+    for line in out.splitlines():
         parts = line.split()
-        if len(parts) == 3:
+        if len(parts) == 4 and parts[0] != str(ps.pid):
             try:
-                rows.append((int(parts[0]), float(parts[1]), int(parts[2]) * 1024))
+                rows.append((int(parts[1]), float(parts[2]), int(parts[3]) * 1024))
             except ValueError:
                 pass
     return rows
