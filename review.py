@@ -48,8 +48,15 @@ CONTEXT_WARN = 150000
 CONTEXT_HIGH = 300000
 COMPACT = "/compact"
 # Model per page, picked in the panel (claude --model aliases); Sonnet unless changed, to save tokens.
-MODELS = ["sonnet", "opus", "fable", "haiku"]
+# The gpt-oss models are served by Ollama on this node (Kuang_work_document/ollama/ollama_ctl.sh
+# start); they don't count against the Claude limits, so they also run while the queue is held.
+LOCAL_MODELS = ["gpt-oss-20b-t64", "gpt-oss-120b-t64"]
+MODELS = ["sonnet", "opus", "fable", "haiku"] + LOCAL_MODELS
+MODEL_LABELS = {"gpt-oss-20b-t64": "gpt-oss 20b (local)", "gpt-oss-120b-t64": "gpt-oss 120b (local)"}
 DEFAULT_MODEL = "sonnet"
+OLLAMA_URL = "http://" + os.environ.get("OLLAMA_HOST", "127.0.0.1:11434")
+LOCAL_ENV = {"ANTHROPIC_BASE_URL": OLLAMA_URL, "ANTHROPIC_AUTH_TOKEN": "ollama", "ANTHROPIC_API_KEY": "",
+             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
 TRANSCRIPTS = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")), "projects")
 LIMIT_MARGIN_S = 120        # send this long after the stated reset time
 LIMIT_FALLBACK_S = 1800     # retry after this when the reset time can't be read
@@ -515,6 +522,7 @@ class Reviews:
             st["context"] = context_tokens(st.get("session_id"))
             st["context_warn"], st["context_high"] = CONTEXT_WARN, CONTEXT_HIGH
             st["model"], st["models"] = st.get("model") or DEFAULT_MODEL, MODELS
+            st["model_labels"] = MODEL_LABELS
             st["watching"] = (st.get("watch") or {}).get("jobs", [])
             st["denials"] = [{"text": describe_denial(d), "rules": denial_rules(d),
                               "blocked": any(always_denied(r) for r in denial_rules(d)),
@@ -540,7 +548,9 @@ class Reviews:
             data = self._load()
             self._page(data, page)["model"] = model
             self._save(data)
-            return True
+        if model in LOCAL_MODELS:
+            self._pump()    # a page queued for the Claude limits can start now
+        return True
 
     def set_status(self, page, status):
         with self.lock:
@@ -667,6 +677,14 @@ class Reviews:
                 self.hold_until, self.hold_reason = until, reason
             wait = self.hold_until - time.time()
             if wait > 0:
+                # local-model pages don't use the Claude limits: start them anyway
+                data = self._load()
+                for item in [i for i in self.queue if self._model(data, i[0]) in LOCAL_MODELS]:
+                    if self.running >= MAX_RUNNING:
+                        break
+                    self.queue.remove(item)
+                    self.running += 1
+                    threading.Thread(target=self._run, args=item, daemon=True).start()
                 self._hold_queue()
                 if self.timer:
                     self.timer.cancel()
@@ -678,6 +696,10 @@ class Reviews:
                 page, prompt = self.queue.pop(0)
                 self.running += 1
                 threading.Thread(target=self._run, args=(page, prompt), daemon=True).start()
+
+    @staticmethod
+    def _model(data, page):
+        return (data.get(page) or {}).get("model") or DEFAULT_MODEL
 
     def _hold_queue(self):
         """Mark every queued message as waiting for the usage limit; caller holds the lock."""
@@ -729,13 +751,14 @@ class Reviews:
             if session:
                 cmd += ["--resume", session]
             try:
-                p = subprocess.run(cmd, cwd=page_dir, env=dict(os.environ, REVIEW_PAGE_DIR=page_dir),
+                env = dict(os.environ, REVIEW_PAGE_DIR=page_dir, **(LOCAL_ENV if model in LOCAL_MODELS else {}))
+                p = subprocess.run(cmd, cwd=page_dir, env=env,
                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, timeout=RUN_TIMEOUT_S)
                 out = json.loads(p.stdout.decode("utf-8", "replace") or "{}")
                 reply = out.get("result") or p.stderr.decode("utf-8", "replace")[-2000:] or "(no reply)"
                 entry = {"role": "claude", "time": now(), "text": reply, "model": model}
-                if out.get("total_cost_usd") is not None:
+                if out.get("total_cost_usd") is not None and model not in LOCAL_MODELS:
                     entry["cost"] = round(out["total_cost_usd"], 3)
                 denials = out.get("permission_denials", [])
                 session = out.get("session_id") or session
@@ -743,7 +766,7 @@ class Reviews:
                 entry, denials = {"role": "system", "time": now(), "text": "Run timed out after %d h." % (RUN_TIMEOUT_S // 3600)}, []
             except (ValueError, OSError) as e:
                 entry, denials = {"role": "system", "time": now(), "text": "Run failed: %s" % e}, []
-            until = limit_reset(entry["text"]) if entry["role"] == "claude" else None
+            until = limit_reset(entry["text"]) if entry["role"] == "claude" and model not in LOCAL_MODELS else None
             if prompt == COMPACT and entry["role"] == "claude" and not until:
                 after = context_tokens(session)
                 entry = {"role": "system", "time": now(), "text": "Conversation compacted: %s -> %s tokens." % (
