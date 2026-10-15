@@ -90,6 +90,11 @@ nested_tree() {   # a running tree inside this one or holding it: both would ser
     return 1
 }
 
+port_busy() {   # port_busy NODE PORT: something on NODE already accepts connections there (e.g. an ssh
+                # tunnel on 127.0.0.1, which a bind to 0.0.0.0 would not notice)
+    run_on "$1" "python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(s.connect_ex((\"127.0.0.1\", $2)) != 0)'"
+}
+
 register() {
     mkdir -p "$CONFIG_DIR" "$(dirname "$PAGES_LINK")"
     ln -sfn "$TOOL/PAGES.md" "$PAGES_LINK"   # repoint it if this checkout moved
@@ -149,6 +154,10 @@ start() {
     if run_on "$node" "pgrep -u $USER -f '[d]irai_serve $ROOT\$' >/dev/null"; then
         echo "Already running on $node (server_host.txt may take ~30 s to show up)"; return 0
     fi
+    if port_busy "$node" "$port"; then
+        echo "Port $port on $node is already taken by another program (an ssh tunnel? see: lsof -nP -iTCP:$port -sTCP:LISTEN); change \"port\" in $DATA/dirai.json." >&2
+        return 1
+    fi
     # own session, so it outlives this shell and its stop (kill 0) reaches only itself; macOS has no
     # setsid command, so fall back to Python's os.setsid there
     run_on "$node" "if command -v setsid >/dev/null; then S=setsid; else S='python3 -c \"import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])\"'; fi;
@@ -197,7 +206,7 @@ init() {
         local used port t
         used=$(while read -r t; do [[ -n "$t" ]] && cfg port "$t"; done < <(cat "$TREES_FILE" 2>/dev/null))
         port=8765
-        while grep -qxF "$port" <<<"$used"; do port=$((port + 1)); done
+        while grep -qxF "$port" <<<"$used" || port_busy "$(hostname -s)" "$port"; do port=$((port + 1)); done
         printf '{\n "port": %d,\n "read_dirs": [],\n "allow": []\n}\n' "$port" > "$DATA/dirai.json"
         echo "Wrote $DATA/dirai.json (port $port; local to this clone, not committed)."
     fi
