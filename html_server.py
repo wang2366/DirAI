@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import signal
 import socketserver
 import subprocess
 import sys
@@ -274,8 +275,17 @@ class ThreadingServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     allow_reuse_address = True
 
 
+def shutdown(signum, frame):
+    """Stop the assistant runs with the server (a restart would otherwise leave them running
+    on, still loading Claude or Ollama, with nobody to take their reply)."""
+    REVIEWS.stop_all()
+    sys.exit(0)
+
+
 if __name__ == "__main__":
     os.chdir(ROOT)   # Python 3.6's handler serves the current directory
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
     threading.Thread(target=housekeeping, daemon=True).start()
     with ThreadingServer((BIND, PORT), HtmlOnlyHandler) as httpd:
         print("Serving .html under %s on %s:%d" % (ROOT, BIND, PORT), flush=True)

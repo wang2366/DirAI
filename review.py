@@ -664,6 +664,22 @@ class Reviews:
             stop_process(p)
         return True
 
+    def stop_all(self):
+        """Server shutting down: stop every run and the commands it started. Each run has its
+        own process group, so nothing else would stop it, and its reply would be lost anyway
+        (the next server marks the run lost)."""
+        with self.lock:
+            procs = list(self.procs.values())
+        for sig, wait in ((signal.SIGTERM, 5), (signal.SIGKILL, 0)):
+            for p in procs:
+                try:
+                    os.killpg(p.pid, sig)
+                except OSError:
+                    pass
+            end = time.time() + wait
+            while time.time() < end and any(p.poll() is None for p in procs):
+                time.sleep(0.2)
+
     # --- running Claude ---------------------------------------------------------------
     def new_page(self, page, task):
         """Create ROOT/page/ with a starter index.html if it has none, then start an agent there
