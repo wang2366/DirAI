@@ -118,17 +118,7 @@ tree are off limits until the owner names them in a comment or allows a blocked 
 work needs one, say which and why in your reply.
 Follow the page conventions below (from {pages_md_path}); in particular, keep this folder's todo.md
 current and give every figure its script path.
-Git: you may git add / commit / push (this replaces any earlier "never commit" instruction), but
-only when the owner's message asks for it (that request is their approval). Run git from your
-working directory (this page folder, inside the repo) with no "cd ... &&" before it and no "git -C":
-a built-in check refuses git after cd, and -C is blocked.
-Stage and commit only this page's folder: "git add -- {page_dir}", then
-'git commit -m "<summary>" -m "<details>" -m "Co-Authored-By: Claude <noreply@anthropic.com>" -- {page_dir}'
-(never "git add -A" or "git add ." at the repo root: other agents share this checkout), then
-"git push origin HEAD".
-If the push is rejected (the remote moved on), stop and tell the owner; don't pull, rebase or
-force. Quote the commit hash and message in your reply.
-To delete files or folders, run "{page_rm} <path>...": it works only inside this page folder and
+{git}To delete files or folders, run "{page_rm} <path>...": it works only inside this page folder and
 deletes immediately, no trash (plain rm -r / rm -rf stay blocked).
 Rules: don't delete anything outside this folder; long or heavy work goes to
 SLURM (sbatch), not this process. Don't wait for or poll SLURM jobs (no squeue loops, no sleep):
@@ -140,6 +130,19 @@ for them and shows them in the page's status bar. Nobody can approve actions whi
 denied, do the rest and say in your reply exactly what you needed and why; the owner can grant it
 and resume you. Exception: these are blocked permanently and can never be granted, so don't ask;
 give the owner the exact command to run themselves instead: {always_denied}."""
+
+# Only for pages inside a git repo (a tree need not be one)
+GIT_PROMPT = """Git: you may git add / commit / push (this replaces any earlier "never commit" instruction), but
+only when the owner's message asks for it (that request is their approval). Run git from your
+working directory (this page folder, inside the repo) with no "cd ... &&" before it and no "git -C":
+a built-in check refuses git after cd, and -C is blocked.
+Stage and commit only this page's folder: "git add -- {page_dir}", then
+'git commit -m "<summary>" -m "<details>" -m "Co-Authored-By: Claude <noreply@anthropic.com>" -- {page_dir}'
+(never "git add -A" or "git add ." at the repo root: other agents share this checkout), then
+"git push origin HEAD".
+If the push is rejected (the remote moved on), stop and tell the owner; don't pull, rebase or
+force. Quote the commit hash and message in your reply.
+"""
 
 
 STARTER_PAGE = """<!doctype html>
@@ -478,6 +481,11 @@ def path_grants(text, root, scope):
     return rules
 
 
+def in_git(path):
+    return subprocess.run(["git", "-C", path, "rev-parse", "--is-inside-work-tree"],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
 def is_read_rule(rule):
     return rule.startswith("Read(//")
 
@@ -807,6 +815,7 @@ class Reviews:
                    "--restricted", "--strict-mcp-config", "--tools", TOOLS, "--add-dir"] + dirs + [
                    "--append-system-prompt", SYSTEM_PROMPT.format(root=self.root,
                        page_file=os.path.join(page_dir, "index.html"), page_dir=page_dir, scope=scope,
+                       git=GIT_PROMPT.format(page_dir=page_dir) if in_git(page_dir) else "",
                        always_denied=", ".join(ALWAYS_DENY), pages_md_path=PAGES_MD,
                        page_rm=os.path.join(WWW_DIR, "page_rm.sh"))
                        + "\n\n" + load_text(PAGES_MD),

@@ -28,16 +28,24 @@ line works on every machine. After moving the checkout, update the PATH link and
 
 Needs Python 3.6+, `git`, `curl`, and Claude Code (`~/.local/bin/claude`, or set `REVIEW_CLAUDE_CMD`).
 
-## Use (per repo)
+## Use (per tree)
+
+A tree is the folder DirAI serves: a git repo, or any folder (e.g. `~/work` holding several repos).
 
 ```bash
-cd <your repo>        # anywhere inside it
-DirAI init            # www/dirai.json (port), .gitignore lines, CLAUDE.md import of the page rules
+cd <your folder>      # a repo: anywhere inside it; another folder: its top
+DirAI init            # www/dirai.json (port); in a repo also .gitignore lines and the CLAUDE.md import
 DirAI start           # on this machine; or: DirAI start NODE | --job (its own sbatch job)
 DirAI status | restart | stop | build | list
 ```
 
-Each repo (each clone, even of the same repo) runs its own server on its own port, so trees start
+Later commands work from anywhere below the tree: DirAI uses the nearest folder above you holding
+`www/dirai.json`, else the git repo you are in. Outside git, `init` asks before adding the page
+rules to `CLAUDE.md` (there it would reach every project below), skips `.gitignore`, and `publish`
+is unavailable; page assistants get git instructions only for pages inside a repo. `init` refuses
+`/` and your home folder, and `start` refuses a tree that overlaps one already running.
+
+Each tree (each clone, even of the same repo) runs its own server on its own port, so trees start
 and stop independently. `DirAI list` shows them all.
 
 Opening a page as the owner: connect through an SSH tunnel to the node, then visit
@@ -56,11 +64,11 @@ Opening a page as the owner: connect through an SSH tunnel to the node, then vis
 ```json
 {"port": 8765,
  "read_dirs": ["/data/shared"],              "allow": ["Bash(~/tools/run.sh:*)"],
- "slurm": ["-A", "mygroup", "-p", "cpu"]}
+ "slurm": ["-A", "mygroup", "-p", "cpu"],   "exclude": ["data", "projA/build"]}
 ```
 
 `read_dirs`: extra folders page assistants may read (the repo itself always). `allow`: extra
-Claude Code permission rules for them. `slurm`: extra `sbatch` options for `DirAI start --job`.
+Claude Code permission rules for them. `slurm`: extra `sbatch` options for `DirAI start --job`. `exclude`: folders the page list skips (a name skips it anywhere, a path with a slash skips that one folder; virtualenvs, `node_modules` and caches are always skipped).
 
 ## Assistant safety
 

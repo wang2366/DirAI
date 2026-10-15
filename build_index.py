@@ -4,6 +4,9 @@
 Usage: build_index.py [ROOT] [--sizes]   (ROOT defaults to the top of the git repo holding the
 current directory; DirAI build runs it for the tree you are in.)
 
+Skipped folders: PRUNE_DIRS anywhere, other trees' www/ data folders, and the tree's dirai.json
+"exclude" list (folder names anywhere, or tree-relative paths with a slash).
+
 Each row shows the size of everything under the page's folder. Sizes are cached in
 www/page_sizes.json together with the page's index.html mtime, and a folder is measured again
 only when its index.html changed (or is new): a normal run uses the cache and, if any page needs
@@ -43,7 +46,20 @@ SIZES = os.path.join(ROOT, "www", "page_sizes.json")
 SIZE_LOCK = SIZES + ".lock"
 TOKENS = os.path.join(ROOT, "www", "page_tokens.json")
 TRANSCRIPTS = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")), "projects")
-PRUNE_DIRS = {".git", "node_modules", "__pycache__", ".claude"}
+PRUNE_DIRS = {".git", "node_modules", "__pycache__", ".claude", ".venv", "venv", "site-packages",
+              ".tox", ".mypy_cache", ".pytest_cache", ".ipynb_checkpoints"}
+_EXCLUDE = dirai_config.tree_config(ROOT)["exclude"]
+PRUNE_DIRS |= {e.strip("/") for e in _EXCLUDE if "/" not in e.strip("/")}
+PRUNE_PATHS = {os.path.join(ROOT, e.strip("/")) for e in _EXCLUDE if "/" in e.strip("/")}
+
+
+def keep_dir(dirpath, name):
+    """False for folders the page scan skips."""
+    full = os.path.join(dirpath, name)
+    if name in PRUNE_DIRS or full in PRUNE_PATHS:
+        return False
+    # another tree's data folder (its list page, threads, caches)
+    return not (name == "www" and os.path.isfile(os.path.join(full, "dirai.json")))
 TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
 
 
@@ -78,7 +94,7 @@ def find_pages(stats=None):
     for dirpath, dirnames, filenames in os.walk(ROOT):
         if stats is not None:
             stats["walked"] = stats.get("walked", 0) + 1
-        dirnames[:] = sorted(d for d in dirnames if d not in PRUNE_DIRS)
+        dirnames[:] = sorted(d for d in dirnames if keep_dir(dirpath, d))
         if "index.html" not in filenames:
             continue
         full = os.path.join(dirpath, "index.html")

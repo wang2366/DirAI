@@ -1,6 +1,8 @@
 #!/bin/bash
-# DirAI: serve the git repo you are in as browsable HTML pages, with an AI assistant on every page.
-# Run it anywhere inside a repo; it acts on that repo's top-level folder (the "tree").
+# DirAI: serve a folder (the "tree") as browsable HTML pages, with an AI assistant on every page.
+# Run it anywhere inside a tree: it acts on the nearest folder at or above you holding www/dirai.json,
+# else on the git repo you are in. `DirAI init` sets up that folder, or the current one if neither
+# exists; the tree doesn't have to be a git repo.
 #
 #   DirAI init                 set the tree up: www/dirai.json (port), .gitignore lines, CLAUDE.md import
 #   DirAI [start [NODE|--job]] start this tree's server on this machine (default), on NODE,
@@ -11,8 +13,9 @@
 #   DirAI build                rebuild this tree's list page (www/index.html) now
 #   DirAI publish [-n]         publish the tree's committed *.html to its gh-pages branch
 #   DirAI list                 every tree DirAI has started, and whether it is up
-#   DirAI -C DIR <command>     act on the repo holding DIR instead of the current directory
-# Each tree has its own server, port and state (www/), so trees start and stop independently.
+#   DirAI -C DIR <command>     act on the tree holding DIR instead of the current directory
+# Each tree has its own server, port and state (www/), so trees start and stop independently;
+# trees may not overlap while running.
 set -uo pipefail
 
 TOOL=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
@@ -30,11 +33,26 @@ if [[ "${1:-}" == -C ]]; then cd "${2:?-C needs a directory}" || exit 1; shift 2
 CMD=${1:-start}
 [[ $# -gt 0 ]] && shift
 
-case "$CMD" in -h|--help|help) sed -n '2,16p' "$0"; exit 0 ;; list) ;; *)
-    ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Not inside a git repo; cd into one (or use DirAI -C DIR)." >&2; exit 1; }
+find_root() {   # the nearest folder at or above here holding www/dirai.json, else the git repo's top
+    local d; d=$(pwd -P)
+    while :; do
+        [[ -s $d/www/dirai.json ]] && { echo "$d"; return 0; }
+        [[ $d == / ]] && break
+        d=$(dirname "$d")
+    done
+    git rev-parse --show-toplevel 2>/dev/null
+}
+
+case "$CMD" in -h|--help|help) sed -n '2,18p' "$0"; exit 0 ;; list) ;; *)
+    ROOT=$(find_root)
+    if [[ -z "$ROOT" ]]; then
+        [[ "$CMD" == init ]] || { echo "No DirAI tree here or above; run  DirAI init  in the folder to serve (or use DirAI -C DIR)." >&2; exit 1; }
+        ROOT=$PWD
+    fi
     ROOT=$(cd "$ROOT" && pwd -P)
     DATA=$ROOT/www
     HOST_FILE=$DATA/server_host.txt
+    IS_GIT=0; git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 && IS_GIT=1
 esac
 
 cfg() {   # cfg KEY [TREE]: a value from the tree's dirai.json (lists space-separated)
@@ -61,6 +79,15 @@ run_on() {   # run_on NODE CMD: on this machine if NODE is this host, else over 
 http_code() {   # http_code NODE PORT TIMEOUT: status of the list page, asked on the node itself
     # last line only: a login script that echoes over ssh would come first
     run_on "$1" "curl -s -o /dev/null -m $3 -w '%{http_code}' http://127.0.0.1:$2/www/index.html" 2>/dev/null | tail -n 1
+}
+
+nested_tree() {   # a running tree inside this one or holding it: both would serve the same pages
+    local t
+    while read -r t; do
+        [[ -n "$t" && "$t" != "$ROOT" && -s "$t/www/server_host.txt" ]] || continue
+        [[ "$ROOT" == "$t"/* || "$t" == "$ROOT"/* ]] && { echo "$t"; return 0; }
+    done < <(cat "$TREES_FILE" 2>/dev/null)
+    return 1
 }
 
 register() {
@@ -107,6 +134,9 @@ start() {
     if other=$(port_in_use_by_other_tree "$port"); then
         echo "Port $port is already used by $other; change \"port\" in $DATA/dirai.json." >&2; return 1
     fi
+    if other=$(nested_tree); then
+        echo "$other is running and overlaps this tree (one would serve the other's pages); stop it first: DirAI -C $other stop" >&2; return 1
+    fi
     register
     if [[ "${1:-}" == --job ]]; then
         # extra sbatch options (account, partition, time) from dirai.json "slurm", e.g. ["-A","grp","-p","cpu"]
@@ -119,7 +149,10 @@ start() {
     if run_on "$node" "pgrep -u $USER -f '[d]irai_serve $ROOT\$' >/dev/null"; then
         echo "Already running on $node (server_host.txt may take ~30 s to show up)"; return 0
     fi
-    run_on "$node" "setsid nohup $TOOL/bin/dirai_serve $ROOT > $DATA/serve_node.log 2>&1 < /dev/null &" &&
+    # own session, so it outlives this shell and its stop (kill 0) reaches only itself; macOS has no
+    # setsid command, so fall back to Python's os.setsid there
+    run_on "$node" "if command -v setsid >/dev/null; then S=setsid; else S='python3 -c \"import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])\"'; fi;
+        eval \"\$S nohup '$TOOL/bin/dirai_serve' '$ROOT' > '$DATA/serve_node.log' 2>&1 < /dev/null &\"" &&
         echo "Started $ROOT on $node:$port (log: $DATA/serve_node.log)"
     SECONDS=0
     while (( SECONDS < 120 )); do
@@ -155,6 +188,10 @@ stop() {
 }
 
 init() {
+    local home; home=$(cd "$HOME" && pwd -P)
+    if [[ "$ROOT" == / || "$ROOT" == "$home" ]]; then
+        echo "Refusing to serve $ROOT: page assistants could read everything in it. Pick a project folder." >&2; return 1
+    fi
     mkdir -p "$DATA"
     if [[ ! -s "$DATA/dirai.json" ]]; then
         local used port t
@@ -165,18 +202,28 @@ init() {
         echo "Wrote $DATA/dirai.json (port $port; local to this clone, not committed)."
     fi
     local gi=$ROOT/.gitignore line added=0
-    for line in www/dirai.json www/index.html www/server_host.txt 'www/serve_node*.log' www/reviews.json \
+    [[ $IS_GIT == 1 ]] && for line in www/dirai.json www/index.html www/server_host.txt 'www/serve_node*.log' www/reviews.json \
                 www/page_sizes.json www/page_sizes.json.lock www/page_tokens.json 'www/*.tmp' www/page_prev/; do
         grep -qxF "$line" "$gi" 2>/dev/null || { [[ $added == 0 ]] && echo "# generated by DirAI" >> "$gi"; echo "$line" >> "$gi"; added=1; }
     done
     [[ $added == 1 ]] && echo "Added DirAI's generated files to .gitignore"
-    local md=$ROOT/CLAUDE.md
+    local md=$ROOT/CLAUDE.md ans
     if grep -qxF "$OLD_IMPORT" "$md" 2>/dev/null; then   # trees set up when DirAI had to live in ~/DirAI
         sed "s|^$OLD_IMPORT\$|$PAGES_IMPORT|" "$md" > "$md.tmp" && cat "$md.tmp" > "$md" && rm -f "$md.tmp"
         echo "Changed $OLD_IMPORT to $PAGES_IMPORT in CLAUDE.md"
     elif ! grep -qxF "$PAGES_IMPORT" "$md" 2>/dev/null; then
-        printf '\n%s\n' "$PAGES_IMPORT" >> "$md"
-        echo "Added $PAGES_IMPORT to CLAUDE.md (page conventions for Claude sessions)"
+        # outside git, CLAUDE.md here reaches every project below (e.g. all of ~/work): ask first
+        ans=y
+        if [[ $IS_GIT == 0 ]]; then
+            ans=n
+            [[ -t 0 ]] && read -r -p "Add $PAGES_IMPORT to $md? It applies the page rules to every Claude session under $ROOT. [y/N] " ans
+        fi
+        if [[ $ans == [yY]* ]]; then
+            printf '\n%s\n' "$PAGES_IMPORT" >> "$md"
+            echo "Added $PAGES_IMPORT to CLAUDE.md (page conventions for Claude sessions)"
+        else
+            echo "Left CLAUDE.md alone (page assistants get the rules anyway; to add them for your own sessions: echo '$PAGES_IMPORT' >> $md)"
+        fi
     fi
     register
     echo "Ready. Start it with: DirAI start"
@@ -204,7 +251,8 @@ case "$CMD" in
     stop)    stop ;;
     build)   python3 "$TOOL/build_index.py" "$ROOT" ;;
     init)    init ;;
-    publish) (cd "$ROOT" && "$TOOL/publish_pages.sh" "$@") ;;
+    publish) [[ $IS_GIT == 1 ]] || { echo "$ROOT is not a git repo; publish needs one (it pushes a gh-pages branch)." >&2; exit 1; }
+             (cd "$ROOT" && "$TOOL/publish_pages.sh" "$@") ;;
     list)    list ;;
     *) sed -n '2,16p' "$0"; exit 1 ;;
 esac

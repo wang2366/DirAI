@@ -8,7 +8,8 @@
       {"port": 8765,                    # this tree's server port
        "read_dirs": ["/scratch/..."],   # extra folders page agents may read (the tree is always in)
        "allow": ["Bash(~/x/run.sh:*)"], # extra allow rules for page agents
-       "slurm": ["-A", "grp", "-p", "cpu"]}  # extra sbatch options for `DirAI start --job`
+       "slurm": ["-A", "grp", "-p", "cpu"],  # extra sbatch options for `DirAI start --job`
+       "exclude": ["data", "proj/build"]}    # folders the page list skips (names anywhere, or paths)
 - Per user, never in a repo: ~/.config/dirai/ with the owner key (key), the "Always allow"
   grants (permissions.json), the list of trees DirAI has started (trees), and PAGES.md, a link to
   this checkout's PAGES.md that trees' CLAUDE.md import (`DirAI init|start` keep it current).
@@ -31,7 +32,7 @@ def data_dir(root):
 
 def tree_config(root):
     """The tree's www/dirai.json merged over the defaults."""
-    cfg = {"port": None, "read_dirs": [], "allow": [], "slurm": []}
+    cfg = {"port": None, "read_dirs": [], "allow": [], "slurm": [], "exclude": []}
     try:
         with open(os.path.join(data_dir(root), "dirai.json")) as f:
             cfg.update(json.load(f))
