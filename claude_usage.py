@@ -1,7 +1,8 @@
 """Claude plan usage (the numbers Claude Code's /usage shows), for review.py and the list page.
 
 Reads https://api.anthropic.com/api/oauth/usage with Claude Code's own login token from
-~/.claude/.credentials.json. Asking costs no tokens. The token is only read, never refreshed
+~/.claude/.credentials.json (Linux), or on macOS, where Claude Code keeps it in the login
+Keychain, from the "Claude Code-credentials" item. Asking costs no tokens. The token is only read, never refreshed
 here: Claude Code refreshes it whenever it runs. If the token has expired or the request fails,
 usage is unknown and nothing is held back.
 
@@ -10,12 +11,15 @@ This is the endpoint Claude Code itself uses; it is not a documented API and may
 import calendar
 import json
 import os
+import subprocess
+import sys
 import threading
 import time
 import urllib.request
 
 CREDENTIALS = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")),
                            ".credentials.json")
+KEYCHAIN_ITEM = "Claude Code-credentials"   # macOS: same JSON as the Linux file
 URL = "https://api.anthropic.com/api/oauth/usage"
 CACHE_S = 60                # ask at most once a minute, across all DirAI servers (shared file)
 BACKOFF_S = 300             # after a refused request (e.g. 429), wait this long before asking again
@@ -45,9 +49,21 @@ def _epoch(iso):
     return t
 
 
+def _credentials():
+    """Claude Code's stored login: the credentials file, else (macOS) the Keychain item."""
+    if os.path.exists(CREDENTIALS) or sys.platform != "darwin":
+        with open(CREDENTIALS) as f:
+            return json.load(f)
+    p = subprocess.run(["security", "find-generic-password", "-s", KEYCHAIN_ITEM,
+                        "-a", os.environ.get("USER", ""), "-w"],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=10)
+    if p.returncode != 0:
+        raise OSError("no %r Keychain item (log in to Claude Code first): %s" % (KEYCHAIN_ITEM, p.stderr.strip()))
+    return json.loads(p.stdout)
+
+
 def _fetch():
-    with open(CREDENTIALS) as f:
-        token = json.load(f)["claudeAiOauth"]["accessToken"]
+    token = _credentials()["claudeAiOauth"]["accessToken"]
     req = urllib.request.Request(URL, headers={"Authorization": "Bearer " + token,
                                                "anthropic-beta": "oauth-2025-04-20"})
     with urllib.request.urlopen(req, timeout=10) as r:
