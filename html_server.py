@@ -23,6 +23,7 @@ from http import cookies
 from urllib.parse import parse_qs, urlparse
 
 import claude_usage
+import node_load
 import page_status
 import review
 
@@ -166,6 +167,8 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
             return self.send_json(REVIEWS.all_status())
         if action == "usage":     # Claude plan usage, for the list page header
             return self.send_json(claude_usage.usage())
+        if action == "load":      # this machine's CPU and memory, for the list page header
+            return self.send_json(node_load.load())
         if action == "dirs":      # folder autocomplete for New agent
             return self.send_json(list_dirs(q.get("prefix", [""])[0]))
         if action == "state":

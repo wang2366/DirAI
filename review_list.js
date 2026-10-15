@@ -80,4 +80,32 @@
   }
   usage();
   setInterval(usage, 60000);
+
+  // CPU and memory of the machine serving this tree, and DirAI's own share (server + assistant runs)
+  const gb = b => (b / 1073741824).toFixed(b >= 10 * 1073741824 ? 0 : 1) + " GB";
+  const mb = b => b >= 1073741824 ? gb(b) : Math.round(b / 1048576) + " MB";
+  function load() {
+    fetch("/_review/load").then(r => r.json()).then(l => {
+      let el = document.getElementById("rv-load");
+      if (!el) { el = document.createElement("div"); el.id = "rv-load";
+                 (document.getElementById("rv-usage") || document.querySelector(".meta")).after(el); }
+      el.style.cssText = "display:flex;flex-wrap:wrap;gap:6px 18px;margin:.4rem 0;font:13px system-ui;align-items:center";
+      if (l.error) { el.innerHTML = '<span style="opacity:.65">Server load: unavailable (' + l.error.replace(/[&<>]/g, "") + ")</span>"; return; }
+      const memPct = 100 * l.mem_used / l.mem_total;
+      const meter = (label, pct, text, title) => {
+        const color = pct >= 90 ? "#c62828" : pct >= 70 ? "#b26b00" : "#2e7d32";
+        return `<span style="display:flex;align-items:center;gap:6px" title="${title}"><b>${label}</b>
+          <span style="position:relative;width:110px;height:8px;border-radius:4px;background:rgba(128,128,128,.25);overflow:hidden">
+          <span style="position:absolute;left:0;top:0;bottom:0;width:${Math.min(pct, 100)}%;background:${color}"></span></span>${text}</span>`;
+      };
+      el.innerHTML = `<span><b>Server</b> ${l.host.replace(/[&<>]/g, "")}</span>` +
+        meter("CPU", l.cpu_percent, Math.round(l.cpu_percent) + "%" +
+              `<span style="opacity:.65"> of ${l.cpus} CPUs${l.load1 != null ? " · load " + l.load1 : ""}</span>`,
+              "Whole machine, all users") +
+        meter("Memory", memPct, `${gb(l.mem_used)} / ${gb(l.mem_total)}`, "Whole machine, all users") +
+        `<span style="opacity:.65" title="This server and everything it started (assistant runs, list rebuilds); CPU in % of one CPU">DirAI: ${Math.round(l.dirai.cpu_percent)}% CPU · ${mb(l.dirai.rss)} · ${l.dirai.procs} processes</span>`;
+    }).catch(() => {});
+  }
+  load();
+  setInterval(load, 10000);
 })();

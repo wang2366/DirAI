@@ -140,7 +140,8 @@ sets up the tree the first time, (re)starts the server and opens the list logged
 <h2 id="list">5. The page list</h2>
 <p><code>/www/index.html</code> lists every <code>index.html</code> in the tree, newest first, with each
 folder's size and the Claude tokens spent in it. As the owner you also see each page's chat status
-(working, unread, read, closed), your Claude plan usage in the header, and the
+(working, unread, read, closed), your Claude plan usage in the header, the serving machine's CPU
+and memory (and how much of it DirAI and its assistant runs use), and the
 <a href="#newagent">New agent</a> button. The list is rebuilt every 10 minutes and whenever a new
 agent is created; <code>DirAI build</code> rebuilds it now.</p>
 <p>The scan skips <code>.git</code>, <code>node_modules</code>, virtualenvs, caches and other trees'
