@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DirAI tutorial</title>
+<style>
+  :root {
+    --bg: #fbfbf9; --fg: #1d1d1f; --muted: #5f6368; --line: #e3e3de; --card: #ffffff;
+    --code-bg: #f2f2ee; --accent: #2f6fdb; --warn-bg: #fff6e0; --warn-line: #e8c46a;
+    --tip-bg: #eaf4ee; --tip-line: #7fbf96;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161618; --fg: #e8e8e6; --muted: #a0a0a6; --line: #2f2f33; --card: #1e1e21;
+      --code-bg: #26262a; --accent: #7aa7ff; --warn-bg: #2e2716; --warn-line: #8a6d24;
+      --tip-bg: #17271d; --tip-line: #3f7a53;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 52rem; margin: 0 auto; padding: 2.5rem 16px 6rem; }
+  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 .4rem; }
+  h2 { font-size: 1.35rem; margin: 2.8rem 0 .6rem; padding-top: .6rem; border-top: 1px solid var(--line); }
+  h3 { font-size: 1.05rem; margin: 1.6rem 0 .4rem; }
+  p, li { max-width: 46rem; }
+  a { color: var(--accent); }
+  .lede { color: var(--muted); font-size: 1.08rem; margin: 0 0 1.5rem; }
+  code { font: .9em ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg);
+         padding: .1em .35em; border-radius: 4px; }
+  pre { background: var(--code-bg); padding: .85rem 1rem; border-radius: 8px; overflow-x: auto;
+        font: .88rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre code { background: none; padding: 0; }
+  .c { color: var(--muted); }
+  nav.toc { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: .8rem 1.2rem; }
+  nav.toc ol { margin: .3rem 0; padding-left: 1.3rem; columns: 2 16rem; }
+  nav.toc li { margin: .1rem 0; }
+  .note { border-left: 4px solid var(--tip-line); background: var(--tip-bg); padding: .6rem 1rem;
+          border-radius: 0 8px 8px 0; margin: 1rem 0; }
+  .warn { border-left-color: var(--warn-line); background: var(--warn-bg); }
+  table { border-collapse: collapse; width: 100%; margin: .8rem 0; font-size: .95rem; }
+  th, td { text-align: left; vertical-align: top; padding: .45rem .6rem; border-bottom: 1px solid var(--line); }
+  th { font-weight: 600; }
+  .tbl { overflow-x: auto; }
+  .flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: .6rem; margin: 1rem 0; }
+  .flow div { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: .7rem .8rem; }
+  .flow b { display: block; }
+  .flow span { color: var(--muted); font-size: .9rem; }
+  kbd { font: .85em ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-bottom-width: 2px;
+        border-radius: 4px; padding: 0 .3em; background: var(--card); }
+</style>
+</head>
+<body>
+<main>
+
+<h1>DirAI tutorial</h1>
+<p class="lede">Serve a folder of HTML result pages in your browser, with a Claude Code assistant on every
+page that can edit the page, rerun its scripts and submit SLURM jobs for you.</p>
+
+<nav class="toc"><b>Contents</b>
+<ol>
+  <li><a href="#idea">The idea</a></li>
+  <li><a href="#install">Install (once per machine)</a></li>
+  <li><a href="#tree">Set up a tree</a></li>
+  <li><a href="#open">Open it in the browser</a></li>
+  <li><a href="#list">The page list</a></li>
+  <li><a href="#panel">The AI assistant panel</a></li>
+  <li><a href="#newagent">New agent: start a new page</a></li>
+  <li><a href="#pages">Writing pages</a></li>
+  <li><a href="#access">What the assistant may do</a></li>
+  <li><a href="#cluster">On a cluster</a></li>
+  <li><a href="#settings">Settings (dirai.json)</a></li>
+  <li><a href="#commands">Command reference</a></li>
+  <li><a href="#trouble">Troubleshooting</a></li>
+</ol>
+</nav>
+
+<h2 id="idea">1. The idea</h2>
+<p>You keep results and write-ups as HTML pages, one per folder: <code>&lt;folder&gt;/index.html</code>
+(plans: <code>&lt;folder&gt;/plan_*.html</code>). DirAI serves the folder they live in (the <b>tree</b>)
+and lists every page on one list page. When you open a page as its owner, a chat panel appears.
+Each message you send there starts a background <code>claude -p</code> run inside that page's folder.</p>
+<div class="flow">
+  <div><b>1. Comment</b><span>"Rerun the fit with 2× the events and update the plot."</span></div>
+  <div><b>2. Claude works</b><span>In the page folder: edits the page, runs scripts, submits jobs.</span></div>
+  <div><b>3. Reply + highlights</b><span>Answer in the thread; changed parts of the page are highlighted.</span></div>
+  <div><b>4. Jobs finish</b><span>DirAI watches the SLURM queue and wakes Claude to update the page.</span></div>
+</div>
+<p>A tree can be a git repo, or any folder, such as <code>~/work</code> holding several repos.
+Each tree runs its own small server on its own port.</p>
+
+<h2 id="install">2. Install (once per machine)</h2>
+<p>You need Python 3.6+, <code>git</code>, <code>curl</code> and Claude Code
+(<code>~/.local/bin/claude</code>, or set <code>REVIEW_CLAUDE_CMD</code> to its path).
+Clone DirAI anywhere and put its command on your <code>PATH</code>:</p>
+<pre><code>git clone git@github.com:wang2366/DirAI.git ~/work/DirAI     <span class="c"># any location works</span>
+ln -sfn ~/work/DirAI/bin/DirAI ~/.local/bin/DirAI          <span class="c"># any folder on your PATH</span></code></pre>
+<p>To update later: <code>git -C ~/work/DirAI pull</code>, then <code>DirAI restart</code> in each running tree.</p>
+
+<h2 id="tree">3. Set up a tree</h2>
+<pre><code>cd ~/work            <span class="c"># a repo (anywhere inside it), or the top of any folder</span>
+DirAI init           <span class="c"># once: picks a free port, writes www/dirai.json</span>
+DirAI start          <span class="c"># starts the server and waits until it answers</span></code></pre>
+<p><code>init</code> creates <code>www/</code> in the tree for DirAI's own files (the list page, chat threads,
+caches, logs). In a git repo it also adds those files to <code>.gitignore</code> and adds the line
+<code>@~/.config/dirai/PAGES.md</code> to <code>CLAUDE.md</code>, so your own Claude sessions in the repo
+follow the <a href="#pages">page rules</a> too. Outside git it asks before touching <code>CLAUDE.md</code>,
+since that file would apply to every project below.</p>
+<p>Afterwards, every <code>DirAI</code> command works from any folder below the tree: it finds the
+nearest <code>www/dirai.json</code> above you. Or point at a tree from anywhere with
+<code>DirAI -C ~/work status</code>.</p>
+<div class="note warn"><b>Refused on purpose:</b> <code>init</code> won't serve <code>/</code> or your home
+folder, and <code>start</code> won't run a tree that overlaps a running one (e.g. <code>~/work</code> and
+<code>~/work/projA</code>), because both would serve, and edit, the same pages.</div>
+
+<h2 id="open">4. Open it in the browser</h2>
+<p>Log in once per browser. This sets a cookie (valid for a year) that marks you as the owner, then
+shows the page list:</p>
+<pre><code>PORT=$(python3 -c 'import json; print(json.load(open("www/dirai.json"))["port"])')   <span class="c"># in the tree</span>
+open "http://127.0.0.1:$PORT/_review/login?key=$(cat ~/.config/dirai/key)"</code></pre>
+<p>After that, bookmark <code>http://127.0.0.1:&lt;port&gt;/www/index.html</code>.</p>
+<div class="note"><b>Why 127.0.0.1 and a key?</b> The server is reachable from your network, but anyone
+else only gets the pages, read-only. The panel, which runs Claude with your account and files, needs
+both a connection from this machine <i>and</i> the secret cookie. On a shared cluster node, other users
+can reach <code>127.0.0.1</code> too; the key is what proves it's you.</div>
+<h3>One command for all of it</h3>
+<p>A shell function for <code>~/.zshrc</code> (or <code>~/.bashrc</code>) that links the command,
+sets up the tree the first time, (re)starts the server and opens the list logged in:</p>
+<pre><code>dirai-up() {
+  local tree=~/work
+  ln -sfn ~/work/DirAI/bin/DirAI ~/.local/bin/DirAI
+  [[ -s $tree/www/dirai.json ]] || DirAI -C "$tree" init || return
+  DirAI -C "$tree" restart >/dev/null 2>&amp;1 || DirAI -C "$tree" start || return
+  local port
+  port=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' "$tree/www/dirai.json") || return
+  open "http://127.0.0.1:$port/_review/login?key=$(cat ~/.config/dirai/key)"
+}</code></pre>
+
+<h2 id="list">5. The page list</h2>
+<p><code>/www/index.html</code> lists every <code>index.html</code> in the tree, newest first, with each
+folder's size and the Claude tokens spent in it. As the owner you also see each page's chat status
+(working, unread, read, closed), your Claude plan usage in the header, and the
+<a href="#newagent">New agent</a> button. The list is rebuilt every 10 minutes and whenever a new
+agent is created; <code>DirAI build</code> rebuilds it now.</p>
+<p>The scan skips <code>.git</code>, <code>node_modules</code>, virtualenvs, caches and other trees'
+<code>www/</code> folders. Add your own with <code>"exclude"</code> in <a href="#settings">dirai.json</a>.</p>
+
+<h2 id="panel">6. The AI assistant panel</h2>
+<p>Open any page and click <b>AI assistant</b> (bottom right). Type a message and press <b>Send</b>.
+The panel shows the thread; the reply arrives when the run ends. Every page also gets a status bar at
+the top with the open items from the folder's <code>todo.md</code> and your SLURM jobs running there.</p>
+<div class="tbl"><table>
+<tr><th>Control</th><th>What it does</th></tr>
+<tr><td><b>Ask AI about this</b></td><td>Select text on the page and click it: your message is sent with that
+passage (and its heading) attached, so you can say "this number looks wrong".</td></tr>
+<tr><td>Model picker</td><td>Model for this page's next messages. Sonnet (default) uses less of your Claude limit
+than Opus; the local gpt-oss models (via Ollama) use none but are slower.</td></tr>
+<tr><td><b>Hide changes</b></td><td>Parts of the page the latest run added or changed are highlighted; this toggles that.</td></tr>
+<tr><td><b>Mark read</b> / <b>TaskDone</b></td><td>Clear the unread badge / close the thread. A new message reopens it.</td></tr>
+<tr><td><b>Compact</b></td><td>Summarize the conversation (Claude Code <code>/compact</code>) when the context gets large;
+the session continues with fewer tokens per message. The panel warns when it's time.</td></tr>
+<tr><td><b>New chat</b></td><td>Next message starts a fresh session that re-reads the page, <code>todo.md</code> and the last few messages.</td></tr>
+<tr><td><b>Allow once</b> / <b>Always allow</b></td><td>Shown when Claude was blocked from something. See <a href="#access">access</a>.</td></tr>
+</table></div>
+<h3>Long jobs</h3>
+<p>Claude submits heavy work with <code>sbatch</code> instead of running it inline, then ends its reply.
+The page stays "working" while DirAI checks the queue every 10 minutes (no tokens spent). When the jobs
+are done, DirAI sends Claude their results so it can update the page. You can still comment meanwhile;
+at most 5 automatic messages run in a row before it waits for you.</p>
+<h3>Usage limits</h3>
+<p>New runs pause at 95% of Claude's 5-hour limit or 98% of the weekly limit, and resume after the reset.
+A run cut off by the limit is resent automatically, in the same session, once the limit resets.</p>
+
+<h2 id="newagent">7. New agent: start a new page</h2>
+<p>Click <b>New agent</b> on the list page (or any page), type a folder path relative to the tree
+(e.g. <code>projA/new_study</code>, with autocomplete) and describe the task, then <b>Create &amp; start</b>.
+DirAI creates the folder with a starter page and hands the task to Claude, who replaces the page with
+the results.</p>
+
+<h2 id="pages">8. Writing pages</h2>
+<p>Pages are plain HTML, written by you or by Claude. The page rules
+(<code>PAGES.md</code> in the DirAI checkout, given to every assistant run):</p>
+<ul>
+  <li><b>Every figure names its plotting script</b>, as a caption with its path relative to the page folder,
+      e.g. <code>Script: analysis/plot_rate.sh</code>. Ideally <code>foo.png</code> comes from
+      <code>foo.sh</code> or <code>foo.py</code>.</li>
+  <li><b>Keep <code>todo.md</code> current</b>: <code>- [ ] open item</code> / <code>- [x] done item</code>.
+      Open items show in the page's status bar.</li>
+  <li>Reference images by relative path. The server only serves <code>.html</code> and images
+      (<code>.png .jpg .jpeg .gif .svg .webp</code>); everything else is 404.</li>
+  <li>No "Home" link needed: the server adds one to every page.</li>
+</ul>
+
+<h2 id="access">9. What the assistant may do</h2>
+<p>Runs use <code>claude -p --restricted</code> with an allow list, so nobody needs to approve anything
+while it runs:</p>
+<ul>
+  <li><b>Read</b> the page's own area: its nearest git repo, or its own folder when it isn't in a repo.
+      The tree's top page sees the whole tree. A parent sees its children; siblings don't see each other.</li>
+  <li><b>Edit</b> only inside the page folder. <b>Delete</b> only through <code>page_rm.sh</code>,
+      which refuses anything outside it.</li>
+  <li><b>Git</b> (pages inside a repo): add, commit and push the page folder, only when your message asks.
+      Force-push, reset, checkout, rebase, clean, <code>rm -rf</code> and <code>sudo</code> are always blocked.</li>
+</ul>
+<h3>Letting a page read another folder</h3>
+<ul>
+  <li><b>Name it in your message</b>: "compare with <code>projB/results</code>". Paths inside the tree that you
+      name (relative, <code>~/…</code> or absolute) are granted to that page before the run starts, and logged
+      in the thread.</li>
+  <li><b>Approve when blocked</b>: the panel lists what was refused; <b>Allow once (this page)</b> or
+      <b>Always allow</b> retries with it. Folder reads always stay with the one page, even under
+      "Always allow"; other rules (e.g. a command) then apply to every page.</li>
+  <li><b>Every page, permanently</b>: add the folder to <code>"read_dirs"</code> in <code>dirai.json</code>.</li>
+</ul>
+<div class="note warn"><b>Limit:</b> this confines Claude's own file tools and simple shell commands. A script it
+runs (<code>python3 x.py</code>) can still read whatever your user can.</div>
+
+<h2 id="cluster">10. On a cluster</h2>
+<p>Start the tree on your devnode (<code>DirAI start</code>), another node (<code>DirAI start NODE</code>),
+or as its own batch job (<code>DirAI start --job</code>; add account and partition under
+<code>"slurm"</code> in dirai.json). From your laptop, forward the port and log in through the tunnel:</p>
+<pre><code>ssh -N -L 8765:localhost:8765 &lt;you&gt;@&lt;node&gt;
+open "http://127.0.0.1:8765/_review/login?key=&lt;contents of ~/.config/dirai/key on the cluster&gt;"</code></pre>
+<p>The key lives in your cluster home, so it differs from your laptop's.</p>
+<div class="note warn"><b>Port clashes:</b> a tunnel occupies that port on your laptop. Give a local tree a
+different port (<code>DirAI init</code> picks one that's free; <code>start</code> refuses a taken one).</div>
+
+<h2 id="settings">11. Settings (<code>www/dirai.json</code>)</h2>
+<p>Per tree, local to this checkout, never committed:</p>
+<pre><code>{"port": 8775,
+ "title": "My Work",
+ "read_dirs": ["/data/shared"],
+ "allow": ["Bash(~/tools/run.sh:*)"],
+ "slurm": ["-A", "mygroup", "-p", "cpu"],
+ "exclude": ["data", "projA/build"]}</code></pre>
+<div class="tbl"><table>
+<tr><th>Key</th><th>Meaning</th></tr>
+<tr><td><code>port</code></td><td>This tree's server port. After changing it: <code>DirAI stop</code>, then <code>DirAI start</code>.</td></tr>
+<tr><td><code>title</code></td><td>Heading of the list page (default: the folder's name).</td></tr>
+<tr><td><code>read_dirs</code></td><td>Extra folders every page's assistant may read.</td></tr>
+<tr><td><code>allow</code></td><td>Extra Claude Code permission rules for the assistants.</td></tr>
+<tr><td><code>slurm</code></td><td>Extra <code>sbatch</code> options for <code>DirAI start --job</code>.</td></tr>
+<tr><td><code>exclude</code></td><td>Folders the page list skips: a name skips it anywhere, a path with a slash skips that one folder.</td></tr>
+</table></div>
+<p>Per user, in <code>~/.config/dirai/</code>: the owner <code>key</code>, the "Always allow" rules
+(<code>permissions.json</code>), the list of trees (<code>trees</code>) and the <code>PAGES.md</code> link.</p>
+
+<h2 id="commands">12. Command reference</h2>
+<div class="tbl"><table>
+<tr><th>Command</th><th>Does</th></tr>
+<tr><td><code>DirAI init</code></td><td>Set up the tree: port, <code>www/dirai.json</code>; in git, <code>.gitignore</code> and <code>CLAUDE.md</code> lines.</td></tr>
+<tr><td><code>DirAI start [NODE | --job]</code></td><td>Start the server here, on NODE, or as a SLURM job.</td></tr>
+<tr><td><code>DirAI status</code></td><td>Node, URL, start time, job time left, and whether it answers.</td></tr>
+<tr><td><code>DirAI restart</code></td><td>Reload with the current DirAI code, same node and port.</td></tr>
+<tr><td><code>DirAI stop</code></td><td>Stop the server (and its job, if it has one).</td></tr>
+<tr><td><code>DirAI build</code></td><td>Rebuild the page list now.</td></tr>
+<tr><td><code>DirAI publish [-n]</code></td><td>Git trees only: publish committed <code>*.html</code> to the <code>gh-pages</code> branch (<code>-n</code>: dry run).</td></tr>
+<tr><td><code>DirAI list</code></td><td>Every tree you've started, up or down, with port and node.</td></tr>
+<tr><td><code>DirAI -C DIR &lt;cmd&gt;</code></td><td>Act on the tree holding DIR.</td></tr>
+</table></div>
+
+<h2 id="trouble">13. Troubleshooting</h2>
+<div class="tbl"><table>
+<tr><th>Symptom</th><th>Cause and fix</th></tr>
+<tr><td>No panel on pages</td><td>Not logged in, or opened via the machine name instead of <code>127.0.0.1</code>. Use the
+login URL from <a href="#open">step 4</a>.</td></tr>
+<tr><td>Login URL gives 404</td><td>Wrong key, or the port reaches a different server, e.g. an SSH tunnel. Check
+<code>lsof -nP -iTCP:&lt;port&gt; -sTCP:LISTEN</code>; change <code>"port"</code> if something else holds it.</td></tr>
+<tr><td>"No DirAI tree here or above"</td><td>Run <code>DirAI init</code> at the folder you want to serve, or use <code>-C</code>.</td></tr>
+<tr><td>"Port … is already taken"</td><td>Another program listens there. Pick another <code>"port"</code> in <code>www/dirai.json</code>.</td></tr>
+<tr><td>"… overlaps this tree"</td><td>A tree inside or above this one is running. Stop it first, or serve only one of them.</td></tr>
+<tr><td>Server not answering</td><td>Read <code>www/serve_node.log</code> in the tree, then <code>DirAI restart</code>.</td></tr>
+<tr><td>Claude replies it was blocked</td><td>Use <b>Allow once</b> in the panel, or name the folder in your next message.
+"Always blocked" items can only be run by you.</td></tr>
+<tr><td>Page shows "queued"</td><td>Claude usage limit reached; it resumes after the reset shown.</td></tr>
+</table></div>
+
+</main>
+</body>
+</html>
