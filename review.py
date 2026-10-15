@@ -18,12 +18,14 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import threading
 import time
 
 import claude_usage
 import dirai_config
+import page_status
 
 KEY_FILE = dirai_config.KEY_FILE
 WWW_DIR = dirai_config.TOOL_DIR
@@ -45,10 +47,20 @@ RESET_RE = re.compile(r"(?i)resets?\s+(?:at\s+)?(?:([A-Z][a-z]{2})\s+(\d{1,2}),?
 CONTEXT_WARN = 150000
 CONTEXT_HIGH = 300000
 COMPACT = "/compact"
+# Model per page, picked in the panel (claude --model aliases); Sonnet unless changed, to save tokens.
+MODELS = ["sonnet", "opus", "fable", "haiku"]
+DEFAULT_MODEL = "sonnet"
 TRANSCRIPTS = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")), "projects")
 LIMIT_MARGIN_S = 120        # send this long after the stated reset time
 LIMIT_FALLBACK_S = 1800     # retry after this when the reset time can't be read
 RUN_TIMEOUT_S = 4 * 3600
+# After a run, the page stays "working" while SLURM jobs it submitted, or the page's jobs
+# (page_status.job_dirs: its folder plus the folders in its job_dirs.txt), are in the queue; when they have all left, the assistant is messaged to check the
+# results. html_server.py's housekeeping loop calls check_watches(); at most MAX_AUTO automatic
+# messages in a row (a comment from the owner resets the count), so a run that keeps resubmitting
+# can't loop.
+MAX_AUTO = 5
+SUBMITTED_RE = re.compile(r"Submitted batch job (\d+)")
 
 DEFAULT_ALLOW = [
     "Read", "Glob", "Grep", "Skill", "TodoWrite",
@@ -82,7 +94,9 @@ SYSTEM_PROMPT = """You are handling a review comment the owner left on one of th
 served from their tree {root}. The page is {page_file}; its
 folder ({page_dir}) is your working directory and the place for your changes. Do what the comment
 asks (fix the page, rerun scripts, regenerate plots, submit SLURM jobs for long runs), then end
-with a short reply for the comment thread: what you changed, what you ran, and anything still open.
+with a short reply for the comment thread: what you found, what you ran, and anything still open.
+Don't describe your edits to the page in the reply (no "Page changes" section): the owner sees them
+on the page itself, where the server highlights every added or changed part.
 Bash permissions are matched per command, and a built-in safety check refuses anything it can't
 verify, whatever is granted: command substitution $(...) or backticks, for/while loops (also
 "... | while read"), heredocs, and paths with "..". So keep each Bash call to one plain command or
@@ -105,7 +119,12 @@ force. Quote the commit hash and message in your reply.
 To delete files or folders, run "{page_rm} <path>...": it works only inside this page folder and
 deletes immediately, no trash (plain rm -r / rm -rf stay blocked).
 Rules: don't delete anything outside this folder; long or heavy work goes to
-SLURM (sbatch), not this process. Nobody can approve actions while you run: if a permission is
+SLURM (sbatch), not this process. Don't wait for or poll SLURM jobs (no squeue loops, no sleep):
+submit them, say what you submitted, and end your reply. The server watches the jobs you submit and
+jobs running in this folder, and messages you here when they have all finished. If the work runs
+jobs in other folders (e.g. a job that submits a test sweep in another checkout), list those
+folders in this folder's job_dirs.txt (one absolute path per line), so the server keeps waiting
+for them and shows them in the page's status bar. Nobody can approve actions while you run: if a permission is
 denied, do the rest and say in your reply exactly what you needed and why; the owner can grant it
 and resume you. Exception: these are blocked permanently and can never be granted, so don't ask;
 give the owner the exact command to run themselves instead: {always_denied}."""
@@ -142,6 +161,62 @@ def fresh_prompt(thread, text, keep=6, limit=1500):
     return ("This is a fresh session on a page that already has history. Before acting, read this "
             "folder's index.html and todo.md; the last messages of the earlier conversation follow "
             "for context.\n\n--- earlier messages ---\n%s\n--- end ---\n\nNew message:\n%s" % (quoted, text))
+
+
+SKIP_RE = re.compile(r"(?is)<(script|style)\b.*?</\1\s*>|<!--.*?-->|<[^>]*>|&#?\w+;|\s+")
+SEL_MAX = 4000      # characters of selected page text sent with a message
+SEL_KEY = 30        # characters (whitespace removed) used to find the selection's start/end in the source
+
+
+def visible_chars(html):
+    """The page's text with tags, scripts and whitespace removed, plus each character's source line."""
+    import html as htmllib
+    chars, lines, line, pos = [], [], 1, 0
+    for m in SKIP_RE.finditer(html):
+        for c in html[pos:m.start()]:
+            chars.append(c); lines.append(line)
+        tok = m.group(0)
+        if tok.startswith("&"):
+            for c in re.sub(r"\s", "", htmllib.unescape(tok)):
+                chars.append(c); lines.append(line)
+        line += tok.count("\n")
+        pos = m.end()
+    for c in html[pos:]:
+        chars.append(c); lines.append(line)
+    return "".join(chars), lines
+
+
+def selection_lines(path, text):
+    """(first, last) source lines of the selected page text in path, or None if it can't be found
+    (text built by scripts, or split by markup the browser shows differently)."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            page, lines = visible_chars(f.read())
+    except OSError:
+        return None
+    sel = re.sub(r"\s", "", text)
+    head, tail = sel[:SEL_KEY], sel[-SEL_KEY:]
+    i = page.find(head) if head else -1
+    if i < 0:
+        return None
+    j = page.find(tail, i)
+    if j < 0 or j - i > 2 * len(sel) + 200:   # end not found near the start: give the start only
+        return lines[i], lines[i]
+    return lines[i], lines[j + len(tail) - 1]
+
+
+def selection_prompt(sel, text):
+    """The owner's message with the page text they selected quoted in front of it."""
+    where = ["index.html"]
+    if sel.get("heading"):
+        where.append('near the heading "%s"' % sel["heading"])
+    if sel.get("lines"):
+        a, b = sel["lines"]
+        where.append("source line%s %s; read just the lines around %s unless you need more"
+                     % ("" if a == b else "s", a if a == b else "%s-%s" % (a, b), "it" if a == b else "them"))
+    quoted = "\n".join("> " + l for l in sel["text"].splitlines())
+    return ("The owner selected this text on the page (%s):\n%s\n\nTheir message about it:\n%s"
+            % (", ".join(where), quoted, text))
 
 
 def limit_reset(reply):
@@ -205,6 +280,30 @@ def context_tokens(session_id):
         return None
     _ctx_cache[paths[0]] = (mtime, ctx)
     return ctx
+
+
+def transcript(session_id):
+    paths = glob.glob(os.path.join(TRANSCRIPTS, "*", session_id + ".jsonl")) if session_id else []
+    return paths[0] if paths else None
+
+
+def submitted_jobs(session_id, offset):
+    """Job ids sbatch printed in the session's transcript after byte offset (this run's part)."""
+    path = transcript(session_id)
+    if not path:
+        return []
+    try:
+        with open(path, "rb") as f:
+            f.seek(offset)
+            text = f.read().decode("utf-8", "replace")
+    except OSError:
+        return []
+    return list(dict.fromkeys(SUBMITTED_RE.findall(text)))
+
+
+def busy(st):
+    """True while a run is going or queued; waiting on SLURM jobs doesn't block a new comment."""
+    return st.get("status") in ("working", "queued") and not st.get("watch")
 
 
 def kilo(n):
@@ -371,7 +470,7 @@ class Reviews:
                     self.queue.append((page, st["pending"]))
                     if (st.get("queued_until") or 0) > self.hold_until:
                         self.hold_until, self.hold_reason = st["queued_until"], st.get("queued_reason", "")
-                elif st.get("status") == "working":
+                elif st.get("status") == "working" and not st.get("watch"):   # watches resume
                     st["status"] = "unread"
                     st["thread"].append({"role": "system", "time": now(),
                                          "text": "The server restarted while this was running; "
@@ -387,6 +486,12 @@ class Reviews:
     def _save(self, data):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         save_json(self.path, data)
+
+    def prev_path(self, page):
+        """The page's index.html as it was before the latest run that changed it (the panel
+        highlights what differs from it)."""
+        name = page.replace("/", "%2F") if page else "%top"
+        return os.path.join(self.root, "www", "page_prev", name + ".html")
 
     def _page(self, data, page):
         return data.setdefault(page, {"status": "read", "thread": [], "session_id": None,
@@ -409,6 +514,8 @@ class Reviews:
             # e.g. ".." in a path), so another grant can't help
             st["context"] = context_tokens(st.get("session_id"))
             st["context_warn"], st["context_high"] = CONTEXT_WARN, CONTEXT_HIGH
+            st["model"], st["models"] = st.get("model") or DEFAULT_MODEL, MODELS
+            st["watching"] = (st.get("watch") or {}).get("jobs", [])
             st["denials"] = [{"text": describe_denial(d), "rules": denial_rules(d),
                               "blocked": any(always_denied(r) for r in denial_rules(d)),
                               "granted": all(r in granted for r in denial_rules(d))}
@@ -424,6 +531,16 @@ class Reviews:
                 return None
             until = st.get("queued_until") if st["status"] == "queued" else None
             return st.get("working_on") or "", st.get("started"), until, st.get("queued_reason") or ""
+
+    def set_model(self, page, model):
+        """The model for this page's next runs (the session continues; only the model changes)."""
+        if model not in MODELS:
+            return False
+        with self.lock:
+            data = self._load()
+            self._page(data, page)["model"] = model
+            self._save(data)
+            return True
 
     def set_status(self, page, status):
         with self.lock:
@@ -459,7 +576,7 @@ class Reviews:
         with self.lock:
             data = self._load()
             st = self._page(data, page)
-            if st["status"] in ("working", "queued") or not st.get("session_id"):
+            if busy(st) or not st.get("session_id"):
                 return False
             st["session_id"], st["denials"] = None, []
             st["thread"].append({"role": "system", "time": now(), "text": NEW_CHAT_MARK})
@@ -471,8 +588,9 @@ class Reviews:
         with self.lock:
             data = self._load()
             st = self._page(data, page)
-            if st["status"] in ("working", "queued") or not st.get("session_id"):
+            if busy(st) or not st.get("session_id"):
                 return False
+            st.pop("watch", None)   # the run re-checks the queue when it ends
             st["thread"].append({"role": "system", "time": now(), "text":
                                  "Compact requested (context %s tokens)." % kilo(context_tokens(st["session_id"]))})
             st["denials"] = []
@@ -482,23 +600,28 @@ class Reviews:
         self._enqueue(page, COMPACT)
         return True
 
-    def comment(self, page, text, prompt=None, on_file=None):
+    def comment(self, page, text, prompt=None, selection=None):
+        """selection: {"text", "heading"} of page text the owner selected, quoted in the prompt."""
+        if selection:
+            selection = {"text": selection["text"][:SEL_MAX], "heading": selection.get("heading", "")[:200],
+                         "lines": selection_lines(os.path.join(self.root, page, "index.html"), selection["text"])}
+            prompt = prompt or selection_prompt(selection, text)
         with self.lock:
             data = self._load()
             st = self._page(data, page)
-            if st["status"] in ("working", "queued"):
+            if busy(st):
                 return False
-            if not st.get("session_id") and st["thread"] and prompt is None:
-                prompt = fresh_prompt(st["thread"], text)   # New chat: catch up from the page and thread
-            st["thread"].append({"role": "user", "time": now(), "text": text})
+            st.pop("watch", None)   # the run re-checks the queue when it ends
+            st["auto_runs"] = 0
+            if not st.get("session_id") and st["thread"] and (prompt is None or selection):
+                prompt = fresh_prompt(st["thread"], prompt or text)   # New chat: catch up from the page and thread
+            st["thread"].append(dict({"role": "user", "time": now(), "text": text},
+                                     **({"selection": selection} if selection else {})))
             st["denials"] = []
             st["status"] = "working"   # waiting for a free slot counts as working
             st["working_on"], st["started"] = text, None
             self._save(data)
         prompt = prompt or text
-        if on_file:     # sent from a plan_*.html page in this folder rather than index.html
-            prompt = ("(This message was sent from %s in this folder; that file is the page it is "
-                      "about, not index.html.)\n\n%s" % (on_file, prompt))
         self._enqueue(page, prompt)
         return True
 
@@ -509,8 +632,10 @@ class Reviews:
         with self.lock:
             data = self._load()
             st = self._page(data, page)
-            if st["status"] in ("working", "queued") or not st.get("session_id"):
+            if busy(st) or not st.get("session_id"):
                 return False
+            st.pop("watch", None)
+            st["auto_runs"] = 0
             if always:
                 perms = load_json(PERMS_FILE, {"always": []})
                 perms["always"] = sorted(set(perms["always"]) | set(rules))
@@ -578,13 +703,22 @@ class Reviews:
                 for k in ("queued_until", "pending", "queued_reason"):
                     st.pop(k, None)
                 session, grants = st.get("session_id"), list(st.get("grants", []))
+                model = st.get("model") or DEFAULT_MODEL
                 self._save(data)
             before = context_tokens(session)
+            path = transcript(session)
+            offset = os.path.getsize(path) if path and os.path.exists(path) else 0
             page_dir = os.path.join(self.root, page)
+            index, snap = os.path.join(page_dir, "index.html"), self.prev_path(page) + ".run"
+            os.makedirs(os.path.dirname(snap), exist_ok=True)
+            try:
+                shutil.copyfile(index, snap)
+            except OSError:
+                pass
             allow = DEFAULT_ALLOW + self.config["allow"] + ["Edit(/%s/**)" % page_dir] + \
                 load_json(PERMS_FILE, {"always": []})["always"] + grants
             dirs = self.read_dirs + extra_dirs(allow, page_dir, self.read_dirs)
-            cmd = [CLAUDE_CMD, "-p", prompt, "--output-format", "json", "--permission-mode", "dontAsk",
+            cmd = [CLAUDE_CMD, "-p", prompt, "--model", model, "--output-format", "json", "--permission-mode", "dontAsk",
                    "--restricted", "--strict-mcp-config", "--tools", TOOLS, "--add-dir"] + dirs + [
                    "--append-system-prompt", SYSTEM_PROMPT.format(root=self.root,
                        page_file=os.path.join(page_dir, "index.html"), page_dir=page_dir,
@@ -600,7 +734,7 @@ class Reviews:
                                    stderr=subprocess.PIPE, timeout=RUN_TIMEOUT_S)
                 out = json.loads(p.stdout.decode("utf-8", "replace") or "{}")
                 reply = out.get("result") or p.stderr.decode("utf-8", "replace")[-2000:] or "(no reply)"
-                entry = {"role": "claude", "time": now(), "text": reply}
+                entry = {"role": "claude", "time": now(), "text": reply, "model": model}
                 if out.get("total_cost_usd") is not None:
                     entry["cost"] = round(out["total_cost_usd"], 3)
                 denials = out.get("permission_denials", [])
@@ -614,6 +748,15 @@ class Reviews:
                 after = context_tokens(session)
                 entry = {"role": "system", "time": now(), "text": "Conversation compacted: %s -> %s tokens." % (
                     kilo(before), kilo(after)) if after != before else "Compact finished: " + entry["text"]}
+            if not until:   # the run changed the page: highlight against the copy from before it
+                try:
+                    with open(snap, "rb") as a, open(index, "rb") as b:
+                        if a.read() != b.read():
+                            os.replace(snap, self.prev_path(page))
+                except OSError:
+                    pass
+            if os.path.exists(snap):
+                os.remove(snap)
             if until:
                 # keep the message and send it again after the reset, in the same session
                 retry = prompt if prompt == COMPACT or prompt.startswith(LIMIT_RETRY) else LIMIT_RETRY + prompt
@@ -626,6 +769,7 @@ class Reviews:
                     st["session_id"] = session
                     self._save(data)
                 return
+            ids = self._jobs_to_watch(page_dir, session, offset)
             with self.lock:
                 data = self._load()
                 st = self._page(data, page)
@@ -633,8 +777,87 @@ class Reviews:
                 st["denials"] = denials
                 st["session_id"] = session
                 st["status"] = "unread"
+                if ids and st.get("auto_runs", 0) >= MAX_AUTO:
+                    st["thread"].append({"role": "system", "time": now(), "text":
+                                         "SLURM jobs %s are still queued, but the assistant has already been "
+                                         "messaged automatically %d times in a row; not watching them. Comment "
+                                         "to continue." % (", ".join(ids), MAX_AUTO)})
+                elif ids:
+                    self._start_watch(st, ids)
                 self._save(data)
         finally:
             with self.lock:
                 self.running -= 1
             self._pump()
+
+    # --- waiting on SLURM jobs ------------------------------------------------------------
+    def _jobs_to_watch(self, page_dir, session, offset):
+        """Jobs still queued that this run submitted, plus the owner's jobs in the page folder."""
+        live = page_status.live_ids()
+        if live is None:
+            return []
+        ids = [i for i in submitted_jobs(session, offset) if i in live]
+        for j in page_status.page_jobs(page_dir, fresh=True):
+            if page_status.base_id(j["id"]) not in ids:
+                ids.append(page_status.base_id(j["id"]))
+        return ids
+
+    def _start_watch(self, st, ids):
+        """Keep the page "working" until jobs ids leave the queue; caller holds the lock."""
+        st["status"], st["started"] = "working", time.time()
+        st["watch"] = {"jobs": ids, "since": st["started"]}
+        st["working_on"] = self._waiting_text(ids)
+        st["thread"].append({"role": "system", "time": now(), "text":
+                             "Waiting for SLURM jobs %s. When they have all left the queue, the assistant will be "
+                             "asked to check the results and update the page." % ", ".join(ids)})
+
+    @staticmethod
+    def _waiting_text(ids):
+        shown = ", ".join(ids[:6]) + (" and %d more" % (len(ids) - 6) if len(ids) > 6 else "")
+        return "Waiting for %d SLURM job%s (%s); the assistant is messaged when they finish" % (
+            len(ids), "" if len(ids) == 1 else "s", shown)
+
+    def check_watches(self):
+        """One pass over the pages waiting on SLURM jobs: message the assistant on each page
+        whose jobs have all left the queue."""
+        with self.lock:
+            watched = {p: st["watch"]["jobs"] for p, st in self._load().items() if st.get("watch")}
+        if not watched:
+            return
+        active = page_status.active_jobs()
+        if active is None:
+            return
+        live = {page_status.base_id(j["id"]) for j in active}
+        done, waiting = {}, {}
+        for p, ids in watched.items():
+            mine = [i for i in ids if i in live]
+            for j in page_status.page_jobs(os.path.join(self.root, p), all_jobs=active):
+                if page_status.base_id(j["id"]) not in mine:
+                    mine.append(page_status.base_id(j["id"]))
+            (waiting if mine else done)[p] = mine or ids
+        with self.lock:     # keep the status bar's "Waiting for ..." line current
+            data = self._load()
+            for p, mine in waiting.items():
+                st = data.get(p)
+                if st and st.get("watch"):
+                    st["working_on"] = self._waiting_text(mine)
+            self._save(data)
+        for page, ids in done.items():
+            report = page_status.job_report(ids)
+            with self.lock:
+                data = self._load()
+                st = data.get(page)
+                if not st or not st.get("watch"):
+                    continue
+                st.pop("watch")
+                st["auto_runs"] = st.get("auto_runs", 0) + 1
+                st["thread"].append({"role": "system", "time": now(),
+                                     "text": "SLURM jobs finished:\n" + report})
+                st["working_on"], st["started"] = "Check the finished SLURM jobs %s" % ", ".join(ids), None
+                text = ("(Automatic message from the DirAI server, not the owner.) The SLURM jobs you were "
+                        "waiting on have left the queue:\n%s\n\nCheck their output and logs, update the page "
+                        "and todo.md with the results, and reply with a short summary. If you submit new "
+                        "jobs, end your reply; you will be messaged again when they finish." % report)
+                prompt = text if st.get("session_id") or not st["thread"] else fresh_prompt(st["thread"], text)
+                self._save(data)
+            self._enqueue(page, prompt)

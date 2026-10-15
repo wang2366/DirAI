@@ -18,9 +18,6 @@ Per-transcript sums are cached in www/page_tokens.json, keyed by file size and m
 Each run prints how long each step took (find pages, size cache, measure sizes, tokens,
 write index.html).
 
-Plan pages (plan_*.html, in any folder) are listed too, as their own rows without size or
-tokens (those belong to the folder's index.html row).
-
 Links are relative (../<path>), so they work both when the page is opened from an
 rsync'd copy of the HTML files and when ROOT is served over HTTP.
 """
@@ -40,7 +37,7 @@ ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
 ROOT = os.path.abspath(ARGS[0]) if ARGS else \
     subprocess.run(["git", "rev-parse", "--show-toplevel"], stdout=subprocess.PIPE,
                    universal_newlines=True, check=True).stdout.strip()
-TITLE = os.environ.get("DIRAI_TITLE") or dirai_config.tree_config(ROOT)["title"]
+TITLE = os.environ.get("DIRAI_TITLE") or ROOT   # list page heading: the tree's path
 OUT = os.path.join(ROOT, "www", "index.html")
 SIZES = os.path.join(ROOT, "www", "page_sizes.json")
 SIZE_LOCK = SIZES + ".lock"
@@ -75,20 +72,13 @@ class Steps:
         print("  %-18s %7.2fs" % ("total", time.time() - self.start), flush=True)
 
 
-def find_pages(stats=None, plans=None):
-    """Pages, newest first. "dir" is the page folder relative to ROOT ("" for ROOT itself).
-    Plan pages (plan_*.html) are appended to plans, if given, as {"path", "title", "mtime"}."""
+def find_pages(stats=None):
+    """Pages, newest first. "dir" is the page folder relative to ROOT ("" for ROOT itself)."""
     pages = []
     for dirpath, dirnames, filenames in os.walk(ROOT):
         if stats is not None:
             stats["walked"] = stats.get("walked", 0) + 1
         dirnames[:] = sorted(d for d in dirnames if d not in PRUNE_DIRS)
-        if plans is not None:
-            for name in sorted(filenames):
-                if name.startswith("plan_") and name.endswith(".html"):
-                    full = os.path.join(dirpath, name)
-                    plans.append({"path": os.path.relpath(full, ROOT), "title": page_title(full),
-                                  "mtime": os.path.getmtime(full)})
         if "index.html" not in filenames:
             continue
         full = os.path.join(dirpath, "index.html")
@@ -249,8 +239,8 @@ def human_size(n):
         n /= 1024.0
 
 
-def render(pages, cache, tokens, plans=()):
-    rows = []   # (mtime, html), newest first at the end
+def render(pages, cache, tokens):
+    rows = []
     for p in pages:
         label = html.escape(p["dir"] + "/" if p["dir"] else "(top)")
         href = html.escape("../" + (p["dir"] + "/" if p["dir"] else "") + "index.html", quote=True)
@@ -270,20 +260,11 @@ def render(pages, cache, tokens, plans=()):
                 *(human_count(x) for x in t["tok"]), human_count(sum(t["tok"])))
         else:
             tok = '<td class="num" data-v="0"></td>'
-        rows.append((p["mtime"], '<tr><td data-v="%s"><a href="%s">%s</a>%s</td><td class="num" data-v="%d">%s</td>%s%s</tr>'
+        rows.append('<tr><td data-v="%s"><a href="%s">%s</a>%s</td><td class="num" data-v="%d">%s</td>%s%s</tr>'
                     % (label, href, label, '<div class="sub">%s</div>' % title if title else "",
-                       p["mtime"], when, size, tok)))
-    for p in plans:
-        label = html.escape(p["path"])
-        href = html.escape("../" + p["path"], quote=True)
-        title = html.escape(p["title"]) if p["title"] else ""
-        when = datetime.datetime.fromtimestamp(p["mtime"]).strftime("%Y-%m-%d %H:%M")
-        rows.append((p["mtime"], '<tr class="plan"><td data-v="%s"><a href="%s">%s</a><span class="tag">plan</span>%s</td>'
-                     '<td class="num" data-v="%d">%s</td><td class="num" data-v="0"></td><td class="num" data-v="0"></td></tr>'
-                     % (label, href, label, '<div class="sub">%s</div>' % title if title else "", p["mtime"], when)))
-    rows = [r for _, r in sorted(rows, key=lambda r: r[0], reverse=True)]
+                       p["mtime"], when, size, tok))
     generated = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    return TEMPLATE.format(title=html.escape(TITLE), root=html.escape(ROOT), count=len(pages), generated=generated, rows="\n".join(rows))
+    return TEMPLATE.format(title=html.escape(TITLE), count=len(pages), generated=generated, rows="\n".join(rows))
 
 
 TEMPLATE = """<!doctype html>
@@ -311,14 +292,12 @@ TEMPLATE = """<!doctype html>
   th:hover {{ color:var(--fg); }}
   td a {{ color:var(--link); text-decoration:none; word-break:break-all; }}
   td a:hover {{ text-decoration:underline; }}
-  .tag {{ margin-left:6px; padding:0 6px; border:1px solid var(--line); border-radius:8px;
-          font-size:.75rem; color:var(--muted); }}
   .num {{ white-space:nowrap; color:var(--muted); font-variant-numeric:tabular-nums; }}
 </style>
 </head>
 <body>
 <h1>{title}</h1>
-<div class="meta">{count} agents under {root}/ &middot; generated {generated}
+<div class="meta">{count} agents &middot; generated {generated}
   by <code>www/build_index.py</code> &middot; click a column to sort</div>
 <input id="q" type="search" placeholder="Filter by folder or title&hellip;" autofocus>
 <table>
@@ -364,9 +343,9 @@ if __name__ == "__main__":
     measuring = "--sizes" in sys.argv[1:]
     steps = Steps()
     try:
-        walk, plans = {}, []
-        pages = find_pages(walk, plans)
-        steps.done("find pages", "%d folders walked, %d pages, %d plans" % (walk.get("walked", 0), len(pages), len(plans)))
+        walk = {}
+        pages = find_pages(walk)
+        steps.done("find pages", "%d folders walked, %d pages" % (walk.get("walked", 0), len(pages)))
         cache = load_cache()
         todo = stale(pages, cache)
         steps.done("size cache", "%d of %d folders stale" % (len(todo), len(pages)))
@@ -394,7 +373,7 @@ if __name__ == "__main__":
             tstats.get("files", 0) - tstats.get("read", 0), len(tokens)))
         os.makedirs(os.path.dirname(OUT), exist_ok=True)
         with open(OUT + ".tmp", "w", encoding="utf-8") as f:
-            f.write(render(pages, cache, tokens, plans))
+            f.write(render(pages, cache, tokens))
         os.replace(OUT + ".tmp", OUT)
         steps.done("write index.html")
         steps.total()

@@ -2,10 +2,17 @@
 
 Serve any git repo as browsable HTML pages, with a Claude Code assistant on every page.
 
-Each page folder holds an `index.html` (and optional `plan_*.html`). DirAI lists them on the repo's
+Each page folder holds an `index.html`. DirAI lists them on the repo's
 `www/index.html`. The owner gets an assistant panel on each page: a comment there starts a
 background `claude -p` session in that folder, which edits the page, reruns scripts or submits
-jobs, then replies in the thread.
+jobs, then replies in the thread. The parts of the page its latest edit added or changed are
+highlighted (compared with a copy saved before the run, in `www/page_prev/`).
+
+If a run leaves SLURM jobs in the queue (ones it submitted, or any of yours running in the page
+folder), the page stays "working" while the server checks the queue (`sacct`) every 10 minutes, which
+costs no tokens. When the jobs have all left the queue, the server sends the assistant their `sacct`
+results so it can update the page. A comment can still go in while the page waits. Five automatic
+messages in a row is the limit, until you comment again.
 
 ## Setup (once per machine)
 
@@ -42,7 +49,7 @@ Opening a page as the owner: connect through an SSH tunnel to the node, then vis
 `www/dirai.json`:
 
 ```json
-{"port": 8765, "title": "My Work",
+{"port": 8765,
  "read_dirs": ["/data/shared"],              "allow": ["Bash(~/tools/run.sh:*)"],
  "slurm": ["-A", "mygroup", "-p", "cpu"]}
 ```

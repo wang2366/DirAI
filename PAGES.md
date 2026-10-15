@@ -1,8 +1,8 @@
 # HTML page conventions
 
 For trees served by DirAI (a git repo where `DirAI` was run at the top): results and write-ups
-are HTML pages, one per folder, `<folder>/index.html` (plans: `<folder>/plan_*.html`), anywhere in
-the tree. DirAI serves them and lists every one on the tree's `www/index.html`.
+are HTML pages, one per folder, `<folder>/index.html`, anywhere in the tree. DirAI serves them
+and lists every one on the tree's `www/index.html`.
 
 To apply these rules to every Claude session in the tree, the tree's root `CLAUDE.md` has the
 line  `@~/DirAI/PAGES.md`  (`DirAI init` adds it; chat-with-Claude runs started from a page get
@@ -16,6 +16,10 @@ them directly).
   `- [ ] open item` / `- [x] done item`. The server shows the open items, and the SLURM jobs
   running in that folder, in a status bar at the top of the page. When you finish an item, tick
   it; when work leaves something open (a job still running, a next step), add it.
+- **Jobs that run elsewhere go in `job_dirs.txt`.** The status bar (and the server's wait for a
+  page's jobs) counts the jobs whose working directory is in the page folder. When the page's
+  work runs jobs in other folders, e.g. a test sweep in another checkout, put those folders in
+  the page folder's `job_dirs.txt`, one absolute path per line.
 - Reference images and other files by relative path inside the tree; the server only serves
   `.html` and image files (`.png .jpg .jpeg .gif .svg .webp`).
 - Don't add your own "Home"/back-to-list link: the server adds a Home button to every page.

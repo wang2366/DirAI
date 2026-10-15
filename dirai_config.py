@@ -6,7 +6,6 @@
   generated) and dirai.json, the tree's settings. dirai.json is local too (gitignored): two clones
   of one repo (e.g. home and scratch) need different ports, and it holds machine paths.
       {"port": 8765,                    # this tree's server port
-       "title": "My Work",              # list page heading (default: the folder name)
        "read_dirs": ["/scratch/..."],   # extra folders page agents may read (the tree is always in)
        "allow": ["Bash(~/x/run.sh:*)"], # extra allow rules for page agents
        "slurm": ["-A", "grp", "-p", "cpu"]}  # extra sbatch options for `DirAI start --job`
@@ -31,7 +30,7 @@ def data_dir(root):
 
 def tree_config(root):
     """The tree's www/dirai.json merged over the defaults."""
-    cfg = {"port": None, "title": os.path.basename(os.path.abspath(root)), "read_dirs": [], "allow": [], "slurm": []}
+    cfg = {"port": None, "read_dirs": [], "allow": [], "slurm": []}
     try:
         with open(os.path.join(data_dir(root), "dirai.json")) as f:
             cfg.update(json.load(f))

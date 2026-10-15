@@ -1,7 +1,8 @@
 #!/bin/bash
 # Long-running page server for ONE tree (a git repo): serves its .html pages and their images
 # (only) on the tree's port, open to the network: http://<node>:<port>/www/index.html
-# Rebuilds the tree's www/index.html every 10 min and records itself in <tree>/www/server_host.txt
+# Builds the tree's www/index.html at start (html_server.py rebuilds it every 10 min, along with
+# its other housekeeping) and records itself in <tree>/www/server_host.txt
 # (read by `DirAI status|restart|stop`).
 #
 #   dirai_serve TREE          normally started by `DirAI start` (on your devnode, or as a job)
@@ -47,12 +48,6 @@ start_server
 # fields: node job date time pid reload-capable port
 echo "$(hostname -s) ${SLURM_JOB_ID:-nojob} $(date '+%F %T') $$ reload $PORT" > "$HOST_FILE"
 echo "Serving $ROOT on $(hostname -s):$PORT"
-
-# keep the page list current
-while true; do
-    sleep 600
-    python3 "$TOOL/build_index.py" "$ROOT" >/dev/null
-done &
 
 # wait returns whenever a trapped signal (USR1) arrives; keep waiting after a reload
 while true; do

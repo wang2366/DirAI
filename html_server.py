@@ -18,6 +18,7 @@ import socketserver
 import subprocess
 import sys
 import threading
+import time
 from http import cookies
 from urllib.parse import parse_qs, urlparse
 
@@ -38,7 +39,7 @@ HOME_BUTTON = ('<a href="/www/index.html" title="All pages" style="position:fixe
 KEY = review.login_key()
 NEWAGENT_TAG = ('<script src="/_review/newagent.js" data-base="%s" data-root="'
                 + ROOT.replace("&", "&amp;").replace('"', "&quot;") + '"></script>')
-PLAN_RE = re.compile(r"^plan_[^/]*\.html$")   # plan pages get the same treatment as index.html
+HOUSEKEEP_S = 600     # see housekeeping()
 NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+-]*$")   # no leading dot: no "..", no hidden folders
 
 
@@ -68,6 +69,19 @@ def list_dirs(prefix, limit=40):
 def rebuild_list():
     subprocess.run([sys.executable, os.path.join(WWW_DIR, "build_index.py"), ROOT],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def housekeeping():
+    """The server's repeated work, every HOUSEKEEP_S: check the SLURM jobs pages are waiting on
+    (and message their assistants when done), then rebuild the list page. The list is built
+    once at startup by dirai_serve, so the first pass waits a full interval."""
+    while True:
+        time.sleep(HOUSEKEEP_S)
+        for name, task in (("job check", REVIEWS.check_watches), ("list rebuild", rebuild_list)):
+            try:
+                task()
+            except Exception as e:      # one failing task mustn't stop the loop
+                print("housekeeping: %s failed: %s" % (name, e), flush=True)
 
 
 class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
@@ -119,10 +133,14 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
             return self.send_json({"error": "no such page"}, 404)
         if action == "comment":
             text = (body.get("text") or "").strip()
-            on_file = body.get("file") or ""
-            ok = bool(text) and REVIEWS.comment(page, text, on_file=on_file if PLAN_RE.match(on_file) else None)
+            sel = body.get("selection")
+            sel = ({"text": str(sel.get("text") or "").strip(), "heading": str(sel.get("heading") or "")}
+                   if isinstance(sel, dict) else None)
+            ok = bool(text) and REVIEWS.comment(page, text, selection=sel if sel and sel["text"] else None)
         elif action == "status" and body.get("status") in ("read", "unread", "closed"):
             ok = REVIEWS.set_status(page, body["status"])
+        elif action == "model":
+            ok = REVIEWS.set_model(page, body.get("model"))
         elif action == "compact":
             ok = REVIEWS.compact(page)
         elif action == "newchat":
@@ -153,6 +171,16 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
         if action == "state":
             page = self.page_key(q.get("page", [""])[0])
             return self.send_json(REVIEWS.state(page)) if page is not None else self.send_error(404)
+        if action == "prev":      # the page before the latest run that changed it (panel highlights)
+            page = self.page_key(q.get("page", [""])[0])
+            try:
+                with open(REVIEWS.prev_path(page), "rb") as f:
+                    body = f.read()
+            except (OSError, TypeError):
+                return self.send_error(404)
+            self.send_html_headers(len(body))
+            self.wfile.write(body)
+            return
         if action in ("panel.js", "list.js", "newagent.js"):
             with open(os.path.join(WWW_DIR, "review_" + action), "rb") as f:
                 body = f.read()
@@ -167,12 +195,12 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
 
     @staticmethod
     def page_key(page):
-        """'a/b' for ROOT/a/b/ holding index.html or a plan_*.html page, or None if there is no such page."""
+        """'a/b' for ROOT/a/b/ holding index.html, or None if there is no such page."""
         page = page.strip("/")
         full = os.path.realpath(os.path.join(ROOT, page))
         if not (full == ROOT or full.startswith(ROOT + os.sep)) or not os.path.isdir(full):
             return None
-        if os.path.isfile(os.path.join(full, "index.html")) or any(PLAN_RE.match(n) for n in os.listdir(full)):
+        if os.path.isfile(os.path.join(full, "index.html")):
             return os.path.relpath(full, ROOT) if full != ROOT else ""
         return None
 
@@ -189,13 +217,12 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
         if not path.lower().endswith(ALLOWED_EXT) or not os.path.isfile(path):
             self.send_error(404)
             return None
-        if os.path.basename(path) == "index.html" or PLAN_RE.match(os.path.basename(path)):
+        if os.path.basename(path) == "index.html":
             return self.send_page(path)
         return super().send_head()
 
     def send_page(self, path):
-        """index.html (or plan_*.html) plus a Home button (every visitor) and the chat panel
-        (owner only; a plan page shares its folder's thread)."""
+        """index.html plus a Home button (every visitor) and the chat panel (owner only)."""
         with open(path, "rb") as f:
             html = f.read()
         owner = self.is_owner()
@@ -208,8 +235,7 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
             if owner:
                 page = os.path.relpath(os.path.dirname(path), ROOT)
                 page = "" if page == "." else page.replace("&", "&amp;").replace('"', "&quot;")
-                tag += '<script src="/_review/panel.js" data-page="%s" data-file="%s"></script>' % (
-                    page, os.path.basename(path))
+                tag += '<script src="/_review/panel.js" data-page="%s"></script>' % page
                 tag += NEWAGENT_TAG % page
         tag = tag.encode()
         i = html.lower().rfind(b"</body>")
@@ -245,6 +271,7 @@ class ThreadingServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 if __name__ == "__main__":
     os.chdir(ROOT)   # Python 3.6's handler serves the current directory
+    threading.Thread(target=housekeeping, daemon=True).start()
     with ThreadingServer((BIND, PORT), HtmlOnlyHandler) as httpd:
         print("Serving .html under %s on %s:%d" % (ROOT, BIND, PORT), flush=True)
         httpd.serve_forever()

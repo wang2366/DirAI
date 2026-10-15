@@ -13,36 +13,116 @@ import threading
 import time
 
 SQUEUE_TTL_S = 30
+# Jobs come from sacct (the accounting database), not squeue: on this cluster squeue --me takes
+# seconds and sometimes hangs, sacct answers in milliseconds. With --state and no start time,
+# sacct lists the jobs in those states right now.
+ACTIVE = "PENDING,RUNNING,REQUEUED,SUSPENDED,RESIZING"
 _lock = threading.Lock()
 _cache = {"time": 0.0, "jobs": []}
 
 
-def jobs():
-    """The owner's jobs as dicts, from squeue, cached for SQUEUE_TTL_S seconds."""
+def seconds(d):
+    """[D-]HH:MM:SS (or MM:SS) to seconds; None for UNLIMITED and the like."""
+    m = re.match(r"(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$", d or "")
+    if not m:
+        return None
+    days, h, mi, sec = (int(x or 0) for x in m.groups())
+    return ((days * 24 + h) * 60 + mi) * 60 + sec
+
+
+def duration(n):
+    days, rest = divmod(n, 86400)
+    return ("%d-" % days if days else "") + "%02d:%02d:%02d" % (rest // 3600, rest // 60 % 60, rest % 60)
+
+
+def active_jobs():
+    """The owner's pending/running jobs as dicts, or None if sacct failed."""
+    try:
+        p = subprocess.run(["sacct", "-X", "-n", "-P", "--state=" + ACTIVE,
+                            "-o", "JobID,JobName,State,Elapsed,Timelimit,NodeList,Reason,WorkDir"],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if p.returncode:
+        return None
+    out = []
+    for line in p.stdout.decode("utf-8", "replace").splitlines():
+        f = line.split("|", 7)
+        if len(f) != 8:
+            continue
+        jid, name, state, elapsed, limit, nodes, reason, workdir = f
+        state = state.split()[0]                        # "CANCELLED by 123" style suffixes
+        left = None
+        if seconds(limit) is not None and seconds(elapsed) is not None:
+            left = duration(max(0, seconds(limit) - seconds(elapsed)))
+        out.append({"id": jid, "name": name, "state": state, "time": elapsed, "left": left or limit,
+                    "where": nodes if state == "RUNNING" else "(%s)" % reason, "workdir": workdir})
+    return out
+
+
+def jobs(fresh=False):
+    """The owner's jobs as dicts, cached for SQUEUE_TTL_S seconds."""
     with _lock:
-        if time.time() - _cache["time"] > SQUEUE_TTL_S:
-            try:
-                out = subprocess.run(
-                    ["squeue", "--me", "-h", "-o", "%i|%j|%T|%M|%L|%R|%Z"],
-                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=15).stdout.decode()
-                rows = [l.split("|", 6) for l in out.splitlines() if l.count("|") == 6]
-                _cache["jobs"] = [dict(zip(("id", "name", "state", "time", "left", "where", "workdir"), r))
-                                  for r in rows]
-            except (OSError, subprocess.SubprocessError):
-                pass
+        if fresh or time.time() - _cache["time"] > SQUEUE_TTL_S:
+            got = active_jobs()
+            if got is not None:
+                _cache["jobs"] = got
             _cache["time"] = time.time()
         return list(_cache["jobs"])
 
 
-def page_jobs(page_dir):
+def job_dirs(page_dir):
+    """Folders whose jobs belong to the page: the page folder, plus the absolute paths listed in
+    its job_dirs.txt (one per line, # comments) for work it runs elsewhere, e.g. a test sweep
+    in another checkout."""
+    dirs = [os.path.realpath(page_dir)]
+    try:
+        with open(os.path.join(page_dir, "job_dirs.txt"), encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                if line.startswith("/"):
+                    dirs.append(os.path.realpath(line))
+    except OSError:
+        pass
+    return dirs
+
+
+def page_jobs(page_dir, fresh=False, all_jobs=None):
+    """The page's jobs (see job_dirs); sub is the working directory relative to the page
+    folder, or absolute when it is elsewhere."""
     page_dir = os.path.realpath(page_dir)
+    dirs = job_dirs(page_dir)
     out = []
-    for j in jobs():
+    for j in jobs(fresh) if all_jobs is None else all_jobs:
         wd = os.path.realpath(j["workdir"])
-        if wd == page_dir or wd.startswith(page_dir + os.sep):
-            j = dict(j, sub=os.path.relpath(wd, page_dir))
-            out.append(j)
+        if any(wd == d or wd.startswith(d + os.sep) for d in dirs):
+            inside = wd == page_dir or wd.startswith(page_dir + os.sep)
+            out.append(dict(j, sub=os.path.relpath(wd, page_dir) if inside else wd))
     return out
+
+
+def base_id(job_id):
+    """123 for 123, 123_4 and 123_[5-9] (array tasks belong to the job sbatch printed)."""
+    return job_id.split("_", 1)[0]
+
+
+def live_ids():
+    """Base ids of the owner's jobs still in the queue, or None if sacct failed (so a
+    hiccup never looks like every job finished)."""
+    got = active_jobs()
+    return None if got is None else {base_id(j["id"]) for j in got}
+
+
+def job_report(ids):
+    """One line per job from sacct: id, name, final state, elapsed, exit code."""
+    try:
+        out = subprocess.run(["sacct", "-j", ",".join(ids), "-X", "-n", "-P",
+                              "-o", "JobID,JobName,State,Elapsed,ExitCode"],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30).stdout.decode()
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    lines = ["  ".join(l.split("|")) for l in out.splitlines() if l.strip()]
+    return "\n".join(lines) or "(sacct had no record of jobs %s)" % ", ".join(ids)
 
 
 def open_todos(page_dir):

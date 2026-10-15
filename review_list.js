@@ -10,9 +10,9 @@
   const LABEL = {closed: "TaskDone"};   // shown name for a stored status
   const rows = [...document.querySelectorAll("#rows tr")];
   const tbody = document.getElementById("rows");
-  // ../a/b/index.html  ->  a/b; a plan page ../a/b/plan_x.html shares its folder's thread  ->  a/b
+  // ../a/b/index.html  ->  a/b
   const pageOf = tr => decodeURI(tr.querySelector("a").getAttribute("href")).replace(/^\.\.\//, "")
-    .replace(/\/?(index|plan_[^/]*)\.html$/, "");
+    .replace(/\/?index\.html$/, "");
 
   function update() {
     fetch("/_review/all").then(r => r.json()).then(all => {

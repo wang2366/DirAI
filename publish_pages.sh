@@ -34,8 +34,8 @@ mapfile -t pages < <(git ls-tree -r --name-only origin/main | grep -iE '\.html?$
 [[ ${#pages[@]} -gt 0 ]] && git archive origin/main -- "${pages[@]}" | tar -x -C "$WT"
 
 : > "$WT/.nojekyll"
-# the list page at www/index.html, titled like the tree's own (gh-pages has no www/dirai.json)
-TITLE=$(python3 -c "import sys; sys.path.insert(0, '$TOOL'); import dirai_config as c; print(c.tree_config('$REPO')['title'])")
+# the list page at www/index.html, headed by the tree's path like its own (not the worktree's)
+TITLE=$REPO
 DIRAI_TITLE=$TITLE python3 "$TOOL/build_index.py" "$WT" >/dev/null
 cat > "$WT/index.html" <<EOF
 <!doctype html>
