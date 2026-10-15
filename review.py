@@ -19,6 +19,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -316,6 +317,24 @@ def submitted_jobs(session_id, offset):
     return list(dict.fromkeys(SUBMITTED_RE.findall(text)))
 
 
+class RunCancelled(Exception):
+    pass
+
+
+def stop_process(p):
+    """SIGTERM a claude run and the commands it started (its own process group), SIGKILL
+    whatever is left after 10 s."""
+    def kill(sig):
+        try:
+            os.killpg(p.pid, sig)
+        except OSError:
+            pass
+    kill(signal.SIGTERM)
+    t = threading.Timer(10, kill, args=(signal.SIGKILL,))
+    t.daemon = True
+    t.start()
+
+
 def busy(st):
     """True while a run is going or queued; waiting on SLURM jobs doesn't block a new comment."""
     return st.get("status") in ("working", "queued") and not st.get("watch")
@@ -522,6 +541,8 @@ class Reviews:
         self.lock = threading.Lock()
         self.running = 0
         self.queue = []
+        self.procs = {}         # page -> its running claude process (for Cancel)
+        self.cancelled = set()  # pages whose run the owner cancelled
         self.hold_until = 0     # no run starts before this (usage limit)
         self.hold_reason = ""
         self.timer = None
@@ -616,6 +637,32 @@ class Reviews:
             st["status"] = status
             self._save(data)
             return True
+
+    def cancel(self, page):
+        """Stop the page's run, or drop its message from the queue, or stop waiting on its SLURM
+        jobs (the jobs themselves keep running). The session is kept, so the next message
+        continues it, with whatever model is picked by then."""
+        with self.lock:
+            data = self._load()
+            st = self._page(data, page)
+            if st["status"] not in ("working", "queued"):
+                return False
+            queued = [i for i in self.queue if i[0] == page]
+            if queued or st.get("watch") or st["status"] == "queued":
+                for item in queued:
+                    self.queue.remove(item)
+                for k in ("watch", "queued_until", "pending", "queued_reason"):
+                    st.pop(k, None)
+                st["status"] = "unread"
+                st["thread"].append({"role": "system", "time": now(), "text": "Cancelled by the owner."})
+                self._save(data)
+                return True
+            # running (or about to start): _run sees the flag, stops the process and records it
+            self.cancelled.add(page)
+            p = self.procs.get(page)
+        if p:
+            stop_process(p)
+        return True
 
     # --- running Claude ---------------------------------------------------------------
     def new_page(self, page, task):
@@ -824,16 +871,32 @@ class Reviews:
                 cmd += ["--resume", session]
             try:
                 env = dict(os.environ, REVIEW_PAGE_DIR=page_dir, **(LOCAL_ENV if model in LOCAL_MODELS else {}))
-                p = subprocess.run(cmd, cwd=page_dir, env=env,
-                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, timeout=RUN_TIMEOUT_S)
-                out = json.loads(p.stdout.decode("utf-8", "replace") or "{}")
-                reply = out.get("result") or p.stderr.decode("utf-8", "replace")[-2000:] or "(no reply)"
+                p = subprocess.Popen(cmd, cwd=page_dir, env=env, stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     start_new_session=True)   # its own group, so Cancel stops its commands too
+                with self.lock:
+                    self.procs[page] = p
+                    if page in self.cancelled:      # cancelled before it started
+                        stop_process(p)
+                try:
+                    stdout, stderr = p.communicate(timeout=RUN_TIMEOUT_S)
+                except subprocess.TimeoutExpired:
+                    os.killpg(p.pid, signal.SIGKILL)
+                    p.communicate()
+                    raise
+                with self.lock:
+                    self.procs.pop(page, None)
+                    if page in self.cancelled:
+                        raise RunCancelled()
+                out = json.loads(stdout.decode("utf-8", "replace") or "{}")
+                reply = out.get("result") or stderr.decode("utf-8", "replace")[-2000:] or "(no reply)"
                 entry = {"role": "claude", "time": now(), "text": reply, "model": model}
                 if out.get("total_cost_usd") is not None and model not in LOCAL_MODELS:
                     entry["cost"] = round(out["total_cost_usd"], 3)
                 denials = out.get("permission_denials", [])
                 session = out.get("session_id") or session
+            except RunCancelled:
+                entry, denials = {"role": "system", "time": now(), "text": "Cancelled by the owner."}, []
             except subprocess.TimeoutExpired:
                 entry, denials = {"role": "system", "time": now(), "text": "Run timed out after %d h." % (RUN_TIMEOUT_S // 3600)}, []
             except (ValueError, OSError) as e:
@@ -864,7 +927,7 @@ class Reviews:
                     st["session_id"] = session
                     self._save(data)
                 return
-            ids = self._jobs_to_watch(page_dir, session, offset)
+            ids = [] if entry["text"] == "Cancelled by the owner." else self._jobs_to_watch(page_dir, session, offset)
             with self.lock:
                 data = self._load()
                 st = self._page(data, page)
@@ -883,6 +946,8 @@ class Reviews:
         finally:
             with self.lock:
                 self.running -= 1
+                self.procs.pop(page, None)
+                self.cancelled.discard(page)
             self._pump()
 
     # --- waiting on SLURM jobs ------------------------------------------------------------

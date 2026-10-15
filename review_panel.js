@@ -63,7 +63,7 @@
       <div class="rv-row"><button id="rv-once">Allow once (this page)</button><button id="rv-always" title="Folder reads stay with this page; other rules apply to every page">Always allow</button></div></div>
     <div id="rv-foot"><div id="rv-ctxnote"></div><div id="rv-chip"></div><textarea id="rv-text" placeholder="Message the AI assistant about this page..."></textarea>
       <div class="rv-row"><button id="rv-save" class="primary">Send</button>
-        <button id="rv-read">Mark read</button><button id="rv-new" title="Your next message starts a fresh session (the assistant re-reads the page, todo.md and the last few messages)">New chat</button><button id="rv-compact" title="Summarize the conversation so far (Claude Code /compact); the session continues with a much smaller context">Compact</button><button id="rv-close">TaskDone</button><button id="rv-hl" style="display:none" title="Parts of the page the assistant added or changed in its latest run that edited the page">Hide changes</button></div></div>
+        <button id="rv-read">Mark read</button><button id="rv-new" title="Your next message starts a fresh session (the assistant re-reads the page, todo.md and the last few messages)">New chat</button><button id="rv-compact" title="Summarize the conversation so far (Claude Code /compact); the session continues with a much smaller context">Compact</button><button id="rv-close">TaskDone</button><button id="rv-cancel" style="display:none" title="Stop this run (or take the message out of the queue). The session is kept: change the model if you like, then send another message to continue.">Cancel</button><button id="rv-hl" style="display:none" title="Parts of the page the assistant added or changed in its latest run that edited the page">Hide changes</button></div></div>
   </div>`);
 
   const $ = id => document.getElementById(id);
@@ -104,6 +104,7 @@
     ["rv-read", "rv-close"].forEach(id => $(id).disabled = busy || watching);
     $("rv-new").disabled = busy || !st.session_id;   // nothing to start over from yet
     $("rv-compact").disabled = busy || !st.session_id;
+    $("rv-cancel").style.display = busy || watching ? "" : "none";
     const ctx = st.context, level = ctx == null ? "" : ctx >= st.context_high ? "high" : ctx >= st.context_warn ? "warn" : "";
     $("rv-ctx").textContent = ctx == null ? "" : "context " + Math.round(ctx / 1000) + "K";
     $("rv-ctx").className = level;
@@ -148,6 +149,7 @@
   $("rv-new").onclick = () => { scrollToEnd = true; post("newchat", {}); };
   $("rv-close").onclick = () => post("status", {status: "closed"});
   $("rv-compact").onclick = () => { scrollToEnd = true; post("compact", {}); };
+  $("rv-cancel").onclick = () => { if (confirm("Stop the assistant on this page?")) { scrollToEnd = true; post("cancel", {}); } };
   const grant = always => post("grant", {rules: state.denials.filter(d => !d.blocked && !d.granted).flatMap(d => d.rules), always});
   // Highlight the blocks that differ from the page as it was before the assistant's latest edit:
   // a leaf block (paragraph, list item, cell, heading, image...) whose content isn't in the old copy.

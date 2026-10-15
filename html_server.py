@@ -146,6 +146,8 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
             ok = REVIEWS.compact(page)
         elif action == "newchat":
             ok = REVIEWS.new_chat(page)
+        elif action == "cancel":
+            ok = REVIEWS.cancel(page)
         elif action == "grant":
             ok = REVIEWS.grant(page, list(body.get("rules", [])), bool(body.get("always")))
         else:
