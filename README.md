@@ -17,9 +17,14 @@ messages in a row is the limit, until you comment again.
 ## Setup (once per machine)
 
 ```bash
-git clone <this repo> ~/DirAI
-ln -s ~/DirAI/bin/DirAI ~/.local/bin/DirAI      # any folder on your PATH
+git clone <this repo> <anywhere>/DirAI
+ln -s <anywhere>/DirAI/bin/DirAI ~/.local/bin/DirAI      # any folder on your PATH
 ```
+
+The checkout can live anywhere. `DirAI init` and `DirAI start` keep `~/.config/dirai/PAGES.md`
+linked to it, and a tree's `CLAUDE.md` imports the page rules from there, so the committed import
+line works on every machine. After moving the checkout, update the PATH link and run `DirAI start`
+(or `init`) once to repoint it.
 
 Needs Python 3.6+, `git`, `curl`, and Claude Code (`~/.local/bin/claude`, or set `REVIEW_CLAUDE_CMD`).
 
@@ -44,7 +49,7 @@ Opening a page as the owner: connect through an SSH tunnel to the node, then vis
 |---|---|
 | this repo | the tool: server, list builder, assistant (`review.py`), panel scripts, `PAGES.md` page rules |
 | `<repo>/www/` | per tree, generated and gitignored: list page, threads (`reviews.json`), caches, `server_host.txt`, logs, and `dirai.json` settings |
-| `~/.config/dirai/` | per user: owner key, "Always allow" grants, shared Claude usage reading, the list of trees |
+| `~/.config/dirai/` | per user: owner key, "Always allow" grants, shared Claude usage reading, the list of trees, and `PAGES.md` (a link to this checkout's page rules) |
 
 `www/dirai.json`:
 

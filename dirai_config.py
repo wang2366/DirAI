@@ -1,6 +1,6 @@
 """Where DirAI keeps things.
 
-- The tool itself: this folder (one checkout, e.g. ~/DirAI).
+- The tool itself: this folder (one checkout, anywhere; e.g. ~/DirAI).
 - Per tree (a git repo being served): <tree>/www/ holds the list page and state
   (index.html, reviews.json, page_sizes.json, page_tokens.json, server_host.txt, logs: all
   generated) and dirai.json, the tree's settings. dirai.json is local too (gitignored): two clones
@@ -10,7 +10,8 @@
        "allow": ["Bash(~/x/run.sh:*)"], # extra allow rules for page agents
        "slurm": ["-A", "grp", "-p", "cpu"]}  # extra sbatch options for `DirAI start --job`
 - Per user, never in a repo: ~/.config/dirai/ with the owner key (key), the "Always allow"
-  grants (permissions.json) and the list of trees DirAI has started (trees).
+  grants (permissions.json), the list of trees DirAI has started (trees), and PAGES.md, a link to
+  this checkout's PAGES.md that trees' CLAUDE.md import (`DirAI init|start` keep it current).
 """
 import json
 import os
