@@ -39,7 +39,7 @@ CLAUDE_CMD = os.environ.get("REVIEW_CLAUDE_CMD", os.path.expanduser("~/.local/bi
 # one). Other folders of the tree need a grant: a path the owner names in a comment (path_grants())
 # or "Allow" on a blocked read, both kept for that page only.
 TOOLS = "Bash,Read,Edit,Write,Glob,Grep,Skill,TodoWrite,NotebookEdit"
-MAX_RUNNING = 2
+MAX_RUNNING = 5
 # "You've hit your session limit · resets 10:20pm (America/Indiana/Indianapolis)"
 LIMIT_RE = re.compile(r"(?i)\b(hit|reached) your\b.*\blimit\b|\busage limit\b")
 RESET_RE = re.compile(r"(?i)resets?\s+(?:at\s+)?(?:([A-Z][a-z]{2})\s+(\d{1,2}),?\s+(?:at\s+)?)?"
