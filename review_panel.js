@@ -60,7 +60,7 @@
       <button id="rv-x" style="border:0;background:none;font-size:18px;cursor:pointer">&times;</button></div>
     <div id="rv-thread"></div>
     <div id="rv-denials"><b>Claude was blocked from:</b><ul id="rv-dlist"></ul>
-      <div class="rv-row"><button id="rv-once">Allow once (this page)</button><button id="rv-always">Always allow</button></div></div>
+      <div class="rv-row"><button id="rv-once">Allow once (this page)</button><button id="rv-always" title="Folder reads stay with this page; other rules apply to every page">Always allow</button></div></div>
     <div id="rv-foot"><div id="rv-ctxnote"></div><div id="rv-chip"></div><textarea id="rv-text" placeholder="Message the AI assistant about this page..."></textarea>
       <div class="rv-row"><button id="rv-save" class="primary">Send</button>
         <button id="rv-read">Mark read</button><button id="rv-new" title="Your next message starts a fresh session (the assistant re-reads the page, todo.md and the last few messages)">New chat</button><button id="rv-compact" title="Summarize the conversation so far (Claude Code /compact); the session continues with a much smaller context">Compact</button><button id="rv-close">TaskDone</button><button id="rv-hl" style="display:none" title="Parts of the page the assistant added or changed in its latest run that edited the page">Hide changes</button></div></div>

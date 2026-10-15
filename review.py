@@ -33,9 +33,11 @@ PERMS_FILE = dirai_config.PERMS_FILE
 PAGES_MD = os.path.join(WWW_DIR, "PAGES.md")   # page conventions, appended to every run's instructions
 CLAUDE_CMD = os.environ.get("REVIEW_CLAUDE_CMD", os.path.expanduser("~/.local/bin/claude"))
 # Background runs use --restricted: user/project/local settings files are ignored (so rules
-# granted to interactive sessions never leak in) and file tools stay inside the tree plus the
-# tree's dirai.json "read_dirs", which Claude may read; edits still need an allow rule (only the
-# page folder has one).
+# granted to interactive sessions never leak in) and file tools stay inside the page's read scope
+# (read_scope(): its own repo, or its own folder outside any repo) plus the tree's dirai.json
+# "read_dirs", which Claude may read; edits still need an allow rule (only the page folder has
+# one). Other folders of the tree need a grant: a path the owner names in a comment (path_grants())
+# or "Allow" on a blocked read, both kept for that page only.
 TOOLS = "Bash,Read,Edit,Write,Glob,Grep,Skill,TodoWrite,NotebookEdit"
 MAX_RUNNING = 2
 # "You've hit your session limit · resets 10:20pm (America/Indiana/Indianapolis)"
@@ -111,6 +113,9 @@ a short && chain of plain commands with literal absolute paths. For anything mor
 checking several files, loops), write a small python3 or bash script file in this folder and run
 it with "python3 <file>" or "bash <file>". Always write fully
 resolved absolute paths: never "..", which a built-in safety check refuses no matter what is granted.
+You can read {scope} (this page's own area) and the folders granted to you; other folders of the
+tree are off limits until the owner names them in a comment or allows a blocked read, so if the
+work needs one, say which and why in your reply.
 Follow the page conventions below (from {pages_md_path}); in particular, keep this folder's todo.md
 current and give every figure its script path.
 Git: you may git add / commit / push (this replaces any earlier "never commit" instruction), but
@@ -434,6 +439,49 @@ def always_denied(rule):
     return False
 
 
+def read_scope(page_dir, root):
+    """What a page's assistant may read by default: the nearest git repo at or above the page, not
+    above the tree (a page sees its own repo, the tree's top page sees the whole tree), else the
+    page folder itself (and everything below it)."""
+    d = page_dir
+    while True:
+        if os.path.exists(os.path.join(d, ".git")):   # a folder, or a file in submodules/worktrees
+            return d
+        if d == root or not d.startswith(root + os.sep):
+            return page_dir
+        d = os.path.dirname(d)
+
+
+# /abs/path, ~/path or tree/relative/path (a bare word never counts: it needs a slash)
+PATH_TOKEN_RE = re.compile(r"""(?:~/|/)[\w.+-]+(?:/[\w.+-]*)*|[\w.+-]+(?:/[\w.+-]*)+""")
+
+
+def path_grants(text, root, scope):
+    """Read rules for the tree folders the owner names in a comment (the request is the approval):
+    absolute, ~/ or tree-relative paths that exist inside the tree and outside the page's scope.
+    A named file grants its folder."""
+    rules = []
+    for tok in PATH_TOKEN_RE.findall(text):
+        tok = tok.rstrip(".")
+        path = os.path.expanduser(tok) if tok.startswith("~") else tok
+        path = os.path.realpath(path if path.startswith("/") else os.path.join(root, path))
+        if not os.path.exists(path):
+            continue
+        folder = path if os.path.isdir(path) else os.path.dirname(path)
+        if not (folder == root or folder.startswith(root + os.sep)):
+            continue   # outside the tree: dirai.json "read_dirs", or Allow on a blocked read
+        if folder == scope or folder.startswith(scope + os.sep):
+            continue   # already readable
+        rule = "Read(/%s/**)" % folder
+        if rule not in rules:
+            rules.append(rule)
+    return rules
+
+
+def is_read_rule(rule):
+    return rule.startswith("Read(//")
+
+
 def extra_dirs(allow, page_dir, read_dirs):
     """Working directories a run needs beyond read_dirs: restricted mode only lets tools touch
     working directories, so granted edits, and granted commands naming absolute paths, bring
@@ -462,7 +510,6 @@ class Reviews:
     def __init__(self, root):
         self.root = root
         self.config = dirai_config.tree_config(root)
-        self.read_dirs = [root] + self.config["read_dirs"]
         self.path = os.path.join(root, "www", "reviews.json")
         self.lock = threading.Lock()
         self.running = 0
@@ -627,6 +674,13 @@ class Reviews:
                 prompt = fresh_prompt(st["thread"], prompt or text)   # New chat: catch up from the page and thread
             st["thread"].append(dict({"role": "user", "time": now(), "text": text},
                                      **({"selection": selection} if selection else {})))
+            page_dir = os.path.join(self.root, page)
+            named = [r for r in path_grants(text, self.root, read_scope(page_dir, self.root))
+                     if r not in st.get("grants", [])]
+            if named:
+                st["grants"] = sorted(set(st.get("grants", [])) | set(named))
+                st["thread"].append({"role": "system", "time": now(),
+                                     "text": "Read access for this page (named in your message): " + ", ".join(named)})
             st["denials"] = []
             st["status"] = "working"   # waiting for a free slot counts as working
             st["working_on"], st["started"] = text, None
@@ -646,14 +700,21 @@ class Reviews:
                 return False
             st.pop("watch", None)
             st["auto_runs"] = 0
-            if always:
+            # folder reads stay with this page even under "Always allow": letting page A read B
+            # must not let every page of every tree read B
+            reads = [r for r in rules if is_read_rule(r)]
+            others = [r for r in rules if not is_read_rule(r)]
+            page_rules, global_rules = (reads, others) if always else (rules, [])
+            if global_rules:
                 perms = load_json(PERMS_FILE, {"always": []})
-                perms["always"] = sorted(set(perms["always"]) | set(rules))
+                perms["always"] = sorted(set(perms["always"]) | set(global_rules))
                 save_json(PERMS_FILE, perms)
-            else:
-                st["grants"] = sorted(set(st.get("grants", [])) | set(rules))
-            st["thread"].append({"role": "system", "time": now(),
-                                 "text": "Granted (%s): %s" % ("always" if always else "this page", ", ".join(rules))})
+                st["thread"].append({"role": "system", "time": now(),
+                                     "text": "Granted (always): " + ", ".join(global_rules)})
+            if page_rules:
+                st["grants"] = sorted(set(st.get("grants", [])) | set(page_rules))
+                st["thread"].append({"role": "system", "time": now(),
+                                     "text": "Granted (this page): " + ", ".join(page_rules)})
             st["denials"] = []
             st["status"] = "working"   # waiting for a free slot counts as working
             st["working_on"], st["started"] = "Retry with granted: " + ", ".join(rules), None
@@ -739,11 +800,13 @@ class Reviews:
                 pass
             allow = DEFAULT_ALLOW + self.config["allow"] + ["Edit(/%s/**)" % page_dir] + \
                 load_json(PERMS_FILE, {"always": []})["always"] + grants
-            dirs = self.read_dirs + extra_dirs(allow, page_dir, self.read_dirs)
+            scope = read_scope(page_dir, self.root)
+            read_dirs = [scope] + self.config["read_dirs"]
+            dirs = read_dirs + extra_dirs(allow, page_dir, read_dirs)
             cmd = [CLAUDE_CMD, "-p", prompt, "--model", model, "--output-format", "json", "--permission-mode", "dontAsk",
                    "--restricted", "--strict-mcp-config", "--tools", TOOLS, "--add-dir"] + dirs + [
                    "--append-system-prompt", SYSTEM_PROMPT.format(root=self.root,
-                       page_file=os.path.join(page_dir, "index.html"), page_dir=page_dir,
+                       page_file=os.path.join(page_dir, "index.html"), page_dir=page_dir, scope=scope,
                        always_denied=", ".join(ALWAYS_DENY), pages_md_path=PAGES_MD,
                        page_rm=os.path.join(WWW_DIR, "page_rm.sh"))
                        + "\n\n" + load_text(PAGES_MD),

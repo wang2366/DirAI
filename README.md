@@ -64,8 +64,12 @@ Claude Code permission rules for them. `slurm`: extra `sbatch` options for `DirA
 
 ## Assistant safety
 
-Runs use `claude -p --restricted` with an allow list (`review.py`): file access only inside the repo
-and `read_dirs`, edits only in the page's folder, deletions only through `page_rm.sh`, destructive git
+Runs use `claude -p --restricted` with an allow list (`review.py`): reads only inside the page's
+own area (its nearest git repo, or its own folder outside any repo; the tree's top page sees the
+whole tree) and `read_dirs`. To let a page read another folder of the tree, name the path in your
+comment (granted for that page automatically) or click Allow when a read is blocked; folder reads
+stay with that page even under "Always allow". Scripts the assistant runs (`python3 x.py`) are not
+confined by this, only Claude's own file tools and simple shell commands; edits only in the page's folder, deletions only through `page_rm.sh`, destructive git
 commands always denied. Blocked actions show in the panel with "Allow once" / "Always allow".
 New tasks pause at 95 % of Claude's 5-hour limit or 98 % of the weekly limit and resume after the
 reset (`claude_usage.py`).
