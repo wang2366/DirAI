@@ -17,11 +17,16 @@
   #rv-head b{flex:1}
   .rv-pill{padding:2px 9px;border-radius:10px;font-size:12px;font-weight:600;color:#fff}
   .rv-working{background:#b26b00}.rv-queued{background:#7b1fa2}.rv-unread{background:#0b63ce}.rv-read{background:#2e7d32}
-  .rv-closed{background:#666}.rv-none{background:#999}
+  .rv-closed{background:#666}.rv-none{background:#999}.rv-asking{background:#c62828}
   #rv-thread{overflow:auto;padding:10px 12px;flex:1}
   .rv-msg{margin:0 0 10px;padding:8px 10px;border-radius:8px;white-space:pre-wrap;word-wrap:break-word}
   .rv-user{background:#eef4ff}.rv-claude{background:#f3f3f3}.rv-system{background:#fff6e0;font-size:13px}
   .rv-meta{font-size:11px;color:#777;margin-bottom:3px}
+  .rv-ask{background:#fdecea;border:1px solid #e8b4ae;font-size:13px;white-space:normal}
+  .rv-ask summary{cursor:pointer;word-break:break-all}
+  .rv-ask pre{white-space:pre-wrap;word-break:break-all;margin:4px 0;font-size:12px;background:#fff;padding:4px;border:1px solid #eee;max-height:25vh;overflow:auto}
+  .rv-ask .rv-row button.deny{border-color:#c62828;color:#c62828}
+  .rv-said{font-size:12px;color:#555;margin-top:4px}
   #rv-denials{padding:8px 12px;border-top:1px solid #ddd;background:#fff8f0;display:none;flex-shrink:0}
   #rv-dlist{max-height:22vh;overflow:auto;margin:6px 0;padding-left:18px}
   #rv-dlist li{margin:3px 0;font-size:12.5px;word-break:break-all}
@@ -37,6 +42,11 @@
   .rv-row button.primary{background:#0b63ce;color:#fff;border-color:#0b63ce}
   button:disabled{opacity:.5;cursor:default}
   #rv-ctx{font-size:12px;color:#777;white-space:nowrap}
+  #rv-every{font:13px system-ui;padding:4px 2px;border:1px solid #999;border-radius:6px;background:#fafafa;color:#1d1d1f}
+  #rv-repedit{display:none;margin-top:6px;padding:6px 8px;border-radius:6px;background:#f3f3f3}
+  #rv-repedit div{font-size:12.5px;margin-bottom:4px}
+  #rv-reptext{width:100%;box-sizing:border-box;min-height:60px;font:13px system-ui;padding:5px}
+  #rv-repinfo{display:none;margin-top:6px;font-size:12.5px;color:#555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #rv-model{font:12px system-ui;padding:1px 2px;border:1px solid #bbb;border-radius:6px;background:#fff;color:#1d1d1f}
   #rv-ctx.warn{color:#b26b00;font-weight:600} #rv-ctx.high{color:#c62828;font-weight:600}
   #rv-ctxnote{display:none;margin:0 0 6px;padding:6px 8px;border-radius:6px;background:#fff6e0;font-size:12.5px}
@@ -63,7 +73,11 @@
       <div class="rv-row"><button id="rv-once">Allow once (this page)</button><button id="rv-always" title="Folder reads stay with this page; other rules apply to every page">Always allow</button></div></div>
     <div id="rv-foot"><div id="rv-ctxnote"></div><div id="rv-chip"></div><textarea id="rv-text" placeholder="Message the AI assistant about this page..."></textarea>
       <div class="rv-row"><button id="rv-save" class="primary">Send</button>
-        <button id="rv-read">Mark read</button><button id="rv-new" title="Your next message starts a fresh session (the assistant re-reads the page, todo.md and the last few messages)">New chat</button><button id="rv-compact" title="Summarize the conversation so far (Claude Code /compact); the session continues with a much smaller context">Compact</button><button id="rv-close">TaskDone</button><button id="rv-cancel" style="display:none" title="Stop this run (or take the message out of the queue). The session is kept: change the model if you like, then send another message to continue.">Cancel</button><button id="rv-hl" style="display:none" title="Parts of the page the assistant added or changed in its latest run that edited the page">Hide changes</button></div></div>
+        <button id="rv-read">Mark read</button><button id="rv-new" title="Your next message starts a fresh session (the assistant re-reads the page, todo.md and the last few messages)">New chat</button><button id="rv-compact" title="Summarize the conversation so far (Claude Code /compact); the session continues with a much smaller context">Compact</button><button id="rv-close">TaskDone</button><button id="rv-cancel" style="display:none" title="Stop this run (or take the message out of the queue). The session is kept: change the model if you like, then send another message to continue.">Cancel</button><button id="rv-hl" style="display:none" title="Parts of the page the assistant added or changed in its latest run that edited the page">Hide changes</button>
+        <select id="rv-every" title="Send a message to this page's assistant again on a schedule (it waits if the assistant is busy)"><option value="off">Repeat: off</option><option value="hour">Every hour</option><option value="day">Every day</option><option value="week">Every week</option></select></div>
+      <div id="rv-repedit"><div id="rv-replabel"></div><textarea id="rv-reptext"></textarea>
+        <div class="rv-row"><button id="rv-repsave" class="primary">Save schedule</button><button id="rv-repcancel">Cancel</button></div></div>
+      <div id="rv-repinfo"></div></div>
   </div>`);
 
   const $ = id => document.getElementById(id);
@@ -77,14 +91,18 @@
   function render(st) {
     state = st;
     const s = st.status;
-    $("rv-status").textContent = LABEL[s] || s; $("rv-status").className = "rv-pill rv-" + s;
-    $("rv-btn").textContent = "AI assistant" + (s === "unread" ? " •" : s === "working" || s === "queued" ? " …" : "");
+    const asking = !!st.asking;   // a run waits for the owner's answer in the thread
+    $("rv-status").textContent = asking ? "needs you" : LABEL[s] || s;
+    $("rv-status").className = "rv-pill rv-" + (asking ? "asking" : s);
+    $("rv-btn").textContent = "AI assistant" + (asking ? " ❗" : s === "unread" ? " •" : s === "working" || s === "queued" ? " …" : "");
+    if (asking && !render.asking) scrollToEnd = true;   // bring a new prompt into view
+    render.asking = asking;
     const threadKey = JSON.stringify(st.thread);
     if (threadKey !== shownThread) {
       const box = $("rv-thread"), top = box.scrollTop;
       const opened = [...box.querySelectorAll(".rv-sel")].map(d => d.open);   // keep expanded quotes expanded
-      box.innerHTML = st.thread.map(m =>
-        `<div class="rv-msg rv-${m.role}"><div class="rv-meta">${m.role}${m.model ? " (" + m.model + ")" : ""} · ${m.time}${m.cost != null ? " · $" + m.cost : ""}</div>${m.selection ? selHtml(m.selection) : ""}${esc(m.text)}</div>`
+      box.innerHTML = st.thread.map(m => m.role === "ask" ? askHtml(m) :
+        `<div class="rv-msg rv-${m.role}"><div class="rv-meta">${m.role}${m.scheduled ? " (scheduled, every " + m.scheduled + ")" : ""}${m.model ? " (" + m.model + ")" : ""} · ${m.time}${m.cost != null ? " · $" + m.cost : ""}</div>${m.selection ? selHtml(m.selection) : ""}${esc(m.text)}</div>`
       ).join("") || '<div class="rv-meta">No comments yet.</div>';
       box.querySelectorAll(".rv-sel").forEach((d, i) => d.open = !!opened[i]);
       shownThread = threadKey;
@@ -100,6 +118,14 @@
       sel.innerHTML = st.models.map(m => `<option value="${m}">${(st.model_labels || {})[m] || m[0].toUpperCase() + m.slice(1)}</option>`).join("");
     if (document.activeElement !== sel) sel.value = st.model;
     sel.disabled = busy;   // takes effect from the next message
+    const rep = st.repeat;
+    if (document.activeElement !== $("rv-every") && !repEditing()) $("rv-every").value = rep ? rep.every : "off";
+    $("rv-repinfo").style.display = rep ? "block" : "none";
+    if (rep) {
+      $("rv-repinfo").textContent = `🔁 Every ${rep.every}, next ${new Date(rep.next * 1000).toLocaleString([],
+        {weekday: "short", hour: "2-digit", minute: "2-digit"})}: ${rep.text.replace(/\s+/g, " ")}`;
+      $("rv-repinfo").title = rep.text;
+    }
     ["rv-save", "rv-new"].forEach(id => $(id).disabled = busy);
     ["rv-read", "rv-close"].forEach(id => $(id).disabled = busy || watching);
     $("rv-new").disabled = busy || !st.session_id;   // nothing to start over from yet
@@ -125,6 +151,24 @@
     clearTimeout(timer);
     if (busy || watching) timer = setTimeout(refresh, watching ? 30000 : 4000);
   }
+  // a permission prompt from the run (ask mode): Allow / Always allow / Deny while it waits
+  const SAID = {allow: "✅ Allowed", always: "✅ Allowed, and always allowed from now on", deny: "⛔ Denied",
+    timeout: "⛔ Denied: no answer within the run's waiting limit", ended: "Not answered: the run ended",
+    withdrawn: "Withdrawn by Claude"};
+  function askHtml(m) {
+    return `<div class="rv-msg rv-ask"><div class="rv-meta">Claude asks to use · ${m.time}</div>` +
+      `<details><summary>${esc(m.text.slice(0, 200))}</summary><pre>${esc(m.detail || m.text)}</pre></details>` +
+      (m.answer ? `<div class="rv-said">${SAID[m.answer] || esc(m.answer)}</div>`
+        : `<div class="rv-row" data-ask="${esc(m.id)}"><button data-choice="allow" class="primary">Allow</button>` +
+          `<button data-choice="always" title="Allow it, and keep the rule like the Always allow button (folder reads: this page only)">Always allow</button>` +
+          `<button data-choice="deny" class="deny">Deny</button></div>`) + `</div>`;
+  }
+  $("rv-thread").addEventListener("click", e => {
+    const b = e.target.closest("[data-choice]"), row = b && b.closest("[data-ask]");
+    if (!row) return;
+    row.querySelectorAll("button").forEach(x => x.disabled = true);
+    post("answer", {id: row.dataset.ask, choice: b.dataset.choice});
+  });
   const refresh = () => api("state?page=" + encodeURIComponent(PAGE)).then(render);
   const post = (path, body) => api(path, body).then(r => { if (r.error) alert(r.error); refresh(); });
 
@@ -145,6 +189,27 @@
     pin(null);
   };
   $("rv-model").onchange = () => post("model", {model: $("rv-model").value});
+  // Picking a period opens a multi-line editor for the message (the message box's text, else the
+  // current repeated message, else the last one sent); Save schedule stores it.
+  const repEditing = () => $("rv-repedit").style.display === "block";
+  const repClose = () => { $("rv-repedit").style.display = "none"; $("rv-every").value = state.repeat ? state.repeat.every : "off"; };
+  $("rv-every").onchange = () => {
+    const every = $("rv-every").value;
+    if (every === "off") { $("rv-repedit").style.display = "none"; return post("repeat", {every}); }
+    const last = state.thread.filter(m => m.role === "user").pop();
+    if (!repEditing()) $("rv-reptext").value =
+      $("rv-text").value.trim() || (state.repeat && state.repeat.text) || (last ? last.text : "");
+    $("rv-replabel").textContent = `Message to send every ${every} (first run one ${every} from now; each run starts a fresh chat):`;
+    $("rv-repedit").style.display = "block";
+    $("rv-reptext").focus();
+  };
+  $("rv-repsave").onclick = () => {
+    const text = $("rv-reptext").value.trim();
+    if (!text) return alert("Write the message to repeat.");
+    $("rv-repedit").style.display = "none";
+    post("repeat", {every: $("rv-every").value, text});
+  };
+  $("rv-repcancel").onclick = repClose;
   $("rv-read").onclick = () => post("status", {status: "read"});
   $("rv-new").onclick = () => { scrollToEnd = true; post("newchat", {}); };
   $("rv-close").onclick = () => post("status", {status: "closed"});

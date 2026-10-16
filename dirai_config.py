@@ -9,7 +9,8 @@
        "read_dirs": ["/scratch/..."],   # extra folders page agents may read (the tree is always in)
        "allow": ["Bash(~/x/run.sh:*)"], # extra allow rules for page agents
        "slurm": ["-A", "grp", "-p", "cpu"],  # extra sbatch options for `DirAI start --job`
-       "exclude": ["data", "proj/build"]}    # folders the page list skips (names anywhere, or paths)
+       "exclude": ["data", "proj/build"],    # folders the page list skips (names anywhere, or paths)
+       "permissions": "allowlist"}           # or "ask" (set on the list page): see review.py
 - Per user, never in a repo: ~/.config/dirai/ with the owner key (key), the "Always allow"
   grants (permissions.json), the list of trees DirAI has started (trees), and PAGES.md, a link to
   this checkout's PAGES.md that trees' CLAUDE.md import (`DirAI init|start` keep it current).
@@ -32,7 +33,7 @@ def data_dir(root):
 
 def tree_config(root):
     """The tree's www/dirai.json merged over the defaults."""
-    cfg = {"port": None, "read_dirs": [], "allow": [], "slurm": [], "exclude": []}
+    cfg = {"port": None, "read_dirs": [], "allow": [], "slurm": [], "exclude": [], "permissions": "allowlist"}
     try:
         with open(os.path.join(data_dir(root), "dirai.json")) as f:
             cfg.update(json.load(f))
@@ -40,3 +41,18 @@ def tree_config(root):
         pass
     cfg["read_dirs"] = [os.path.expanduser(d) for d in cfg["read_dirs"]]
     return cfg
+
+
+def set_tree_option(root, key, value):
+    """Save one setting in the tree's www/dirai.json, keeping the others."""
+    path = os.path.join(data_dir(root), "dirai.json")
+    try:
+        with open(path) as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        cfg = {}
+    cfg[key] = value
+    with open(path + ".tmp", "w") as f:
+        json.dump(cfg, f, indent=1)
+        f.write("\n")
+    os.replace(path + ".tmp", path)

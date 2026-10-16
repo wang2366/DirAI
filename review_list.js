@@ -1,7 +1,8 @@
 // Status badges for www/index.html, injected by html_server.py (owner only).
 (function () {
   const css = `.rv-badge{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:10px;font:600 11px system-ui;color:#fff;vertical-align:middle}
-  .rv-working{background:#b26b00}.rv-queued{background:#7b1fa2}.rv-unread{background:#0b63ce}.rv-read{background:#2e7d32}.rv-closed{background:#666}
+  .rv-working{background:#b26b00}.rv-queued{background:#7b1fa2}.rv-unread{background:#0b63ce}.rv-read{background:#2e7d32}.rv-closed{background:#666}.rv-asking{background:#c62828}
+  .rv-rep{margin-left:6px;font:600 11px system-ui;opacity:.75;vertical-align:middle}
   #rv-summary{margin:.5rem 0;font:13px system-ui}
   .rv-ctx{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font:600 11px system-ui;vertical-align:middle;
     border:1px solid currentColor}.rv-ctx.warn{color:#b26b00}.rv-ctx.high{color:#c62828}`;
@@ -24,7 +25,15 @@
         if (!st) { if (b) b.remove(); return; }
         counts[st] = (counts[st] || 0) + 1;
         if (!b) { b = document.createElement("span"); tr.querySelector("a").after(b); }
-        b.className = "rv-badge rv-" + st; b.textContent = LABEL[st] || st;
+        const asking = (all[pageOf(tr)] || {}).asking;   // its run waits for an answer in the page chat
+        b.className = "rv-badge rv-" + (asking ? "asking" : st); b.textContent = asking ? "needs you" : LABEL[st] || st;
+        const every = (all[pageOf(tr)] || {}).repeat;
+        let r = tr.querySelector(".rv-rep");
+        if (every) {
+          if (!r) { r = document.createElement("span"); r.className = "rv-rep"; b.after(r); }
+          r.textContent = "🔁 " + {hour: "hourly", day: "daily", week: "weekly"}[every];
+          r.title = "The assistant gets this page's repeated message every " + every;
+        } else if (r) r.remove();
         // big session context: suggest Compact (warn/high levels match review.py)
         const ctx = (all[pageOf(tr)] || {}).context;
         let c = tr.querySelector(".rv-ctx");
@@ -108,4 +117,23 @@
   }
   load();
   setInterval(load, 10000);
+
+  // Tree-wide permission mode for the assistant's next runs (www/dirai.json "permissions")
+  const MODES = {allowlist: ["Allow list", "Only allowed actions run; the rest are refused and listed in the page chat, to allow for the next run"],
+                 ask: ["Ask in chat", "An action that isn't allowed waits for your Allow / Deny in the page chat, and the run carries on"]};
+  function perms() {
+    fetch("/_review/permissions").then(r => r.json()).then(p => {
+      let el = document.getElementById("rv-perm");
+      if (!el) { el = document.createElement("div"); el.id = "rv-perm";
+                 (document.getElementById("rv-load") || document.getElementById("rv-usage") || document.querySelector(".meta")).after(el); }
+      el.style.cssText = "display:flex;flex-wrap:wrap;gap:6px 10px;margin:.4rem 0;font:13px system-ui;align-items:center";
+      el.innerHTML = "<b>Assistant permissions</b>" + p.modes.map(m =>
+        `<button data-mode="${m}" title="${MODES[m][1]}" style="padding:2px 10px;border-radius:12px;cursor:pointer;font:13px system-ui;` +
+        (m === p.mode ? "background:#0b63ce;color:#fff;border:1px solid #0b63ce" : "background:transparent;color:inherit;border:1px solid #999") +
+        `">${MODES[m][0]}</button>`).join("") + '<span style="opacity:.65">applies from each page\'s next run</span>';
+      el.querySelectorAll("button").forEach(b => b.onclick = () => fetch("/_review/permissions", {method: "POST",
+        headers: {"Content-Type": "application/json", "X-Review": "1"}, body: JSON.stringify({mode: b.dataset.mode})}).then(perms));
+    }).catch(() => {});
+  }
+  setTimeout(perms, 300);   // after the usage and load rows, so it lands below them
 })();

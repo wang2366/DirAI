@@ -14,6 +14,16 @@ costs no tokens. When the jobs have all left the queue, the server sends the ass
 results so it can update the page. A comment can still go in while the page waits. Five automatic
 messages in a row is the limit, until you comment again.
 
+A page's assistant can also get the same message on a schedule: pick Every hour / day / week in
+its panel (or in the New agent form) and give the message. The first run is one period later
+(New agent also runs it right away), later ones keep that time of day. A run that comes due while
+the page is busy or waiting on jobs goes when it is free; one missed while the server was down is
+sent once on restart. Each scheduled run starts a fresh session, without the earlier conversation:
+it reads the page's `index.html` and `todo.md` first. A message you send afterwards continues that
+run's session. The page is the memory between runs, so each run records its result there
+with the date. Thread entries older than a week are dropped from the panel (each page keeps at
+least its last 6).
+
 ## Setup (once per machine)
 
 ```bash
@@ -64,11 +74,12 @@ Opening a page as the owner: connect through an SSH tunnel to the node, then vis
 ```json
 {"port": 8765,
  "read_dirs": ["/data/shared"],              "allow": ["Bash(~/tools/run.sh:*)"],
- "slurm": ["-A", "mygroup", "-p", "cpu"],   "exclude": ["data", "projA/build"]}
+ "slurm": ["-A", "mygroup", "-p", "cpu"],   "exclude": ["data", "projA/build"],
+ "permissions": "allowlist"}
 ```
 
 `read_dirs`: extra folders page assistants may read (the repo itself always). `allow`: extra
-Claude Code permission rules for them. `slurm`: extra `sbatch` options for `DirAI start --job`. `exclude`: folders the page list skips (a name skips it anywhere, a path with a slash skips that one folder; virtualenvs, `node_modules` and caches are always skipped).
+Claude Code permission rules for them. `slurm`: extra `sbatch` options for `DirAI start --job`. `permissions`: `"allowlist"` (default) or `"ask"`, see below; the list page's **Assistant permissions** switch sets it. `exclude`: folders the page list skips (a name skips it anywhere, a path with a slash skips that one folder; virtualenvs, `node_modules` and caches are always skipped).
 
 ## Assistant safety
 
@@ -78,6 +89,22 @@ whole tree) and `read_dirs`. To let a page read another folder of the tree, name
 comment (granted for that page automatically) or click Allow when a read is blocked; folder reads
 stay with that page even under "Always allow". Scripts the assistant runs (`python3 x.py`) are not
 confined by this, only Claude's own file tools and simple shell commands; edits only in the page's folder, deletions only through `page_rm.sh`, destructive git
-commands always denied. Blocked actions show in the panel with "Allow once" / "Always allow".
+commands always denied. What happens to an action that isn't allowed depends on the tree's
+**Assistant permissions** (top of the list page; `permissions` in `dirai.json`; it applies from each
+page's next run, and a session continues across a switch):
+
+- **Allow list** (default): the run is refused it (`--permission-mode dontAsk`) and carries on
+  without it; afterwards the panel lists what was blocked, with "Allow once" / "Always allow", which
+  grant it and resume the run.
+- **Ask in chat**: the run waits, and the page chat shows the request with **Allow** / **Always
+  allow** / **Deny** (the page is marked "needs you" in the list); the run continues with your
+  answer (`--permission-prompt-tool stdio`). Waiting costs no tokens, but a waiting run holds one of
+  the 5 run slots, so after 12 h of waiting in total (`ASK_WAIT_S`) a run's requests are denied, and
+  Claude is told not to ask again for something you denied. The 4 h run limit counts working time only.
+
+The owner's MCP servers (user scope, local scope of the page's folder or one above it, and
+`.mcp.json` files there) are passed to every run with `--mcp-config` (`--restricted` would ignore
+`~/.claude.json`); their tools are not pre-allowed, so each call needs a grant or your answer.
+claude.ai connectors (Gmail, Drive, ...) can't be passed this way.
 New tasks pause at 95 % of Claude's 5-hour limit or 98 % of the weekly limit and resume after the
 reset (`claude_usage.py`).

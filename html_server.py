@@ -42,6 +42,7 @@ KEY = review.login_key()
 NEWAGENT_TAG = ('<script src="/_review/newagent.js" data-base="%s" data-root="'
                 + ROOT.replace("&", "&amp;").replace('"', "&quot;") + '"></script>')
 HOUSEKEEP_S = 600     # see housekeeping()
+REPEAT_CHECK_S = 60   # how often repeated messages (review.REPEATS) are checked for being due
 NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+-]*$")   # no leading dot: no "..", no hidden folders
 
 
@@ -75,15 +76,26 @@ def rebuild_list():
 
 def housekeeping():
     """The server's repeated work, every HOUSEKEEP_S: check the SLURM jobs pages are waiting on
-    (and message their assistants when done), then rebuild the list page. The list is built
+    (and message their assistants when done), drop week-old thread entries, then rebuild the list page. The list is built
     once at startup by dirai_serve, so the first pass waits a full interval."""
     while True:
         time.sleep(HOUSEKEEP_S)
-        for name, task in (("job check", REVIEWS.check_watches), ("list rebuild", rebuild_list)):
+        for name, task in (("job check", REVIEWS.check_watches), ("thread prune", REVIEWS.prune_threads),
+                           ("list rebuild", rebuild_list)):
             try:
                 task()
             except Exception as e:      # one failing task mustn't stop the loop
                 print("housekeeping: %s failed: %s" % (name, e), flush=True)
+
+
+def repeats():
+    """Send the pages' repeated messages as they come due (every hour/day/week)."""
+    while True:
+        time.sleep(REPEAT_CHECK_S)
+        try:
+            REVIEWS.check_repeats()
+        except Exception as e:
+            print("repeat check failed: %s" % e, flush=True)
 
 
 class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
@@ -126,10 +138,13 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
                                                 "(letters, digits, _ . + -; no '..', hidden or www/ folders)."})
             if not task:
                 return self.send_json({"error": "Describe the task."})
-            if not REVIEWS.new_page(rel, task):
+            if not REVIEWS.new_page(rel, task, body.get("every") or "off"):
                 return self.send_json({"error": "The assistant is already working on %s/." % rel})
             threading.Thread(target=rebuild_list, daemon=True).start()
             return self.send_json({"ok": True, "url": "/%s/" % rel})
+        if action == "permissions":   # tree-wide, from the list page: "allowlist" or "ask"
+            ok = REVIEWS.set_permissions(body.get("mode"))
+            return self.send_json({"ok": True} if ok else {"error": "unknown mode"})
         page = self.page_key(body.get("page", ""))
         if page is None:
             return self.send_json({"error": "no such page"}, 404)
@@ -143,6 +158,10 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
             ok = REVIEWS.set_status(page, body["status"])
         elif action == "model":
             ok = REVIEWS.set_model(page, body.get("model"))
+        elif action == "repeat":
+            ok = REVIEWS.set_repeat(page, body.get("every"), body.get("text"))
+            if not ok:
+                return self.send_json({"error": "Pick hourly, daily or weekly and give the message to repeat."})
         elif action == "compact":
             ok = REVIEWS.compact(page)
         elif action == "newchat":
@@ -151,6 +170,10 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
             ok = REVIEWS.cancel(page)
         elif action == "grant":
             ok = REVIEWS.grant(page, list(body.get("rules", [])), bool(body.get("always")))
+        elif action == "answer":      # Allow / Always allow / Deny on a waiting permission prompt
+            if REVIEWS.answer(page, str(body.get("id", "")), body.get("choice")):
+                return self.send_json({"ok": True})
+            return self.send_json({"error": "That request is no longer waiting (the run ended or it was answered)."})
         else:
             return self.send_error(404)
         self.send_json({"ok": True} if ok else {"error": "Claude is still working on this page, or nothing to do."})
@@ -172,6 +195,8 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
             return self.send_json(claude_usage.usage())
         if action == "load":      # this machine's CPU and memory, for the list page header
             return self.send_json(node_load.load())
+        if action == "permissions":
+            return self.send_json({"mode": REVIEWS.permissions(), "modes": review.PERMISSION_MODES})
         if action == "dirs":      # folder autocomplete for New agent
             return self.send_json(list_dirs(q.get("prefix", [""])[0]))
         if action == "state":
@@ -287,6 +312,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
     threading.Thread(target=housekeeping, daemon=True).start()
+    threading.Thread(target=repeats, daemon=True).start()
     with ThreadingServer((BIND, PORT), HtmlOnlyHandler) as httpd:
         print("Serving .html under %s on %s:%d" % (ROOT, BIND, PORT), flush=True)
         httpd.serve_forever()

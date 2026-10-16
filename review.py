@@ -14,6 +14,7 @@ Everyone else gets 404 for /_review/* and sees pages without the panel.
 """
 import datetime
 import glob
+import hashlib
 import json
 import os
 import re
@@ -63,7 +64,23 @@ LOCAL_ENV = {"ANTHROPIC_BASE_URL": OLLAMA_URL, "ANTHROPIC_AUTH_TOKEN": "ollama",
 TRANSCRIPTS = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")), "projects")
 LIMIT_MARGIN_S = 120        # send this long after the stated reset time
 LIMIT_FALLBACK_S = 1800     # retry after this when the reset time can't be read
-RUN_TIMEOUT_S = 4 * 3600
+RUN_TIMEOUT_S = 4 * 3600   # working time; time spent waiting for the owner's answers doesn't count
+# Permissions, tree-wide (dirai.json "permissions", switched on the list page; read when a run starts):
+# "allowlist": --permission-mode dontAsk: only allowed actions run, the rest are refused and show in
+#   the panel (Allow once / Always allow), which grants them for the next run.
+# "ask": an action that isn't allowed waits for the owner in the page chat (Allow / Always allow /
+#   Deny); the run continues with the answer (--permission-prompt-tool stdio: claude sends its
+#   prompts to us over stream-json). ALWAYS_DENY is refused without asking in both modes.
+PERMISSION_MODES = ["allowlist", "ask"]
+# A run's total time waiting for answers; after that its prompts are denied, so a forgotten one
+# doesn't hold a run slot (MAX_RUNNING) for days.
+ASK_WAIT_S = 12 * 3600
+ASK_DENIED = {
+    "deny": "The owner denied this in the page chat. Don't ask for it again in this run; "
+            "finish and say in your reply what is still needed.",
+    "timeout": "No answer from the owner within %d h of waiting, so this was denied. Don't ask again "
+               "in this run; finish and say in your reply what is still needed." % (ASK_WAIT_S // 3600),
+}
 # After a run, the page stays "working" while SLURM jobs it submitted, or the page's jobs
 # (page_status.job_dirs: its folder plus the folders in its job_dirs.txt), are in the queue; when they have all left, the assistant is messaged to check the
 # results. html_server.py's housekeeping loop calls check_watches(); at most MAX_AUTO automatic
@@ -71,6 +88,17 @@ RUN_TIMEOUT_S = 4 * 3600
 # can't loop.
 MAX_AUTO = 5
 SUBMITTED_RE = re.compile(r"Submitted batch job (\d+)")
+# Repeat: the owner can have a page's message sent again every hour, day or week (st["repeat"]:
+# {"every", "text", "next"}). html_server.py calls check_repeats() every minute; a run that comes
+# due while the page is busy (or waiting on SLURM jobs) goes once the page is free, and the next one
+# keeps the original time of day. A server that was down sends a missed run once, not once per miss.
+# Each scheduled run starts a fresh session (no earlier conversation) that reads the page first.
+REPEATS = {"hour": 3600, "day": 86400, "week": 7 * 86400}
+# Thread entries older than this are dropped (housekeeping, prune_threads()): the page itself is the
+# record, and an hourly repeat would otherwise grow reviews.json without end. The last KEEP_LAST
+# entries stay whatever their age (a New chat quotes them).
+THREAD_KEEP_S = 7 * 86400
+KEEP_LAST = 6
 
 DEFAULT_ALLOW = [
     "Read", "Glob", "Grep", "Skill", "TodoWrite",
@@ -127,10 +155,16 @@ submit them, say what you submitted, and end your reply. The server watches the 
 jobs running in this folder, and messages you here when they have all finished. If the work runs
 jobs in other folders (e.g. a job that submits a test sweep in another checkout), list those
 folders in this folder's job_dirs.txt (one absolute path per line), so the server keeps waiting
-for them and shows them in the page's status bar. Nobody can approve actions while you run: if a permission is
-denied, do the rest and say in your reply exactly what you needed and why; the owner can grant it
-and resume you. Exception: these are blocked permanently and can never be granted, so don't ask;
-give the owner the exact command to run themselves instead: {always_denied}."""
+for them and shows them in the page's status bar. {approval} Exception: these are blocked permanently and can
+never be granted, so don't ask; give the owner the exact command to run themselves instead: {always_denied}."""
+
+APPROVAL = {
+    "allowlist": "Nobody can approve actions while you run: if a permission is denied, do the rest and "
+                 "say in your reply exactly what you needed and why; the owner can grant it and resume you.",
+    "ask": "An action that isn't already allowed is shown to the owner in the page chat and waits for "
+           "their answer, which may take a while; that is normal. If the owner denies an action, don't "
+           "ask for it again in this run: do the rest, finish, and say in your reply what is still needed.",
+}
 
 # Only for pages inside a git repo (a tree need not be one)
 GIT_PROMPT = """Git: you may git add / commit / push (this replaces any earlier "never commit" instruction), but
@@ -383,6 +417,82 @@ def load_json(path, default):
         return default
 
 
+def mcp_config(page_dir, root):
+    """An --mcp-config file with the owner's MCP servers for a run in page_dir, or None.
+    --restricted ignores ~/.claude.json, so the servers Claude Code would load in that folder are
+    passed explicitly: user scope, local scope of the folder or any folder above it, and the
+    .mcp.json files there. Their tools are not pre-allowed: each needs a grant or the owner's answer.
+    claude.ai connectors can't be passed this way."""
+    cfg = load_json(os.path.expanduser("~/.claude.json"), {})
+    servers = dict(cfg.get("mcpServers", {}))
+    ups, d = [], page_dir
+    while d not in ups:
+        ups.append(d)
+        d = os.path.dirname(d)
+    for d in reversed(ups):   # nearer folders override farther ones
+        servers.update(load_json(os.path.join(d, ".mcp.json"), {}).get("mcpServers", {}))
+        servers.update(cfg.get("projects", {}).get(d, {}).get("mcpServers", {}))
+    if not servers:
+        return None
+    text = json.dumps({"mcpServers": servers}, sort_keys=True)
+    path = os.path.join(dirai_config.data_dir(root), "mcp-%s.json" % hashlib.sha1(text.encode()).hexdigest()[:12])
+    if not os.path.exists(path):   # may hold tokens (headers, env): owner-only
+        fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.replace(path + ".tmp", path)
+    return path
+
+
+class Live:
+    """A running claude driven over stream-json: its stdin, and (ask mode) its permission prompts
+    waiting for the owner. Reviews.lock guards pending, granted and the waiting clock."""
+    def __init__(self, proc):
+        self.proc, self.lock = proc, threading.Lock()
+        self.pending = {}       # request_id -> its can_use_tool request
+        self.granted = set()    # rules the owner answered "Always allow" during this run
+        self.waited, self.since = 0.0, None
+        self.timed_out, self.err = False, ""
+
+    def send(self, msg):
+        with self.lock:
+            try:
+                self.proc.stdin.write(json.dumps(msg).encode() + b"\n")
+                self.proc.stdin.flush()
+            except (OSError, ValueError):
+                pass    # the run has ended
+
+    def close(self):
+        with self.lock:
+            try:
+                self.proc.stdin.close()
+            except OSError:
+                pass
+
+    def waiting(self):
+        """Total time this run has spent waiting for the owner's answers."""
+        return self.waited + (time.time() - self.since if self.since else 0)
+
+    def hold(self, rid, req):
+        self.pending[rid] = req
+        self.since = self.since or time.time()
+
+    def release(self, rid):
+        req = self.pending.pop(rid, None)
+        if req is not None and not self.pending and self.since:
+            self.waited += time.time() - self.since
+            self.since = None
+        return req
+
+
+def end_asks(st):
+    """The run is over: its unanswered prompts can't be answered any more."""
+    for e in st.get("thread", []):
+        if e.get("role") == "ask" and not e.get("answer"):
+            e["answer"] = "ended"
+    st.pop("asking", None)
+
+
 def save_json(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
@@ -542,6 +652,7 @@ class Reviews:
         self.running = 0
         self.queue = []
         self.procs = {}         # page -> its running claude process (for Cancel)
+        self.live = {}          # page -> its run's Live (stdin, prompts waiting for the owner)
         self.cancelled = set()  # pages whose run the owner cancelled
         self.hold_until = 0     # no run starts before this (usage limit)
         self.hold_reason = ""
@@ -549,6 +660,7 @@ class Reviews:
         with self.lock:
             data = load_json(self.path, {})
             for page, st in data.items():           # runs don't survive a restart
+                end_asks(st)
                 if st.get("status") == "queued" and st.get("pending"):   # queued ones do
                     self.queue.append((page, st["pending"]))
                     if (st.get("queued_until") or 0) > self.hold_until:
@@ -584,8 +696,20 @@ class Reviews:
         with self.lock:
             data = self._load()
         return {p: {"status": s["status"], "updated": (s["thread"][-1]["time"] if s["thread"] else ""),
-                    "context": context_tokens(s.get("session_id"))}
+                    "context": context_tokens(s.get("session_id")),
+                    "repeat": (s.get("repeat") or {}).get("every"), "asking": bool(s.get("asking"))}
                 for p, s in data.items()}
+
+    def permissions(self):
+        """The tree's permission mode for new runs (dirai.json, so a hand edit counts too)."""
+        mode = dirai_config.tree_config(self.root).get("permissions")
+        return mode if mode in PERMISSION_MODES else PERMISSION_MODES[0]
+
+    def set_permissions(self, mode):
+        if mode not in PERMISSION_MODES:
+            return False
+        dirai_config.set_tree_option(self.root, "permissions", mode)
+        return True
 
     def state(self, page):
         with self.lock:
@@ -599,6 +723,7 @@ class Reviews:
             st["context_warn"], st["context_high"] = CONTEXT_WARN, CONTEXT_HIGH
             st["model"], st["models"] = st.get("model") or DEFAULT_MODEL, MODELS
             st["model_labels"] = MODEL_LABELS
+            st["permissions"] = self.permissions()
             st["watching"] = (st.get("watch") or {}).get("jobs", [])
             st["denials"] = [{"text": describe_denial(d), "rules": denial_rules(d),
                               "blocked": any(always_denied(r) for r in denial_rules(d)),
@@ -627,6 +752,65 @@ class Reviews:
         if model in LOCAL_MODELS:
             self._pump()    # a page queued for the Claude limits can start now
         return True
+
+    def set_repeat(self, page, every, text=""):
+        """Send text to the page's assistant every hour/day/week from now on ("off" stops it)."""
+        text = (text or "").strip()
+        if every != "off" and (every not in REPEATS or not text):
+            return False
+        with self.lock:
+            data = self._load()
+            st = self._page(data, page)
+            if every == "off":
+                if not st.pop("repeat", None):
+                    return False
+                st["thread"].append({"role": "system", "time": now(), "text": "Repeat turned off."})
+            else:
+                st["repeat"] = {"every": every, "text": text, "next": time.time() + REPEATS[every]}
+                st["thread"].append({"role": "system", "time": now(), "text":
+                                     "Repeats every %s, next at %s:\n%s" % (every,
+                                                                             clock(st["repeat"]["next"]), text)})
+            self._save(data)
+            return True
+
+    def check_repeats(self):
+        """Send each page's repeated message that has come due, if the page is free."""
+        t = time.time()
+        with self.lock:
+            due = [(p, dict(st["repeat"])) for p, st in self._load().items()
+                   if st.get("repeat") and st["repeat"]["next"] <= t and not busy(st) and not st.get("watch")]
+        for page, rep in due:
+            prompt = ("(Scheduled run: the owner set this message to be sent every %s. This is a fresh "
+                      "session with no earlier conversation: before acting, read this folder's index.html "
+                      "and todo.md for the page's current state, including what earlier runs found. The "
+                      "page is the only memory between runs, so record this run's result on it with the "
+                      "date and time, next to the earlier runs' results rather than over them, so the "
+                      "next run can compare.)\n\n%s" % (rep["every"], rep["text"]))
+            if not self.comment(page, rep["text"], prompt=prompt, scheduled=rep["every"]):
+                continue    # became busy meanwhile: try again next pass
+            with self.lock:
+                data = self._load()
+                st = data.get(page) or {}
+                if st.get("repeat"):
+                    nxt, step = st["repeat"]["next"], REPEATS[st["repeat"]["every"]]
+                    while nxt <= t:
+                        nxt += step
+                    st["repeat"]["next"] = nxt
+                    self._save(data)
+
+    def prune_threads(self):
+        """Drop thread entries older than THREAD_KEEP_S, keeping each page's last KEEP_LAST."""
+        cutoff = datetime.datetime.fromtimestamp(time.time() - THREAD_KEEP_S).strftime("%Y-%m-%d %H:%M:%S")
+        with self.lock:
+            data = self._load()
+            changed = False
+            for st in data.values():
+                th = st.get("thread", [])
+                kept = [m for m in th[:-KEEP_LAST] if m.get("time", "") >= cutoff] + th[-KEEP_LAST:]
+                if len(kept) < len(th):
+                    st["thread"], changed = kept, True
+            if changed:
+                self._save(data)
 
     def set_status(self, page, status):
         with self.lock:
@@ -681,9 +865,10 @@ class Reviews:
                 time.sleep(0.2)
 
     # --- running Claude ---------------------------------------------------------------
-    def new_page(self, page, task):
+    def new_page(self, page, task, every="off"):
         """Create ROOT/page/ with a starter index.html if it has none, then start an agent there
-        on task. False if that page's agent is already working."""
+        on task (and repeat it every hour/day/week if asked). False if that page's agent is
+        already working."""
         full = os.path.join(self.root, page)
         os.makedirs(full, exist_ok=True)
         index = os.path.join(full, "index.html")
@@ -697,7 +882,11 @@ class Reviews:
             prompt = ("This folder and its index.html were just created for this task (the page is a "
                       "placeholder). Do the task, and turn index.html into the page that reports it.\n\n"
                       "Task: " + task)
-        return self.comment(page, task, prompt)
+        if not self.comment(page, task, prompt):
+            return False
+        if every in REPEATS:
+            self.set_repeat(page, every, task)
+        return True
 
     def new_chat(self, page):
         """Next message starts a fresh Claude session (the thread stays, with a divider)."""
@@ -728,8 +917,10 @@ class Reviews:
         self._enqueue(page, COMPACT)
         return True
 
-    def comment(self, page, text, prompt=None, selection=None):
-        """selection: {"text", "heading"} of page text the owner selected, quoted in the prompt."""
+    def comment(self, page, text, prompt=None, selection=None, scheduled=None):
+        """selection: {"text", "heading"} of page text the owner selected, quoted in the prompt.
+        scheduled: the repeat period when check_repeats() sends it (shown in the thread); it starts
+        a fresh session, its prompt pointing at the page instead of the thread."""
         if selection:
             selection = {"text": selection["text"][:SEL_MAX], "heading": selection.get("heading", "")[:200],
                          "lines": selection_lines(os.path.join(self.root, page, "index.html"), selection["text"])}
@@ -741,10 +932,14 @@ class Reviews:
                 return False
             st.pop("watch", None)   # the run re-checks the queue when it ends
             st["auto_runs"] = 0
-            if not st.get("session_id") and st["thread"] and (prompt is None or selection):
+            if scheduled and st.get("session_id"):
+                st["session_id"] = None
+                st["thread"].append({"role": "system", "time": now(), "text": NEW_CHAT_MARK})
+            elif not st.get("session_id") and st["thread"] and (prompt is None or selection):
                 prompt = fresh_prompt(st["thread"], prompt or text)   # New chat: catch up from the page and thread
             st["thread"].append(dict({"role": "user", "time": now(), "text": text},
-                                     **({"selection": selection} if selection else {})))
+                                     **({"selection": selection} if selection else {}),
+                                     **({"scheduled": scheduled} if scheduled else {})))
             page_dir = os.path.join(self.root, page)
             named = [r for r in path_grants(text, self.root, read_scope(page_dir, self.root))
                      if r not in st.get("grants", [])]
@@ -771,21 +966,7 @@ class Reviews:
                 return False
             st.pop("watch", None)
             st["auto_runs"] = 0
-            # folder reads stay with this page even under "Always allow": letting page A read B
-            # must not let every page of every tree read B
-            reads = [r for r in rules if is_read_rule(r)]
-            others = [r for r in rules if not is_read_rule(r)]
-            page_rules, global_rules = (reads, others) if always else (rules, [])
-            if global_rules:
-                perms = load_json(PERMS_FILE, {"always": []})
-                perms["always"] = sorted(set(perms["always"]) | set(global_rules))
-                save_json(PERMS_FILE, perms)
-                st["thread"].append({"role": "system", "time": now(),
-                                     "text": "Granted (always): " + ", ".join(global_rules)})
-            if page_rules:
-                st["grants"] = sorted(set(st.get("grants", [])) | set(page_rules))
-                st["thread"].append({"role": "system", "time": now(),
-                                     "text": "Granted (this page): " + ", ".join(page_rules)})
+            self._save_grants(st, rules, always)
             st["denials"] = []
             st["status"] = "working"   # waiting for a free slot counts as working
             st["working_on"], st["started"] = "Retry with granted: " + ", ".join(rules), None
@@ -793,6 +974,138 @@ class Reviews:
         self._enqueue(page, "The owner granted these permissions: %s. Retry what was blocked "
                             "and finish the review." % ", ".join(rules))
         return True
+
+    @staticmethod
+    def _save_grants(st, rules, always):
+        """Keep rules for this page (once) or for every page (always); caller holds the lock.
+        Folder reads stay with this page even under "Always allow": letting page A read B must
+        not let every page of every tree read B."""
+        reads = [r for r in rules if is_read_rule(r)]
+        others = [r for r in rules if not is_read_rule(r)]
+        page_rules, global_rules = (reads, others) if always else (rules, [])
+        if global_rules:
+            perms = load_json(PERMS_FILE, {"always": []})
+            perms["always"] = sorted(set(perms["always"]) | set(global_rules))
+            save_json(PERMS_FILE, perms)
+            st["thread"].append({"role": "system", "time": now(),
+                                 "text": "Granted (always): " + ", ".join(global_rules)})
+        if page_rules:
+            st["grants"] = sorted(set(st.get("grants", [])) | set(page_rules))
+            st["thread"].append({"role": "system", "time": now(),
+                                 "text": "Granted (this page): " + ", ".join(page_rules)})
+
+    # --- permission prompts (ask mode) ---------------------------------------------------
+    def _ask(self, page, live, rid, req):
+        """A permission prompt from the run: put it in the page thread for the owner. Answered
+        at once when the owner chose Always allow for the same action earlier in this run, or
+        when the run has used up its ASK_WAIT_S of waiting."""
+        d = {"tool_name": req.get("tool_name", ""), "tool_input": req.get("input") or {}}
+        rules = denial_rules(d)
+        with self.lock:
+            choice = ("allow" if rules and all(r in live.granted for r in rules)
+                      else "timeout" if live.waiting() >= ASK_WAIT_S else None)
+            data = self._load()
+            st = self._page(data, page)
+            st["thread"].append({"role": "ask", "time": now(), "id": rid, "text": describe_denial(d),
+                                 "detail": json.dumps(d["tool_input"], indent=1)[:4000],
+                                 "rules": rules, "answer": choice})
+            if not choice:
+                live.hold(rid, req)
+                st["asking"] = True
+            self._save(data)
+        if choice:
+            self._respond(live, rid, req, choice)
+
+    def answer(self, page, rid, choice):
+        """The owner's answer to a waiting prompt: allow, always (allow, and keep the rule like
+        the Always allow button), deny; the watchdog answers timeout."""
+        if choice not in ("allow", "always", "deny", "timeout"):
+            return False
+        with self.lock:
+            live = self.live.get(page)
+            req = live.release(rid) if live else None
+            if req is None:
+                return False
+            data = self._load()
+            st = self._page(data, page)
+            rules = []
+            for e in st["thread"]:
+                if e.get("role") == "ask" and e.get("id") == rid and not e.get("answer"):
+                    e["answer"], rules = choice, e.get("rules", [])
+            if choice == "always":
+                rules = [r for r in rules if not always_denied(r)]
+                live.granted |= set(rules)
+                self._save_grants(st, rules, True)
+            st["asking"] = bool(live.pending)
+            self._save(data)
+        self._respond(live, rid, req, choice)
+        return True
+
+    def _withdraw(self, page, live, rid):
+        """claude took a prompt back (e.g. the turn was interrupted)."""
+        with self.lock:
+            if live.release(rid) is None:
+                return
+            data = self._load()
+            st = self._page(data, page)
+            for e in st["thread"]:
+                if e.get("role") == "ask" and e.get("id") == rid and not e.get("answer"):
+                    e["answer"] = "withdrawn"
+            st["asking"] = bool(live.pending)
+            self._save(data)
+
+    @staticmethod
+    def _respond(live, rid, req, choice):
+        if choice in ("allow", "always"):
+            r = {"behavior": "allow", "updatedInput": req.get("input") or {}}
+        else:
+            r = {"behavior": "deny", "message": ASK_DENIED[choice]}
+        live.send({"type": "control_response",
+                   "response": {"subtype": "success", "request_id": rid, "response": r}})
+
+    def _watchdog(self, page, live):
+        """Stop a run after RUN_TIMEOUT_S of working time (waiting for answers doesn't count),
+        and deny its prompts once it has waited ASK_WAIT_S in total."""
+        start = time.time()
+        while live.proc.poll() is None:
+            time.sleep(5)
+            if time.time() - start - live.waiting() > RUN_TIMEOUT_S:
+                live.timed_out = True
+                stop_process(live.proc)
+                return
+            if live.pending and live.waiting() >= ASK_WAIT_S:
+                for rid in list(live.pending):
+                    self.answer(page, rid, "timeout")
+
+    def _drive(self, page, live):
+        """Read the run's messages until its result (returned; {} if it died first), handing
+        permission prompts to the owner. Closing stdin then lets claude exit."""
+        p, err = live.proc, []
+        reader = threading.Thread(target=lambda: err.append(p.stderr.read()), daemon=True)
+        reader.start()
+        threading.Thread(target=self._watchdog, args=(page, live), daemon=True).start()
+        out = {}
+        for line in p.stdout:
+            try:
+                m = json.loads(line)
+            except ValueError:
+                continue
+            kind = m.get("type")
+            if kind == "control_request" and (m.get("request") or {}).get("subtype") == "can_use_tool":
+                self._ask(page, live, m.get("request_id"), m["request"])
+            elif kind == "control_cancel_request":
+                self._withdraw(page, live, m.get("request_id"))
+            elif kind == "result":
+                out = m
+                break
+        live.close()
+        try:
+            p.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            stop_process(p)
+        reader.join(5)
+        live.err = b"".join(e for e in err if e).decode("utf-8", "replace")
+        return out
 
     def _enqueue(self, page, prompt):
         with self.lock:
@@ -874,12 +1187,20 @@ class Reviews:
             scope = read_scope(page_dir, self.root)
             read_dirs = [scope] + self.config["read_dirs"]
             dirs = read_dirs + extra_dirs(allow, page_dir, read_dirs)
-            cmd = [CLAUDE_CMD, "-p", prompt, "--model", model, "--output-format", "json", "--permission-mode", "dontAsk",
-                   "--restricted", "--strict-mcp-config", "--tools", TOOLS, "--add-dir"] + dirs + [
+            mode = self.permissions()
+            mcp_file = mcp_config(page_dir, self.root)
+            # stream-json both ways in both modes: the prompt goes in on stdin, and in ask mode so
+            # do the owner's answers to claude's permission prompts
+            cmd = [CLAUDE_CMD, "-p", "--model", model, "--input-format", "stream-json",
+                   "--output-format", "stream-json", "--verbose"] + (
+                   ["--permission-mode", "manual", "--permission-prompt-tool", "stdio"] if mode == "ask"
+                   else ["--permission-mode", "dontAsk"]) + [
+                   "--restricted", "--strict-mcp-config"] + (["--mcp-config", mcp_file] if mcp_file else []) + [
+                   "--tools", TOOLS, "--add-dir"] + dirs + [
                    "--append-system-prompt", SYSTEM_PROMPT.format(root=self.root,
                        page_file=os.path.join(page_dir, "index.html"), page_dir=page_dir, scope=scope,
                        git=GIT_PROMPT.format(page_dir=page_dir) if in_git(page_dir) else "",
-                       always_denied=", ".join(ALWAYS_DENY), pages_md_path=PAGES_MD,
+                       approval=APPROVAL[mode], always_denied=", ".join(ALWAYS_DENY), pages_md_path=PAGES_MD,
                        page_rm=os.path.join(WWW_DIR, "page_rm.sh"))
                        + "\n\n" + load_text(PAGES_MD),
                    "--allowedTools"] + allow + ["--disallowedTools"] + ALWAYS_DENY
@@ -887,25 +1208,24 @@ class Reviews:
                 cmd += ["--resume", session]
             try:
                 env = dict(os.environ, REVIEW_PAGE_DIR=page_dir, **(LOCAL_ENV if model in LOCAL_MODELS else {}))
-                p = subprocess.Popen(cmd, cwd=page_dir, env=env, stdin=subprocess.DEVNULL,
+                p = subprocess.Popen(cmd, cwd=page_dir, env=env, stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      start_new_session=True)   # its own group, so Cancel stops its commands too
+                live = Live(p)
                 with self.lock:
-                    self.procs[page] = p
+                    self.procs[page], self.live[page] = p, live
                     if page in self.cancelled:      # cancelled before it started
                         stop_process(p)
-                try:
-                    stdout, stderr = p.communicate(timeout=RUN_TIMEOUT_S)
-                except subprocess.TimeoutExpired:
-                    os.killpg(p.pid, signal.SIGKILL)
-                    p.communicate()
-                    raise
+                live.send({"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}})
+                live.send({"type": "user", "message": {"role": "user", "content": prompt}})
+                out = self._drive(page, live)
                 with self.lock:
                     self.procs.pop(page, None)
                     if page in self.cancelled:
                         raise RunCancelled()
-                out = json.loads(stdout.decode("utf-8", "replace") or "{}")
-                reply = out.get("result") or stderr.decode("utf-8", "replace")[-2000:] or "(no reply)"
+                if live.timed_out:
+                    raise subprocess.TimeoutExpired(cmd, RUN_TIMEOUT_S)
+                reply = out.get("result") or live.err[-2000:] or "(no reply)"
                 entry = {"role": "claude", "time": now(), "text": reply, "model": model}
                 if out.get("total_cost_usd") is not None and model not in LOCAL_MODELS:
                     entry["cost"] = round(out["total_cost_usd"], 3)
@@ -964,6 +1284,11 @@ class Reviews:
                 self.running -= 1
                 self.procs.pop(page, None)
                 self.cancelled.discard(page)
+                if self.live.pop(page, None):
+                    data = self._load()
+                    if page in data:
+                        end_asks(data[page])
+                        self._save(data)
             self._pump()
 
     # --- waiting on SLURM jobs ------------------------------------------------------------
