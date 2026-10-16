@@ -1032,13 +1032,24 @@ class Reviews:
             for e in st["thread"]:
                 if e.get("role") == "ask" and e.get("id") == rid and not e.get("answer"):
                     e["answer"], rules = choice, e.get("rules", [])
+            also = []
             if choice == "always":
                 rules = [r for r in rules if not always_denied(r)]
                 live.granted |= set(rules)
                 self._save_grants(st, rules, True)
+                # prompts already waiting for what was just granted (parallel tool calls) go too
+                for other, oreq in list(live.pending.items()):
+                    orules = denial_rules({"tool_name": oreq.get("tool_name", ""), "tool_input": oreq.get("input") or {}})
+                    if orules and all(r in live.granted for r in orules):
+                        also.append((other, live.release(other)))
+                for e in st["thread"]:
+                    if e.get("role") == "ask" and e.get("id") in dict(also) and not e.get("answer"):
+                        e["answer"] = "allow"
             st["asking"] = bool(live.pending)
             self._save(data)
         self._respond(live, rid, req, choice)
+        for other, oreq in also:
+            self._respond(live, other, oreq, "allow")
         return True
 
     def _withdraw(self, page, live, rid):
