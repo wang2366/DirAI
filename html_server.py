@@ -33,6 +33,11 @@ PORT = int(sys.argv[2])
 BIND = sys.argv[3] if len(sys.argv) > 3 else "0.0.0.0"
 ALLOWED_EXT = (".html", ".htm", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp")
 WWW_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def ui_version():
+    """Newest mtime of the scripts served under /_review/ (they are read from disk per request)."""
+    return max(os.path.getmtime(os.path.join(WWW_DIR, "review_%s.js" % n)) for n in ("panel", "list", "newagent"))
 LIST_PAGE = os.path.join(ROOT, "www", "index.html")
 REVIEWS = review.Reviews(ROOT)
 HOME_BUTTON = ('<a href="/www/index.html" title="All pages" style="position:fixed;left:16px;bottom:16px;'
@@ -201,7 +206,10 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
             return self.send_json(list_dirs(q.get("prefix", [""])[0]))
         if action == "state":
             page = self.page_key(q.get("page", [""])[0])
-            return self.send_json(REVIEWS.state(page)) if page is not None else self.send_error(404)
+            if page is None:
+                return self.send_error(404)
+            # "ui": the panel scripts' version, so a tab opened before an update can reload itself
+            return self.send_json(dict(REVIEWS.state(page), ui=ui_version()))
         if action == "prev":      # the page before the latest run that changed it (panel highlights)
             page = self.page_key(q.get("page", [""])[0])
             try:
