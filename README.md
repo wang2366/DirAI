@@ -2,8 +2,9 @@
 
 Serve any git repo as browsable HTML pages, with a Claude Code assistant on every page.
 
-Each page folder holds an `index.html`. DirAI lists them on the repo's
-`www/index.html`. The owner gets an assistant panel on each page: a comment there starts a
+Each page folder holds an `index.html`, which starts with a summary card (Objective, Inputs,
+Outputs, Result, Open, Updated; see `AGENT_RULE.md`) and carries no CSS (the server links the shared
+`page.css`). DirAI lists them on the repo's `www/index.html`. The owner gets an assistant panel on each page: a comment there starts a
 background `claude -p` session in that folder, which edits the page, reruns scripts or submits
 jobs, then replies in the thread. The parts of the page its latest edit added or changed are
 highlighted (compared with a copy saved before the run, in `www/page_prev/`).

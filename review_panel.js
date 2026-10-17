@@ -50,6 +50,7 @@
   #rv-model{font:12px system-ui;padding:1px 2px;border:1px solid #bbb;border-radius:6px;background:#fff;color:#1d1d1f}
   #rv-ctx.warn{color:#b26b00;font-weight:600} #rv-ctx.high{color:#c62828;font-weight:600}
   #rv-stale{display:none;margin:0 0 6px;padding:6px 8px;border-radius:6px;background:#ffe0e0;font-size:12.5px}
+  #rv-cardnote{display:none;margin:0 0 6px;padding:6px 8px;border-radius:6px;background:#ffe0e0;font-size:12.5px}
   #rv-ctxnote{display:none;margin:0 0 6px;padding:6px 8px;border-radius:6px;background:#fff6e0;font-size:12.5px}
   #rv-chip{display:none;align-items:flex-start;gap:6px;margin:0 0 6px;padding:5px 8px;border-radius:6px;background:#eef4ff;font-size:12.5px}
   #rv-chip details,.rv-sel{flex:1;min-width:0}
@@ -72,7 +73,7 @@
     <div id="rv-thread"></div>
     <div id="rv-denials"><b>Claude was blocked from:</b><ul id="rv-dlist"></ul>
       <div class="rv-row"><button id="rv-once">Allow once (this page)</button><button id="rv-always" title="Folder reads stay with this page; other rules apply to every page">Always allow</button></div></div>
-    <div id="rv-foot"><div id="rv-stale">DirAI was updated. Send or clear your message and the page reloads, or reload it now.</div><div id="rv-ctxnote"></div><div id="rv-chip"></div><textarea id="rv-text" placeholder="Message the AI assistant about this page..."></textarea>
+    <div id="rv-foot"><div id="rv-stale">DirAI was updated. Send or clear your message and the page reloads, or reload it now.</div><div id="rv-ctxnote"></div><div id="rv-cardnote"></div><div id="rv-chip"></div><textarea id="rv-text" placeholder="Message the AI assistant about this page..."></textarea>
       <div class="rv-row"><button id="rv-save" class="primary">Send</button>
         <button id="rv-read">Mark read</button><button id="rv-new" title="Your next message starts a fresh session (the assistant re-reads the page, todo.md and the last few messages)">New chat</button><button id="rv-compact" title="Summarize the conversation so far (Claude Code /compact); the session continues with a much smaller context">Compact</button><button id="rv-close">TaskDone</button><button id="rv-cancel" style="display:none" title="Stop this run (or take the message out of the queue). The session is kept: change the model if you like, then send another message to continue.">Cancel</button><button id="rv-hl" style="display:none" title="Parts of the page the assistant added or changed in its latest run that edited the page">Hide changes</button>
         <select id="rv-every" title="Send a message to this page's assistant again on a schedule (it waits if the assistant is busy)"><option value="off">Repeat: off</option><option value="hour">Every hour</option><option value="day">Every day</option><option value="week">Every week</option></select></div>
@@ -152,6 +153,9 @@
     if (level) $("rv-ctxnote").textContent = `This conversation is ${Math.round(ctx / 1000)}K tokens, and every message resends all of it, ` +
       `which uses up your Claude limits faster${level === "high" ? " (a lot faster at this size)" : ""}. ` +
       "Compact summarizes it and keeps the session; New chat starts over from the page and the last few messages.";
+    const card = st.card || [];   // the page's summary card (dirai_card.py), checked by the server
+    $("rv-cardnote").style.display = card.length && !busy ? "block" : "none";
+    $("rv-cardnote").textContent = "Summary card: " + card.join("; ") + ". Ask the assistant to fix it.";
     const grantable = st.denials.filter(d => !d.blocked && !d.granted);
     // one line per denial; click to see the full command
     const denialKey = JSON.stringify(st.denials);   // same idea: don't collapse opened entries

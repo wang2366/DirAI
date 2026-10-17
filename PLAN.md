@@ -1,6 +1,6 @@
 # Plan: agent rules, the summary card, shared CSS
 
-Status: final; all questions decided. Implementation in progress.
+Status: implemented (commits e89d239, e3a34d4 and the summary-card commit after them).
 
 ## 0. Revert the `.md` viewer: done
 

@@ -152,6 +152,13 @@ the results.</p>
 <p>Pages are plain HTML, written by you or by Claude. The page rules
 (<code>AGENT_RULE.md</code> in the DirAI checkout, given to every assistant run):</p>
 <ul>
+  <li><b>Every page starts with a summary card</b>: a collapsible "Summary" with Objective, Inputs,
+      Outputs, Result, Open and Updated (all required; <code>none</code> when nothing applies), plus
+      optional JSON results, between <code>&lt;!-- dirai:card --&gt;</code> markers. The one at the top of
+      this page is an example. After a run that changed the page the server checks the card, asks the
+      assistant once to fix it if needed, and otherwise flags it (<b>card ✗</b> on the list, a note in the
+      panel). Agents read other pages through <code>dirai_card.py &lt;folder&gt;</code>, a few lines
+      instead of the whole page.</li>
   <li><b>Every figure names its plotting script</b>, as a caption with its path relative to the page folder,
       e.g. <code>Script: analysis/plot_rate.sh</code>. Ideally <code>foo.png</code> comes from
       <code>foo.sh</code> or <code>foo.py</code>.</li>

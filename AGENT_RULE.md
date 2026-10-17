@@ -8,6 +8,31 @@ To apply these rules to every Claude session in the tree, the tree's root `CLAUD
 line  `@~/.config/dirai/AGENT_RULE.md`  (`DirAI init` adds it; that path is a link DirAI keeps pointing
 at this file; chat-with-Claude runs started from a page get them directly).
 
+- **Every page starts with a summary card**, right under its `<h1>`, in exactly this form:
+
+  ```html
+  <!-- dirai:card -->
+  <details id="dirai-card" open>
+    <summary>Summary</summary>
+    <dl>
+      <dt>Objective</dt> <dd>What this page answers.</dd>
+      <dt>Inputs</dt>    <dd>Data, folders and scripts it starts from.</dd>
+      <dt>Outputs</dt>   <dd>Files it produces (figures, results).</dd>
+      <dt>Result</dt>    <dd>The current answer: numbers with units and uncertainty.</dd>
+      <dt>Open</dt>      <dd>What is unfinished or still running (job ids).</dd>
+      <dt>Updated</dt>   <dd>YYYY-MM-DD</dd>
+    </dl>
+    <script type="application/json" id="dirai-results">{"name": value, ...}</script>
+  </details>
+  <!-- /dirai:card -->
+  ```
+
+  All six fields are required; write `none` when nothing applies. Whenever you change the page,
+  update the card to match and set Updated to today. The `dirai-results` JSON is optional: put the
+  page's key numbers there when other pages or scripts may use them, and it must be valid JSON.
+  The server checks the card after every run that changes the page, and asks you to fix it if not.
+  To learn what another page found, run `dirai_card.py` on its folder (path given in your
+  instructions) rather than reading its whole `index.html`.
 - **Every figure names its plotting script.** Put a caption or line next to each image with the
   path to the script that makes it, relative to the page's folder, e.g.
   `Script: analysis/plot_rate.sh`. Where possible, name the script after the plot

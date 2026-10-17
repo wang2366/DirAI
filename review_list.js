@@ -5,7 +5,8 @@
   .rv-rep{margin-left:6px;font:600 11px system-ui;opacity:.75;vertical-align:middle}
   #rv-summary{margin:.5rem 0;font:13px system-ui}
   .rv-ctx{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font:600 11px system-ui;vertical-align:middle;
-    border:1px solid currentColor}.rv-ctx.warn{color:#b26b00}.rv-ctx.high{color:#c62828}`;
+    border:1px solid currentColor}.rv-ctx.warn{color:#b26b00}.rv-ctx.high{color:#c62828}
+  .rv-card{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font:600 11px system-ui;vertical-align:middle;color:#c62828;border:1px solid currentColor}`;
   document.head.insertAdjacentHTML("beforeend", "<style>" + css + "</style>");
   const order = {unread: 0, working: 1, queued: 2, read: 3, closed: 4};
   const LABEL = {closed: "TaskDone"};   // shown name for a stored status
@@ -34,6 +35,14 @@
           r.textContent = "🔁 " + {hour: "hourly", day: "daily", week: "weekly"}[every];
           r.title = "The assistant gets this page's repeated message every " + every;
         } else if (r) r.remove();
+        // the page's summary card is missing or incomplete (pages an assistant has worked on)
+        const card = (all[pageOf(tr)] || {}).card;
+        let k = tr.querySelector(".rv-card");
+        if (card) {
+          if (!k) { k = document.createElement("span"); k.className = "rv-card"; b.after(k); }
+          k.textContent = "card ✗";
+          k.title = "This page's summary card is missing or incomplete; open the page to see what";
+        } else if (k) k.remove();
         // big session context: suggest Compact (warn/high levels match review.py)
         const ctx = (all[pageOf(tr)] || {}).context;
         let c = tr.querySelector(".rv-ctx");

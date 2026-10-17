@@ -27,6 +27,7 @@ import time
 
 import claude_usage
 import dirai_config
+import dirai_card
 import page_status
 
 KEY_FILE = dirai_config.KEY_FILE
@@ -145,8 +146,9 @@ resolved absolute paths: never "..", which a built-in safety check refuses no ma
 You can read {scope} (this page's own area) and the folders granted to you; other folders of the
 tree are off limits until the owner names them in a comment or allows a blocked read, so if the
 work needs one, say which and why in your reply.
-Follow the page conventions below (from {pages_md_path}); in particular, keep this folder's todo.md
-current and give every figure its script path.
+Follow the page conventions below (from {pages_md_path}); in particular, keep the page's summary
+card current, keep this folder's todo.md current, and give every figure its script path. To learn
+what another page found, run "python3 {card_py} <its folder>" instead of reading its index.html.
 {git}To delete files or folders, run "{page_rm} <path>...": it works only inside this page folder and
 deletes immediately, no trash (plain rm -r / rm -rf stay blocked).
 Rules: don't delete anything outside this folder; long or heavy work goes to
@@ -189,6 +191,19 @@ STARTER_PAGE = """<!doctype html>
 </head>
 <body>
 <h1>{title}</h1>
+<!-- dirai:card -->
+<details id="dirai-card" open>
+  <summary>Summary</summary>
+  <dl>
+    <dt>Objective</dt> <dd>{task}</dd>
+    <dt>Inputs</dt>    <dd>not yet known</dd>
+    <dt>Outputs</dt>   <dd>not yet known</dd>
+    <dt>Result</dt>    <dd>none yet: the AI assistant is working on this task</dd>
+    <dt>Open</dt>      <dd>the whole task</dd>
+    <dt>Updated</dt>   <dd>{date}</dd>
+  </dl>
+</details>
+<!-- /dirai:card -->
 <p><i>Created {date} by New agent; the AI assistant is working on this task and will replace this page.</i></p>
 <h2>Task</h2>
 <p style="white-space:pre-wrap">{task}</p>
@@ -198,6 +213,9 @@ STARTER_PAGE = """<!doctype html>
 
 
 NEW_CHAT_MARK = "New chat: the next message starts a fresh session."
+# sent once, in the same session, when a run changed the page and left its summary card incomplete
+CARD_FIX = ("Before you finish: this page's summary card (the <!-- dirai:card --> block, see the page "
+            "conventions) needs fixing: %s. Fix only the card, then reply in one line.")
 
 
 def fresh_prompt(thread, text, keep=6, limit=1500):
@@ -656,6 +674,7 @@ class Reviews:
         self.hold_until = 0     # no run starts before this (usage limit)
         self.hold_reason = ""
         self.timer = None
+        self.cards = {}         # index.html path -> (mtime, its summary card's problems)
         with self.lock:
             data = load_json(self.path, {})
             for page, st in data.items():           # runs don't survive a restart
@@ -696,8 +715,21 @@ class Reviews:
             data = self._load()
         return {p: {"status": s["status"], "updated": (s["thread"][-1]["time"] if s["thread"] else ""),
                     "context": context_tokens(s.get("session_id")),
-                    "repeat": (s.get("repeat") or {}).get("every"), "asking": bool(s.get("asking"))}
+                    "repeat": (s.get("repeat") or {}).get("every"), "asking": bool(s.get("asking")),
+                    "card": len(self.card_problems(p))}
                 for p, s in data.items()}
+
+    def card_problems(self, page):
+        """dirai_card.problems() of the page's summary card, cached until index.html changes."""
+        path = os.path.join(self.root, page, "index.html")
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            return []
+        hit = self.cards.get(path)
+        if not hit or hit[0] != mtime:
+            hit = self.cards[path] = (mtime, dirai_card.problems(path))
+        return hit[1]
 
     def permissions(self):
         """The tree's permission mode for new runs (dirai.json, so a hand edit counts too)."""
@@ -724,6 +756,7 @@ class Reviews:
             st["model_labels"] = MODEL_LABELS
             st["permissions"] = self.permissions()
             st["watching"] = (st.get("watch") or {}).get("jobs", [])
+            st["card"] = self.card_problems(page)
             st["denials"] = [{"text": describe_denial(d), "rules": denial_rules(d),
                               "blocked": any(always_denied(r) for r in denial_rules(d)),
                               "granted": all(r in granted for r in denial_rules(d))}
@@ -1087,9 +1120,12 @@ class Reviews:
                 for rid in list(live.pending):
                     self.answer(page, rid, "timeout")
 
-    def _drive(self, page, live):
+    def _drive(self, page, live, check=None):
         """Read the run's messages until its result (returned; {} if it died first), handing
-        permission prompts to the owner. Closing stdin then lets claude exit."""
+        permission prompts to the owner. Closing stdin then lets claude exit.
+        check(): after a successful result, a follow-up message to send in the same session, or
+        None. At most one is sent; the run's reply stays the first result's, the follow-up's reply
+        goes in "followup" (cost and denials cover both)."""
         p, err = live.proc, []
         reader = threading.Thread(target=lambda: err.append(p.stderr.read()), daemon=True)
         reader.start()
@@ -1106,8 +1142,16 @@ class Reviews:
             elif kind == "control_cancel_request":
                 self._withdraw(page, live, m.get("request_id"))
             elif kind == "result":
+                if out:     # the follow-up's result
+                    out = dict(m, result=out.get("result"), followup=m.get("result") or "",
+                               permission_denials=out.get("permission_denials", []) + m.get("permission_denials", []),
+                               total_cost_usd=self._cost(out.get("total_cost_usd"), m.get("total_cost_usd")))
+                    break
                 out = m
-                break
+                msg = check() if check and not m.get("is_error") else None
+                if not msg:
+                    break
+                live.send({"type": "user", "message": {"role": "user", "content": msg}})
         live.close()
         try:
             p.wait(timeout=60)
@@ -1116,6 +1160,13 @@ class Reviews:
         reader.join(5)
         live.err = b"".join(e for e in err if e).decode("utf-8", "replace")
         return out
+
+    @staticmethod
+    def _cost(a, b):
+        """Cost of a run and its follow-up: claude reports it per session (b >= a) or per turn."""
+        if a is None or b is None:
+            return a if b is None else b
+        return b if b >= a else a + b
 
     def _enqueue(self, page, prompt):
         with self.lock:
@@ -1171,6 +1222,7 @@ class Reviews:
         self._save(data)
 
     def _run(self, page, prompt):
+        card_note = None
         try:
             with self.lock:
                 data = self._load()
@@ -1211,7 +1263,8 @@ class Reviews:
                        page_file=os.path.join(page_dir, "index.html"), page_dir=page_dir, scope=scope,
                        git=GIT_PROMPT.format(page_dir=page_dir) if in_git(page_dir) else "",
                        approval=APPROVAL[mode], always_denied=", ".join(ALWAYS_DENY), pages_md_path=AGENT_RULE_MD,
-                       page_rm=os.path.join(WWW_DIR, "page_rm.sh"))
+                       page_rm=os.path.join(WWW_DIR, "page_rm.sh"),
+                       card_py=os.path.join(WWW_DIR, "dirai_card.py"))
                        + "\n\n" + load_text(AGENT_RULE_MD),
                    "--allowedTools"] + allow + ["--disallowedTools"] + ALWAYS_DENY
             if session:
@@ -1228,7 +1281,7 @@ class Reviews:
                         stop_process(p)
                 live.send({"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}})
                 live.send({"type": "user", "message": {"role": "user", "content": prompt}})
-                out = self._drive(page, live)
+                out = self._drive(page, live, None if prompt == COMPACT else lambda: self._card_fix(index, snap))
                 with self.lock:
                     self.procs.pop(page, None)
                     if page in self.cancelled:
@@ -1237,6 +1290,10 @@ class Reviews:
                     raise subprocess.TimeoutExpired(cmd, RUN_TIMEOUT_S)
                 reply = out.get("result") or live.err[-2000:] or "(no reply)"
                 entry = {"role": "claude", "time": now(), "text": reply, "model": model}
+                if "followup" in out:
+                    left = dirai_card.problems(index, now()[:10])
+                    card_note = {"role": "system", "time": now(), "text": "The summary card needed fixing; "
+                                 + ("the assistant fixed it." if not left else "it still has problems: " + "; ".join(left) + ".")}
                 if out.get("total_cost_usd") is not None and model not in LOCAL_MODELS:
                     entry["cost"] = round(out["total_cost_usd"], 3)
                 denials = out.get("permission_denials", [])
@@ -1278,6 +1335,8 @@ class Reviews:
                 data = self._load()
                 st = self._page(data, page)
                 st["thread"].append(entry)
+                if card_note:
+                    st["thread"].append(card_note)
                 st["denials"] = denials
                 st["session_id"] = session
                 st["status"] = "unread"
@@ -1302,6 +1361,19 @@ class Reviews:
             self._pump()
 
     # --- waiting on SLURM jobs ------------------------------------------------------------
+    @staticmethod
+    def _card_fix(index, snap):
+        """CARD_FIX for a run that changed the page (index vs its copy from before the run, snap)
+        and left the summary card incomplete, else None."""
+        try:
+            with open(index, "rb") as a, open(snap, "rb") as b:
+                if a.read() == b.read():
+                    return None
+        except OSError:
+            pass    # no copy from before: a new page
+        left = dirai_card.problems(index, now()[:10])
+        return CARD_FIX % "; ".join(left) if left else None
+
     def _jobs_to_watch(self, page_dir, session, offset):
         """Jobs still queued that this run submitted, plus the owner's jobs in the page folder."""
         live = page_status.live_ids()
