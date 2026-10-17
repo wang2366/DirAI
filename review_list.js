@@ -83,6 +83,8 @@
     background:linear-gradient(90deg,transparent 5px,currentColor 5px,currentColor 9px,transparent 9px)}
   #rv-usage input[type=range]:focus-visible{outline:2px solid #0b63ce;outline-offset:2px;border-radius:4px}
   #rv-usage .lvl{font-variant-numeric:tabular-nums}
+  #rv-usage .auto{padding:0 8px;border-radius:10px;cursor:pointer;font:600 11px system-ui;border:1px solid #888;background:none;color:inherit}
+  #rv-usage .auto.on{background:#0b63ce;border-color:#0b63ce;color:#fff}
   #rv-usage .dim{opacity:.65}</style>`);
   const when = t => {
     const d = new Date(t * 1000), soon = d - Date.now() < 20 * 3600e3;
@@ -98,17 +100,36 @@
       if (!el) { el = document.createElement("div"); el.id = "rv-usage"; document.querySelector(".meta").after(el); }
       if (u.error && !u.session) { el.innerHTML = '<span class="dim">Claude usage: unavailable (' + u.error.replace(/[&<>]/g, "") + ")</span>"; return; }
       const cls = (pct, stop) => pct >= stop ? "over" : pct >= 0.8 * stop ? "warn" : "";
+      const auto = u.stop.weekly_auto;   // weekly level follows the day of the week: n/7 on day n
       const meter = (name, label) => {
         const w = u[name]; if (!w) return "";
-        const stop = u.stop[name];
+        const stop = u.stop[name], paced = name === "weekly" && auto;
+        const autoBtn = name !== "weekly" ? "" :
+          `<button class="auto${auto ? " on" : ""}" title="${auto ? "On: the pause level rises by a seventh each day of the week (day n: n/7 of the limit), so the week's usage is spread out. Click to set it by hand instead."
+            : "Off: the pause level is set by hand. Click to let it follow the day of the week (day n: n/7 of the limit)."}">Auto</button>`;
         return `<span class="u ${cls(w.percent, stop)}" data-name="${name}" data-pct="${w.percent}"><b>${label}</b>
           <span class="bar"><span class="fill" style="width:${Math.min(w.percent, 100)}%"></span>
-          <input type="range" min="1" max="100" step="1" value="${stop}" aria-label="${label} limit: pause new assistant runs at this percent"
+          <input type="range" min="1" max="100" step="1" value="${Math.round(stop)}" aria-label="${label} limit: pause new assistant runs at this percent"
             title="Drag: new assistant runs wait at this level until the ${label.toLowerCase()} limit resets"></span>
-          ${Math.round(w.percent)}%<span class="dim">${w.resets ? " · resets " + when(w.resets) : ""} · pause at <span class="lvl">${stop}%</span></span></span>`;
+          ${Math.round(w.percent)}%<span class="dim">${w.resets ? " · resets " + when(w.resets) : ""} · pause at <span class="lvl">${Math.round(stop)}%</span>${
+            paced && auto.day ? ` (day ${auto.day} of 7${auto.day < 7 ? ", " + Math.round(100 * (auto.day + 1) / 7) + "% from " + when(auto.until) : ""})` : ""}</span>${autoBtn}</span>`;
       };
       el.innerHTML = "<span><b>Claude usage</b></span>" + meter("session", "5-hour") + meter("weekly", "Weekly") +
         (u.stale ? `<span class="dim" title="${u.error.replace(/[&<>"]/g, "")}">(last reading, ${when(u.checked)}; update refused)</span>` : "");
+      const save = body => fetch("/_review/usage_stop", {method: "POST",
+          headers: {"Content-Type": "application/json", "X-Review": "1"}, body: JSON.stringify(body)})
+        .then(r => r.ok ? r.json() : {error: r.status === 404 ? "old" : "HTTP " + r.status})
+        .then(res => {
+          if (!res.error) { const n = document.getElementById("rv-stopnote"); if (n) n.remove(); return usage(); }
+          let n = document.getElementById("rv-stopnote");
+          if (!n) { n = document.createElement("div"); n.id = "rv-stopnote"; el.after(n); }
+          n.style.cssText = "margin:.2rem 0;padding:4px 8px;border-radius:6px;background:#ffe0e0;color:#1d1d1f;font:13px system-ui";
+          n.textContent = res.error === "old"
+            ? "Not saved: this tree's server is still running the old DirAI code. Run \"DirAI restart\" in the tree, then try again."
+            : "Not saved: " + res.error;
+        }).catch(() => {});
+      const btn = el.querySelector(".auto");
+      if (btn) btn.onclick = () => save({auto: !auto});
       el.querySelectorAll(".u").forEach(m => {
         const input = m.querySelector("input");
         input.addEventListener("pointerdown", () => { dragging = true; });
@@ -117,20 +138,9 @@
           m.querySelector(".lvl").textContent = input.value + "%";
           m.className = "u " + cls(+m.dataset.pct, +input.value);
         });
-        input.addEventListener("change", () => {    // released (or a key press): save it
+        input.addEventListener("change", () => {    // released (or a key press): save it (weekly: turns Auto off)
           dragging = false;
-          fetch("/_review/usage_stop", {method: "POST", headers: {"Content-Type": "application/json", "X-Review": "1"},
-            body: JSON.stringify({name: m.dataset.name, percent: +input.value})})
-            .then(r => r.ok ? r.json() : {error: r.status === 404 ? "old" : "HTTP " + r.status})
-            .then(res => {
-              if (!res.error) return usage();
-              let n = document.getElementById("rv-stopnote");
-              if (!n) { n = document.createElement("div"); n.id = "rv-stopnote"; el.after(n); }
-              n.style.cssText = "margin:.2rem 0;padding:4px 8px;border-radius:6px;background:#ffe0e0;color:#1d1d1f;font:13px system-ui";
-              n.textContent = res.error === "old"
-                ? "Not saved: this tree's server is still running the old DirAI code. Run \"DirAI restart\" in the tree, then drag again."
-                : "Not saved: " + res.error;
-            }).catch(() => {});
+          save({name: m.dataset.name, percent: +input.value});
         });
       });
     }).catch(() => {});

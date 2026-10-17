@@ -161,8 +161,10 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
                 return self.send_json({"error": "The assistant is already working on %s/." % rel})
             threading.Thread(target=rebuild_list, daemon=True).start()
             return self.send_json({"ok": True, "url": "/%s/" % rel})
-        if action == "usage_stop":    # list page slider: pause new runs at this % (all trees)
-            if not claude_usage.set_stop(body.get("name"), body.get("percent")):
+        if action == "usage_stop":    # list page slider or Auto: pause new runs at this % (all trees)
+            ok = (claude_usage.set_weekly_auto(body["auto"]) if isinstance(body.get("auto"), bool)
+                  else claude_usage.set_stop(body.get("name"), body.get("percent")))
+            if not ok:
                 return self.send_json({"error": "bad level"})
             REVIEWS.recheck_hold()
             return self.send_json({"ok": True, "stop": claude_usage.stops()})

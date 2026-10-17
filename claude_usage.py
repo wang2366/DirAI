@@ -10,6 +10,7 @@ This is the endpoint Claude Code itself uses; it is not a documented API and may
 """
 import calendar
 import json
+import math
 import os
 import subprocess
 import sys
@@ -26,9 +27,11 @@ BACKOFF_S = 300             # after a refused request (e.g. 429), wait this long
 SHARED = os.path.join(os.path.expanduser(os.environ.get("DIRAI_CONFIG_DIR", "~/.config/dirai")), "usage.json")
 STOPS = os.path.join(os.path.dirname(SHARED), "usage_stop.json")
 # no new runs at or above this % of the 5-hour session limit / of the weekly limit, unless the
-# owner set other levels (the sliders on the list page, saved in STOPS for all their trees)
+# owner set other levels (the sliders on the list page, saved in STOPS for all their trees). With
+# weekly auto on (the default) the weekly level follows the day instead: n/7 on day n of the week.
 DEFAULT_STOP = {"session": 100, "weekly": 100}
-RESUME_MARGIN_S = 120       # start again this long after the limit resets
+RESUME_MARGIN_S = 120
+DAY_S, WEEK_S = 86400, 7 * 86400       # start again this long after the limit resets
 
 _lock = threading.Lock()
 _cache = {"checked": 0, "usage": None}
@@ -96,34 +99,75 @@ def _write_shared(u):
         pass
 
 
-def stops():
-    """{"session": %, "weekly": %}: where new runs wait (DEFAULT_STOP unless the owner set them)."""
-    out = dict(DEFAULT_STOP)
+def settings():
+    """The owner's levels: {"session": %, "weekly": %, "weekly_auto": bool} (DEFAULT_STOP and
+    weekly_auto on, unless set on the list page)."""
+    out = dict(DEFAULT_STOP, weekly_auto=True)
     try:
         with open(STOPS) as f:
             saved = json.load(f)
-        out.update((k, int(v)) for k, v in saved.items() if k in out and 1 <= int(v) <= 100)
+        out.update((k, int(v)) for k, v in saved.items() if k in DEFAULT_STOP and 1 <= int(v) <= 100)
+        if isinstance(saved.get("weekly_auto"), bool):
+            out["weekly_auto"] = saved["weekly_auto"]
     except (OSError, ValueError, TypeError, AttributeError):
         pass
     return out
 
 
+def stops():
+    """{"session": %, "weekly": %}: the levels set by hand."""
+    return {k: v for k, v in settings().items() if k in DEFAULT_STOP}
+
+
+def _save(**changes):
+    with _lock:
+        cur = settings()
+        cur.update(changes)
+        os.makedirs(os.path.dirname(STOPS), exist_ok=True)
+        with open(STOPS + ".%d.tmp" % os.getpid(), "w") as f:
+            json.dump(cur, f)
+        os.replace(STOPS + ".%d.tmp" % os.getpid(), STOPS)
+
+
 def set_stop(name, percent):
-    """Save one stop level (1-100); False if name or percent is invalid."""
+    """Save one stop level (1-100); setting the weekly one by hand turns weekly auto off. False if
+    name or percent is invalid."""
     try:
         percent = int(percent)
     except (TypeError, ValueError):
         return False
     if name not in DEFAULT_STOP or not 1 <= percent <= 100:
         return False
-    with _lock:
-        cur = stops()
-        cur[name] = percent
-        os.makedirs(os.path.dirname(STOPS), exist_ok=True)
-        with open(STOPS + ".%d.tmp" % os.getpid(), "w") as f:
-            json.dump(cur, f)
-        os.replace(STOPS + ".%d.tmp" % os.getpid(), STOPS)
+    _save(**dict({name: percent}, **({"weekly_auto": False} if name == "weekly" else {})))
     return True
+
+
+def set_weekly_auto(on):
+    _save(weekly_auto=bool(on))
+    return True
+
+
+def weekly_pace(resets, now=None):
+    """Weekly auto level: on day n of the 7-day window that ends at resets, n/7 of the limit.
+    Returns (percent, n, when day n ends)."""
+    now = time.time() if now is None else now
+    start = resets - WEEK_S
+    n = min(7, max(1, int(math.ceil((now - start) / DAY_S))))
+    return 100.0 * n / 7, n, min(start + n * DAY_S, resets)
+
+
+def levels(u):
+    """The levels in force for reading u: {"session": %, "weekly": %}, plus "weekly_auto" (None, or
+    {"day": n, "until": epoch} while the weekly level follows the day of the week)."""
+    st = settings()
+    out = {"session": st["session"], "weekly": st["weekly"], "weekly_auto": None}
+    w = u.get("weekly") or {}
+    if st["weekly_auto"] and w.get("resets"):
+        pct, n, until = weekly_pace(w["resets"])
+        out["weekly"], out["weekly_auto"] = round(pct, 1), {"day": n, "until": until}
+    elif st["weekly_auto"]:
+        out["weekly_auto"] = {"day": None, "until": None}   # on, but no reset time to pace by
+    return out
 
 
 def usage():
@@ -136,7 +180,7 @@ def usage():
         u = _read_shared() or _cache["usage"]
         if u and now - u.get("checked", 0) < (BACKOFF_S if u.get("error") else CACHE_S):
             _cache.update(checked=u["checked"], usage=u)
-            return dict(u, stop=stops())
+            return dict(u, stop=levels(u))
         try:
             new = dict(_fetch(), error=None)
         except Exception as e:      # offline, expired token, 429, changed format
@@ -148,20 +192,23 @@ def usage():
         new["checked"] = now
         _cache.update(checked=now, usage=new)
         _write_shared(new)
-        return dict(new, stop=stops())
+        return dict(new, stop=levels(new))
 
 
 def hold():
     """(until, reason) if new runs should wait for a limit to reset, else (0, "")."""
     u = usage()
     until, reason = 0, ""
+    auto = u["stop"].get("weekly_auto") or {}
     for name, label in (("session", "5-hour session"), ("weekly", "weekly")):
         w, stop = u.get(name), u["stop"][name]
         if w and w["percent"] >= stop and w.get("resets"):
-            t = w["resets"] + RESUME_MARGIN_S
+            paced = name == "weekly" and auto.get("until")
+            # paced: wait for the next day of the week (its level is a seventh higher), not the reset
+            t = (auto["until"] if paced else w["resets"]) + RESUME_MARGIN_S
             if t > until:
-                until, reason = t, "Claude usage at %.0f%% of the %s limit (stop at %d%%)" % (
-                    w["percent"], label, stop)
+                until, reason = t, "Claude usage at %.0f%% of the %s limit (stop at %.0f%%%s)" % (
+                    w["percent"], label, stop, ", auto: day %d of 7" % auto["day"] if paced else "")
     return until, reason
 
 
