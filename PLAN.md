@@ -1,6 +1,6 @@
 # Plan: agent rules, the summary card, shared CSS
 
-Status: draft for discussion. No code has changed yet, except step 0.
+Status: draft, round 2 (questions 1, 2, 3, 6 decided). No code has changed yet, except step 0.
 
 ## 0. Revert the `.md` viewer: done
 
@@ -36,7 +36,8 @@ parser below, without reading the rest of the page.
 
 ```html
 <!-- dirai:card -->
-<section id="dirai-card">
+<details id="dirai-card" open>
+  <summary>Summary</summary>
   <dl>
     <dt>Objective</dt> <dd>What this page answers.</dd>
     <dt>Inputs</dt>    <dd>Data/folders/scripts it starts from.</dd>
@@ -46,20 +47,24 @@ parser below, without reading the rest of the page.
     <dt>Updated</dt>   <dd>2026-10-17</dd>
   </dl>
   <script type="application/json" id="dirai-results">{"rate": 3.2e-3, "rate_err": 4e-4}</script>
-</section>
+</details>
 <!-- /dirai:card -->
 ```
 
-- **Required:** Objective, Result, Updated. Inputs, Outputs and Open are recommended.
+- **Fields (decided):** exactly these six, in this order. **All six are required** and must be
+  non-empty. When nothing applies, the agent writes `none` (e.g. Open: none), so an empty field
+  always means the agent skipped it.
+- **Collapsible (decided):** a `<details>` block, open when the page loads. Click "Summary" to fold
+  it away.
 - **`dirai-results` JSON:** optional, and must parse if present. It holds the numbers other pages
   or scripts use.
-- **Visible:** humans see the card at the top of the page, styled by `page.css` (step 3).
+- **Styled** by `page.css` (step 3).
 
 ### 2b. Parser: `dirai_card.py` (new, stdlib only)
 
 - `extract(path)` → `{"objective": …, "result": …, "updated": …, "results": {…}}`, or None.
-- `problems(path)` → a list of what's wrong: missing markers, a missing required field, invalid
-  JSON, `Updated` not changed after an edit.
+- `problems(path)` → a list of what's wrong: missing markers, any of the six fields missing or
+  empty, invalid JSON, `Updated` not changed after an edit.
 - **CLI:** `python3 dirai_card.py <page folder>…` prints each card as short text. Agents use this to
   read other pages cheaply (a few hundred tokens instead of about 30k). It goes on the default
   allow list in `review.py`.
@@ -124,23 +129,33 @@ Layer 3 does the same thing with code we control.
 | # | Commit | Test |
 |---|---|---|
 | 1 | Rename to `AGENT_RULE.md` | `DirAI init` on a scratch tree with an old import line → rewritten; the run prompt contains the rules |
-| 2 | `page.css` + injection | Scratch tree: a page without `<style>` gets the link, a page with one does not; screenshot both with the panel open |
+| 2 | `page.css` + injection + tutorial converted | Scratch tree: a page without `<style>` gets the link, a page with one does not; screenshot both and the tutorial with the panel open |
 | 3 | Card: rule, starter page, `dirai_card.py`, follow-up check, panel/list display | Unit tests for `extract`/`problems`. A fake `claude` (via `REVIEW_CLAUDE_CMD`) that edits the page without the card → the server sends exactly one follow-up |
 
 Each is a separate commit pushed to `claude/friendly-newton-vty0yd`. No PR unless you ask.
 
 ---
 
-## Open questions
+## 4. Convert the tutorial `index.html` (decided)
 
-1. **Card fields:** are Objective / Inputs / Outputs / Result / Open / Updated the right set? Do you
-   want e.g. "Method" or "Next step"?
-2. **Required:** only Objective + Result + Updated, or all six?
-3. **Placement:** card always visible at the top, or inside a collapsible `<details>` (open by
-   default)?
-4. **Follow-up retry (2c layer 3):** is one automatic fix per run right, or should the server only
-   flag the problem (layer 4) and leave the fix to you?
-5. **CSS on existing styled pages:** keep "inject only when the page has no `<style>`", or inject
-   everywhere and let page styles override?
-6. **The tutorial `index.html` in this repo:** convert it to `page.css` + a card as the worked
-   example, or leave it as is?
+This repo's `index.html` becomes the worked example. Its `<style>` block is removed in favour of
+`page.css`, and it gets a card at the top (Objective: "teach DirAI setup and use", etc.). Done in
+the CSS commit, so the screenshot test covers a real page.
+
+---
+
+## Decisions so far
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Card fields | Objective, Inputs, Outputs, Result, Open, Updated |
+| 2 | Which are required | All six (`none` when nothing applies) |
+| 3 | Placement | Collapsible `<details>`, open on load |
+| 6 | Tutorial `index.html` | Convert to `page.css` + card |
+
+## Still open
+
+4. **Automatic fix vs. flag only (2c layer 3).** See the explanation in chat; recommendation:
+   automatic fix, once per run.
+5. **`page.css` on pages that already have their own `<style>`.** See the explanation in chat;
+   recommendation: skip them.
