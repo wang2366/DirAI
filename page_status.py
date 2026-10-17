@@ -156,28 +156,26 @@ def working_html(work):
 
 
 def bar(page_dir, work=None):
-    """HTML for the status bar of the page in page_dir; work = Reviews.working(page) or None."""
+    """HTML for the status bar of the page in page_dir (work = Reviews.working(page) or None): what
+    the assistant is working on, the open todo items and the SLURM jobs, each only when there is
+    one; "" when there is nothing (the page's summary card says what is open)."""
+    parts = [working_html(work)] if work else []
     todos = open_todos(page_dir)
-    if todos is None:
-        todo_html = '<span style="opacity:.6">none recorded (add a todo.md)</span>'
-    elif not todos:
-        todo_html = '<span style="opacity:.6">none</span>'
-    else:
-        todo_html = "<ol style=\"margin:2px 0 0;padding-left:22px\">%s</ol>" % "".join(
-            "<li>%s</li>" % html.escape(t) for t in todos)
+    if todos:
+        parts.append("<div><b>Remaining todo:</b><ol style=\"margin:2px 0 0;padding-left:22px\">%s</ol></div>"
+                     % "".join("<li>%s</li>" % html.escape(t) for t in todos))
     js = page_jobs(page_dir)
-    if not js:
-        job_html = '<span style="opacity:.6">none</span>'
-    else:
-        job_html = "<ul style=\"margin:2px 0 0;padding-left:22px\">%s</ul>" % "".join(
+    if js:
+        parts.append("<div><b>Jobs in the queue:</b><ul style=\"margin:2px 0 0;padding-left:22px\">%s</ul></div>" % "".join(
             "<li><code>%s</code> %s &middot; %s %s%s &middot; %s%s</li>" % (
                 html.escape(j["id"]), html.escape(j["name"]), html.escape(j["state"]),
                 html.escape(j["time"]),
                 (" (%s left)" % html.escape(j["left"])) if j["state"] == "RUNNING" else "",
                 html.escape(j["where"]),
                 (" &middot; in <code>%s/</code>" % html.escape(j["sub"])) if j["sub"] != "." else "")
-            for j in js)
+            for j in js))
+    if not parts:
+        return ""
     return ('<div id="page-status" style="margin:0 0 12px;padding:8px 14px;border-bottom:1px solid '
             'rgba(128,128,128,.4);background:rgba(128,128,128,.08);font:13px/1.45 system-ui;color:inherit">'
-            '%s<div><b>Remaining todo:</b> %s</div><div style="margin-top:4px"><b>Jobs in the queue:</b> %s</div>'
-            '</div>' % (working_html(work) if work else "", todo_html, job_html))
+            '%s</div>' % "".join(parts))

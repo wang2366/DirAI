@@ -39,7 +39,7 @@ at this file; chat-with-Claude runs started from a page get them directly).
   (`foo.png` made by `foo.sh` / `foo.py`).
 - **Keep `todo.md` current.** Each page folder can have a `todo.md`, one item per line:
   `- [ ] open item` / `- [x] done item`. The server shows the open items, and the SLURM jobs
-  running in that folder, in a status bar at the top of the page. When you finish an item, tick
+  running in that folder, in a status bar at the top of the page (shown only while there are any). When you finish an item, tick
   it; when work leaves something open (a job still running, a next step), add it.
 - **Jobs that run elsewhere go in `job_dirs.txt`.** The status bar (and the server's wait for a
   page's jobs) counts the jobs whose working directory is in the page folder. When the page's
