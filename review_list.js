@@ -120,7 +120,17 @@
         input.addEventListener("change", () => {    // released (or a key press): save it
           dragging = false;
           fetch("/_review/usage_stop", {method: "POST", headers: {"Content-Type": "application/json", "X-Review": "1"},
-            body: JSON.stringify({name: m.dataset.name, percent: +input.value})}).then(usage);
+            body: JSON.stringify({name: m.dataset.name, percent: +input.value})})
+            .then(r => r.ok ? r.json() : {error: r.status === 404 ? "old" : "HTTP " + r.status})
+            .then(res => {
+              if (!res.error) return usage();
+              let n = document.getElementById("rv-stopnote");
+              if (!n) { n = document.createElement("div"); n.id = "rv-stopnote"; el.after(n); }
+              n.style.cssText = "margin:.2rem 0;padding:4px 8px;border-radius:6px;background:#ffe0e0;color:#1d1d1f;font:13px system-ui";
+              n.textContent = res.error === "old"
+                ? "Not saved: this tree's server is still running the old DirAI code. Run \"DirAI restart\" in the tree, then drag again."
+                : "Not saved: " + res.error;
+            }).catch(() => {});
         });
       });
     }).catch(() => {});
