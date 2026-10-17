@@ -12,8 +12,8 @@
        "exclude": ["data", "proj/build"],    # folders the page list skips (names anywhere, or paths)
        "permissions": "allowlist"}           # or "ask" (set on the list page): see review.py
 - Per user, never in a repo: ~/.config/dirai/ with the owner key (key), the "Always allow"
-  grants (permissions.json), the list of trees DirAI has started (trees), and PAGES.md, a link to
-  this checkout's PAGES.md that trees' CLAUDE.md import (`DirAI init|start` keep it current).
+  grants (permissions.json), the list of trees DirAI has started (trees), and AGENT_RULE.md, a link to
+  this checkout's AGENT_RULE.md that trees' CLAUDE.md import (`DirAI init|start` keep it current).
 """
 import json
 import os

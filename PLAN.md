@@ -1,6 +1,6 @@
 # Plan: agent rules, the summary card, shared CSS
 
-Status: draft, round 2 (questions 1, 2, 3, 6 decided). No code has changed yet, except step 0.
+Status: final; all questions decided. Implementation in progress.
 
 ## 0. Revert the `.md` viewer: done
 
@@ -151,11 +151,6 @@ the CSS commit, so the screenshot test covers a real page.
 | 1 | Card fields | Objective, Inputs, Outputs, Result, Open, Updated |
 | 2 | Which are required | All six (`none` when nothing applies) |
 | 3 | Placement | Collapsible `<details>`, open on load |
+| 4 | Card missing after a run | Automatic fix: one follow-up message in the same session, then flag |
+| 5 | `page.css` on pages with their own `<style>` | Skip them |
 | 6 | Tutorial `index.html` | Convert to `page.css` + card |
-
-## Still open
-
-4. **Automatic fix vs. flag only (2c layer 3).** See the explanation in chat; recommendation:
-   automatic fix, once per run.
-5. **`page.css` on pages that already have their own `<style>`.** See the explanation in chat;
-   recommendation: skip them.

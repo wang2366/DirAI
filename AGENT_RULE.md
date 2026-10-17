@@ -1,11 +1,11 @@
-# HTML page conventions
+# Rules for page agents
 
 For trees served by DirAI (a git repo where `DirAI` was run at the top): results and write-ups
 are HTML pages, one per folder, `<folder>/index.html`, anywhere in the tree. DirAI serves them
 and lists every one on the tree's `www/index.html`.
 
 To apply these rules to every Claude session in the tree, the tree's root `CLAUDE.md` has the
-line  `@~/.config/dirai/PAGES.md`  (`DirAI init` adds it; that path is a link DirAI keeps pointing
+line  `@~/.config/dirai/AGENT_RULE.md`  (`DirAI init` adds it; that path is a link DirAI keeps pointing
 at this file; chat-with-Claude runs started from a page get them directly).
 
 - **Every figure names its plotting script.** Put a caption or line next to each image with the

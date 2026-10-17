@@ -21,12 +21,15 @@ set -uo pipefail
 TOOL=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 CONFIG_DIR=${DIRAI_CONFIG_DIR:-$HOME/.config/dirai}
 TREES_FILE=$CONFIG_DIR/trees
-# CLAUDE.md imports the page rules from this fixed path, a link to this checkout's PAGES.md, so the
+# CLAUDE.md imports the page rules from this fixed path, a link to this checkout's AGENT_RULE.md, so the
 # committed import line is the same on every machine wherever DirAI was cloned (kept fixed even
 # when DIRAI_CONFIG_DIR is set, since the import line can't follow it)
-PAGES_LINK=$HOME/.config/dirai/PAGES.md
-PAGES_IMPORT='@~/.config/dirai/PAGES.md'
-OLD_IMPORT='@~/DirAI/PAGES.md'
+RULE_LINK=$HOME/.config/dirai/AGENT_RULE.md
+RULE_IMPORT='@~/.config/dirai/AGENT_RULE.md'
+# import lines of earlier versions, rewritten to RULE_IMPORT (the file was PAGES.md, and before
+# that DirAI had to live in ~/DirAI); the old link is kept too, for trees not started since
+OLD_IMPORTS=('@~/DirAI/PAGES.md' '@~/.config/dirai/PAGES.md')
+OLD_LINK=$HOME/.config/dirai/PAGES.md
 SSH="ssh -o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=10"
 
 if [[ "${1:-}" == -C ]]; then cd "${2:?-C needs a directory}" || exit 1; shift 2; fi
@@ -95,9 +98,21 @@ port_busy() {   # port_busy NODE PORT: something on NODE already accepts connect
     run_on "$1" "python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(s.connect_ex((\"127.0.0.1\", $2)) != 0)'"
 }
 
+update_import() {   # rewrite an earlier version's import line in the tree's CLAUDE.md
+    local md=$ROOT/CLAUDE.md old
+    for old in "${OLD_IMPORTS[@]}"; do
+        if grep -qxF "$old" "$md" 2>/dev/null; then
+            sed "s|^$old\$|$RULE_IMPORT|" "$md" > "$md.tmp" && cat "$md.tmp" > "$md" && rm -f "$md.tmp"
+            echo "Changed $old to $RULE_IMPORT in CLAUDE.md"
+        fi
+    done
+}
+
 register() {
-    mkdir -p "$CONFIG_DIR" "$(dirname "$PAGES_LINK")"
-    ln -sfn "$TOOL/PAGES.md" "$PAGES_LINK"   # repoint it if this checkout moved
+    mkdir -p "$CONFIG_DIR" "$(dirname "$RULE_LINK")"
+    ln -sfn "$TOOL/AGENT_RULE.md" "$RULE_LINK"   # repoint it if this checkout moved
+    ln -sfn "$TOOL/AGENT_RULE.md" "$OLD_LINK"
+    update_import
     grep -qxF "$ROOT" "$TREES_FILE" 2>/dev/null || echo "$ROOT" >> "$TREES_FILE"
 }
 
@@ -217,21 +232,19 @@ init() {
     done
     [[ $added == 1 ]] && echo "Added DirAI's generated files to .gitignore"
     local md=$ROOT/CLAUDE.md ans
-    if grep -qxF "$OLD_IMPORT" "$md" 2>/dev/null; then   # trees set up when DirAI had to live in ~/DirAI
-        sed "s|^$OLD_IMPORT\$|$PAGES_IMPORT|" "$md" > "$md.tmp" && cat "$md.tmp" > "$md" && rm -f "$md.tmp"
-        echo "Changed $OLD_IMPORT to $PAGES_IMPORT in CLAUDE.md"
-    elif ! grep -qxF "$PAGES_IMPORT" "$md" 2>/dev/null; then
+    update_import
+    if ! grep -qxF "$RULE_IMPORT" "$md" 2>/dev/null; then
         # outside git, CLAUDE.md here reaches every project below (e.g. all of ~/work): ask first
         ans=y
         if [[ $IS_GIT == 0 ]]; then
             ans=n
-            [[ -t 0 ]] && read -r -p "Add $PAGES_IMPORT to $md? It applies the page rules to every Claude session under $ROOT. [y/N] " ans
+            [[ -t 0 ]] && read -r -p "Add $RULE_IMPORT to $md? It applies the page rules to every Claude session under $ROOT. [y/N] " ans
         fi
         if [[ $ans == [yY]* ]]; then
-            printf '\n%s\n' "$PAGES_IMPORT" >> "$md"
-            echo "Added $PAGES_IMPORT to CLAUDE.md (page conventions for Claude sessions)"
+            printf '\n%s\n' "$RULE_IMPORT" >> "$md"
+            echo "Added $RULE_IMPORT to CLAUDE.md (page conventions for Claude sessions)"
         else
-            echo "Left CLAUDE.md alone (page assistants get the rules anyway; to add them for your own sessions: echo '$PAGES_IMPORT' >> $md)"
+            echo "Left CLAUDE.md alone (page assistants get the rules anyway; to add them for your own sessions: echo '$RULE_IMPORT' >> $md)"
         fi
     fi
     register

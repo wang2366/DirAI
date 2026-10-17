@@ -104,7 +104,7 @@ DirAI init           <span class="c"># once: picks a free port, writes www/dirai
 DirAI start          <span class="c"># starts the server and waits until it answers</span></code></pre>
 <p><code>init</code> creates <code>www/</code> in the tree for DirAI's own files (the list page, chat threads,
 caches, logs). In a git repo it also adds those files to <code>.gitignore</code> and adds the line
-<code>@~/.config/dirai/PAGES.md</code> to <code>CLAUDE.md</code>, so your own Claude sessions in the repo
+<code>@~/.config/dirai/AGENT_RULE.md</code> to <code>CLAUDE.md</code>, so your own Claude sessions in the repo
 follow the <a href="#pages">page rules</a> too. Outside git it asks before touching <code>CLAUDE.md</code>,
 since that file would apply to every project below.</p>
 <p>Afterwards, every <code>DirAI</code> command works from any folder below the tree: it finds the
@@ -181,7 +181,7 @@ the results.</p>
 
 <h2 id="pages">8. Writing pages</h2>
 <p>Pages are plain HTML, written by you or by Claude. The page rules
-(<code>PAGES.md</code> in the DirAI checkout, given to every assistant run):</p>
+(<code>AGENT_RULE.md</code> in the DirAI checkout, given to every assistant run):</p>
 <ul>
   <li><b>Every figure names its plotting script</b>, as a caption with its path relative to the page folder,
       e.g. <code>Script: analysis/plot_rate.sh</code>. Ideally <code>foo.png</code> comes from
@@ -245,7 +245,7 @@ different port (<code>DirAI init</code> picks one that's free; <code>start</code
 <tr><td><code>exclude</code></td><td>Folders the page list skips: a name skips it anywhere, a path with a slash skips that one folder.</td></tr>
 </table></div>
 <p>Per user, in <code>~/.config/dirai/</code>: the owner <code>key</code>, the "Always allow" rules
-(<code>permissions.json</code>), the list of trees (<code>trees</code>) and the <code>PAGES.md</code> link.</p>
+(<code>permissions.json</code>), the list of trees (<code>trees</code>) and the <code>AGENT_RULE.md</code> link.</p>
 
 <h2 id="commands">12. Command reference</h2>
 <div class="tbl"><table>
