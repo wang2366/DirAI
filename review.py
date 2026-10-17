@@ -186,7 +186,6 @@ STARTER_PAGE = """<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
-<style>body {{ font-family: system-ui, sans-serif; max-width: 56rem; margin: 2rem auto; padding: 0 16px; }}</style>
 </head>
 <body>
 <h1>{title}</h1>

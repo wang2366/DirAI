@@ -4,52 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DirAI tutorial</title>
-<style>
-  :root {
-    --bg: #fbfbf9; --fg: #1d1d1f; --muted: #5f6368; --line: #e3e3de; --card: #ffffff;
-    --code-bg: #f2f2ee; --accent: #2f6fdb; --warn-bg: #fff6e0; --warn-line: #e8c46a;
-    --tip-bg: #eaf4ee; --tip-line: #7fbf96;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --bg: #161618; --fg: #e8e8e6; --muted: #a0a0a6; --line: #2f2f33; --card: #1e1e21;
-      --code-bg: #26262a; --accent: #7aa7ff; --warn-bg: #2e2716; --warn-line: #8a6d24;
-      --tip-bg: #17271d; --tip-line: #3f7a53;
-    }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--fg);
-         font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 52rem; margin: 0 auto; padding: 2.5rem 16px 6rem; }
-  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 .4rem; }
-  h2 { font-size: 1.35rem; margin: 2.8rem 0 .6rem; padding-top: .6rem; border-top: 1px solid var(--line); }
-  h3 { font-size: 1.05rem; margin: 1.6rem 0 .4rem; }
-  p, li { max-width: 46rem; }
-  a { color: var(--accent); }
-  .lede { color: var(--muted); font-size: 1.08rem; margin: 0 0 1.5rem; }
-  code { font: .9em ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg);
-         padding: .1em .35em; border-radius: 4px; }
-  pre { background: var(--code-bg); padding: .85rem 1rem; border-radius: 8px; overflow-x: auto;
-        font: .88rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
-  pre code { background: none; padding: 0; }
-  .c { color: var(--muted); }
-  nav.toc { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: .8rem 1.2rem; }
-  nav.toc ol { margin: .3rem 0; padding-left: 1.3rem; columns: 2 16rem; }
-  nav.toc li { margin: .1rem 0; }
-  .note { border-left: 4px solid var(--tip-line); background: var(--tip-bg); padding: .6rem 1rem;
-          border-radius: 0 8px 8px 0; margin: 1rem 0; }
-  .warn { border-left-color: var(--warn-line); background: var(--warn-bg); }
-  table { border-collapse: collapse; width: 100%; margin: .8rem 0; font-size: .95rem; }
-  th, td { text-align: left; vertical-align: top; padding: .45rem .6rem; border-bottom: 1px solid var(--line); }
-  th { font-weight: 600; }
-  .tbl { overflow-x: auto; }
-  .flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: .6rem; margin: 1rem 0; }
-  .flow div { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: .7rem .8rem; }
-  .flow b { display: block; }
-  .flow span { color: var(--muted); font-size: .9rem; }
-  kbd { font: .85em ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-bottom-width: 2px;
-        border-radius: 4px; padding: 0 .3em; background: var(--card); }
-</style>
 </head>
 <body>
 <main>
@@ -57,6 +11,21 @@
 <h1>DirAI tutorial</h1>
 <p class="lede">Serve a folder of HTML result pages in your browser, with a Claude Code assistant on every
 page that can edit the page, rerun its scripts and submit SLURM jobs for you.</p>
+
+<!-- dirai:card -->
+<details id="dirai-card" open>
+  <summary>Summary</summary>
+  <dl>
+    <dt>Objective</dt> <dd>Teach how to install DirAI, serve a tree of pages, and work with the assistant on each page.</dd>
+    <dt>Inputs</dt>    <dd>The DirAI checkout: <code>README.md</code>, <code>AGENT_RULE.md</code>, <code>bin/DirAI</code>.</dd>
+    <dt>Outputs</dt>   <dd>This page.</dd>
+    <dt>Result</dt>    <dd>Covers install, tree setup, opening pages, the page list, the assistant panel, New agent,
+                           page rules, permissions, clusters, settings, commands and troubleshooting.</dd>
+    <dt>Open</dt>      <dd>none</dd>
+    <dt>Updated</dt>   <dd>2026-10-17</dd>
+  </dl>
+</details>
+<!-- /dirai:card -->
 
 <nav class="toc"><b>Contents</b>
 <ol>
@@ -191,6 +160,10 @@ the results.</p>
   <li>Reference images by relative path. The server only serves <code>.html</code> and images
       (<code>.png .jpg .jpeg .gif .svg .webp</code>); everything else is 404.</li>
   <li>No "Home" link needed: the server adds one to every page.</li>
+  <li><b>No CSS in pages.</b> A page without a <code>&lt;style&gt;</code> gets the shared <code>page.css</code>
+      from the server; use plain HTML and its classes (<code>.note</code>, <code>.note warn</code>,
+      <code>.tbl</code>, <code>figure</code> + <code>figcaption</code>). Pages that keep their own
+      <code>&lt;style&gt;</code> are left as they are.</li>
 </ul>
 
 <h2 id="access">9. What the assistant may do</h2>

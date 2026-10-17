@@ -8,6 +8,8 @@ resolve outside ROOT (e.g. through symlinks) are refused.
 
 The owner (connecting through the SSH tunnel, with the review key cookie) also gets a
 review panel on every index.html and the /_review/* API; see review.py.
+
+Pages with no <style> of their own get the shared page.css (/_dirai/page.css), linked first in <head>.
 """
 import http.server
 import io
@@ -46,6 +48,8 @@ HOME_BUTTON = ('<a href="/www/index.html" title="All pages" style="position:fixe
 KEY = review.login_key()
 NEWAGENT_TAG = ('<script src="/_review/newagent.js" data-base="%s" data-root="'
                 + ROOT.replace("&", "&amp;").replace('"', "&quot;") + '"></script>')
+PAGE_CSS = os.path.join(WWW_DIR, "page.css")
+PAGE_CSS_TAG = b'<link rel="stylesheet" href="/_dirai/page.css">'
 HOUSEKEEP_S = 600     # see housekeeping()
 REPEAT_CHECK_S = 60   # how often repeated messages (review.REPEATS) are checked for being due
 NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+-]*$")   # no leading dot: no "..", no hidden folders
@@ -125,6 +129,16 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
         url = urlparse(self.path)
         if url.path.startswith("/_review/"):
             return self.review_get(url)
+        if url.path == "/_dirai/page.css":     # every visitor: it styles every page
+            with open(PAGE_CSS, "rb") as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/css; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         return super().do_GET()
 
     def do_POST(self):
@@ -279,6 +293,10 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
         tag = tag.encode()
         i = html.lower().rfind(b"</body>")
         html = html[:i] + tag + html[i:] if i >= 0 else html + tag
+        if path != LIST_PAGE and not re.search(rb"<style[\s>]", html, re.I):   # shared style, first in <head>
+            m = re.search(rb"<head(?:\s[^>]*)?>", html, re.I)
+            j = m.end() if m else 0
+            html = html[:j] + PAGE_CSS_TAG + html[j:]
         if path != LIST_PAGE:   # todo + job status bar at the top of the page
             page = os.path.relpath(os.path.dirname(path), ROOT)
             # "Working on" quotes the owner's chat message: owner only

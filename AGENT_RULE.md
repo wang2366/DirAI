@@ -23,4 +23,10 @@ at this file; chat-with-Claude runs started from a page get them directly).
 - Reference images and other files by relative path inside the tree; the server only serves
   `.html` and image files (`.png .jpg .jpeg .gif .svg .webp`).
 - Don't add your own "Home"/back-to-list link: the server adds a Home button to every page.
+- **No CSS in pages.** Don't write a `<style>` block or `style=` attributes: the server links the
+  shared `page.css` into every page without a `<style>`. Use plain HTML and its classes:
+  `<div class="note">` (or `class="note warn"`) for callouts, `<div class="tbl">` around a wide
+  table, `<figure>` + `<figcaption>` for a figure and its "Script: …" line, `<p class="lede">` for
+  the line under the title. When you edit a page that has its own `<style>`, remove it if the page
+  reads fine without it.
 - Write absolute paths without `..` in commands.
