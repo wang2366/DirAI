@@ -147,7 +147,7 @@ You can read {scope} (this page's own area) and the folders granted to you; othe
 tree are off limits until the owner names them in a comment or allows a blocked read, so if the
 work needs one, say which and why in your reply.
 Follow the page conventions below (from {pages_md_path}); in particular, keep the page's summary
-card current, keep this folder's todo.md current, and give every figure its script path. To learn
+card current (its Open field lists what is unfinished), and give every figure its script path. To learn
 what another page found, run "python3 {card_py} <its folder>" instead of reading its index.html.
 {git}To delete files or folders, run "{page_rm} <path>...": it works only inside this page folder and
 deletes immediately, no trash (plain rm -r / rm -rf stay blocked).
@@ -226,7 +226,7 @@ def fresh_prompt(thread, text, keep=6, limit=1500):
                                              ("..." if len(m["text"]) > limit else ""))
                           for m in recent)
     return ("This is a fresh session on a page that already has history. Before acting, read this "
-            "folder's index.html and todo.md; the last messages of the earlier conversation follow "
+            "folder's index.html (its summary card first); the last messages of the earlier conversation follow "
             "for context.\n\n--- earlier messages ---\n%s\n--- end ---\n\nNew message:\n%s" % (quoted, text))
 
 
@@ -814,7 +814,7 @@ class Reviews:
         for page, rep in due:
             prompt = ("(Scheduled run: the owner set this message to be sent every %s. This is a fresh "
                       "session with no earlier conversation: before acting, read this folder's index.html "
-                      "and todo.md for the page's current state, including what earlier runs found. The "
+                      "(its summary card first) for the page's current state, including what earlier runs found. The "
                       "page is the only memory between runs, so record this run's result on it with the "
                       "date and time, next to the earlier runs' results rather than over them, so the "
                       "next run can compare.)\n\n%s" % (rep["every"], rep["text"]))
@@ -1439,7 +1439,7 @@ class Reviews:
                 st["working_on"], st["started"] = "Check the finished SLURM jobs %s" % ", ".join(ids), None
                 text = ("(Automatic message from the DirAI server, not the owner.) The SLURM jobs you were "
                         "waiting on have left the queue:\n%s\n\nCheck their output and logs, update the page "
-                        "and todo.md with the results, and reply with a short summary. If you submit new "
+                        "and its summary card with the results, and reply with a short summary. If you submit new "
                         "jobs, end your reply; you will be messaged again when they finish." % report)
                 prompt = text if st.get("session_id") or not st["thread"] else fresh_prompt(st["thread"], text)
                 self._save(data)

@@ -1,9 +1,6 @@
-"""Status bar html_server.py puts at the top of every page: the page's open todo items
-(from todo.md in its folder) and the owner's SLURM jobs whose working directory is
-inside that folder.
-
-todo.md format: one item per line, "- [ ] open item" or "- [x] done item" (done items
-are not shown); plain "- item" lines count as open.
+"""Status bar html_server.py puts at the top of every page: what the assistant is working on and
+the owner's SLURM jobs whose working directory is inside that folder (open items are in the page's
+summary card).
 """
 import html
 import os
@@ -125,20 +122,6 @@ def job_report(ids):
     return "\n".join(lines) or "(sacct had no record of jobs %s)" % ", ".join(ids)
 
 
-def open_todos(page_dir):
-    try:
-        with open(os.path.join(page_dir, "todo.md"), encoding="utf-8", errors="replace") as f:
-            lines = f.read().splitlines()
-    except OSError:
-        return None
-    items = []
-    for line in lines:
-        m = re.match(r"\s*[-*]\s+(\[( |x|X)\]\s+)?(.*\S)", line)
-        if m and (m.group(2) or " ") == " ":
-            items.append(m.group(3))
-    return items
-
-
 def working_html(work):
     what, started, until, reason = work
     what = what if len(what) <= 300 else what[:300] + "..."
@@ -157,13 +140,9 @@ def working_html(work):
 
 def bar(page_dir, work=None):
     """HTML for the status bar of the page in page_dir (work = Reviews.working(page) or None): what
-    the assistant is working on, the open todo items and the SLURM jobs, each only when there is
-    one; "" when there is nothing (the page's summary card says what is open)."""
+    the assistant is working on and the SLURM jobs, each only when there is one; "" when there is
+    neither (the page's summary card says what is open)."""
     parts = [working_html(work)] if work else []
-    todos = open_todos(page_dir)
-    if todos:
-        parts.append("<div><b>Remaining todo:</b><ol style=\"margin:2px 0 0;padding-left:22px\">%s</ol></div>"
-                     % "".join("<li>%s</li>" % html.escape(t) for t in todos))
     js = page_jobs(page_dir)
     if js:
         parts.append("<div><b>Jobs in the queue:</b><ul style=\"margin:2px 0 0;padding-left:22px\">%s</ul></div>" % "".join(

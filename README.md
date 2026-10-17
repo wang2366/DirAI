@@ -20,7 +20,7 @@ its panel (or in the New agent form) and give the message. The first run is one 
 (New agent also runs it right away), later ones keep that time of day. A run that comes due while
 the page is busy or waiting on jobs goes when it is free; one missed while the server was down is
 sent once on restart. Each scheduled run starts a fresh session, without the earlier conversation:
-it reads the page's `index.html` and `todo.md` first. A message you send afterwards continues that
+it reads the page's `index.html` (its summary card first). A message you send afterwards continues that
 run's session. The page is the memory between runs, so each run records its result there
 with the date. Thread entries older than a week are dropped from the panel (each page keeps at
 least its last 6).

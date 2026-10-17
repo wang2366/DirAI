@@ -297,7 +297,7 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
             m = re.search(rb"<head(?:\s[^>]*)?>", html, re.I)
             j = m.end() if m else 0
             html = html[:j] + PAGE_CSS_TAG + html[j:]
-        if path != LIST_PAGE:   # todo + job status bar at the top of the page
+        if path != LIST_PAGE:   # work + job status bar at the top of the page
             page = os.path.relpath(os.path.dirname(path), ROOT)
             # "Working on" quotes the owner's chat message: owner only
             work = REVIEWS.working("" if page == "." else page) if owner else None

@@ -119,8 +119,8 @@ agent is created; <code>DirAI build</code> rebuilds it now.</p>
 <h2 id="panel">6. The AI assistant panel</h2>
 <p>Open any page and click <b>AI assistant</b> (bottom right). Type a message and press <b>Send</b>.
 The panel shows the thread; the reply arrives when the run ends. While there is something to show, a page also gets a status bar at
-the top: what the assistant is working on, the open items from the folder's <code>todo.md</code>, and
-your SLURM jobs running there. With none of these, there is no bar.</p>
+the top: what the assistant is working on and your SLURM jobs running there. With neither, there is no
+bar; the summary card's Open field says what is unfinished.</p>
 <div class="tbl"><table>
 <tr><th>Control</th><th>What it does</th></tr>
 <tr><td><b>Ask AI about this</b></td><td>Select text on the page and click it: your message is sent with that
@@ -131,7 +131,7 @@ than Opus; the local gpt-oss models (via Ollama) use none but are slower.</td></
 <tr><td><b>Mark read</b> / <b>TaskDone</b></td><td>Clear the unread badge / close the thread. A new message reopens it.</td></tr>
 <tr><td><b>Compact</b></td><td>Summarize the conversation (Claude Code <code>/compact</code>) when the context gets large;
 the session continues with fewer tokens per message. The panel warns when it's time.</td></tr>
-<tr><td><b>New chat</b></td><td>Next message starts a fresh session that re-reads the page, <code>todo.md</code> and the last few messages.</td></tr>
+<tr><td><b>New chat</b></td><td>Next message starts a fresh session that re-reads the page and the last few messages.</td></tr>
 <tr><td><b>Allow once</b> / <b>Always allow</b></td><td>Shown when Claude was blocked from something. See <a href="#access">access</a>.</td></tr>
 </table></div>
 <h3>Long jobs</h3>
@@ -163,8 +163,8 @@ the results.</p>
   <li><b>Every figure names its plotting script</b>, as a caption with its path relative to the page folder,
       e.g. <code>Script: analysis/plot_rate.sh</code>. Ideally <code>foo.png</code> comes from
       <code>foo.sh</code> or <code>foo.py</code>.</li>
-  <li><b>Keep <code>todo.md</code> current</b>: <code>- [ ] open item</code> / <code>- [x] done item</code>.
-      Open items show in the page's status bar.</li>
+  <li><b>Open items go in the card's Open field</b>: what is unfinished or still running. There is no
+      separate <code>todo.md</code>.</li>
   <li>Reference images by relative path. The server only serves <code>.html</code> and images
       (<code>.png .jpg .jpeg .gif .svg .webp</code>); everything else is 404.</li>
   <li>No "Home" link needed: the server adds one to every page.</li>
