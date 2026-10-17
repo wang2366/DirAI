@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Serve only HTML pages and the images they use under a directory; everything else is 404.
-Markdown files (.md) are shown to the owner only, rendered in the browser (see MD_PAGE).
 
 Usage: html_server.py ROOT PORT [BIND_ADDR]    (BIND_ADDR defaults to 0.0.0.0)
 
@@ -47,64 +46,6 @@ HOME_BUTTON = ('<a href="/www/index.html" title="All pages" style="position:fixe
 KEY = review.login_key()
 NEWAGENT_TAG = ('<script src="/_review/newagent.js" data-base="%s" data-root="'
                 + ROOT.replace("&", "&amp;").replace('"', "&quot;") + '"></script>')
-# A .md file is sent inside this page and rendered by the browser: marked for the markdown, KaTeX
-# for $...$ / $$...$$ math (taken out before marked so it can't mangle them), mermaid for ```mermaid
-# blocks. No Python dependency; the viewer's browser loads the libraries from the CDN.
-MD_PAGE = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>%(title)s</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
-<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
-<style>
-  :root { --bg: #fbfbf9; --fg: #1d1d1f; --line: #e3e3de; --code-bg: #f2f2ee; --accent: #2f6fdb; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #161618; --fg: #e8e8e6; --line: #2f2f33; --code-bg: #26262a; --accent: #7aa7ff; }
-  }
-  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 system-ui, sans-serif; }
-  main { max-width: 56rem; margin: 0 auto; padding: 2rem 16px 6rem; }
-  a { color: var(--accent); }
-  img { max-width: 100%%; }
-  code { font: .9em ui-monospace, Menlo, monospace; background: var(--code-bg); padding: .1em .3em; border-radius: 4px; }
-  pre { background: var(--code-bg); padding: .8rem 1rem; border-radius: 8px; overflow-x: auto; }
-  pre code { background: none; padding: 0; }
-  pre.mermaid { background: none; }
-  table { border-collapse: collapse; display: block; overflow-x: auto; }
-  th, td { border: 1px solid var(--line); padding: .35rem .6rem; text-align: left; }
-  blockquote { margin: 1rem 0; padding: .2rem 1rem; border-left: 4px solid var(--line); }
-  .katex-display { overflow-x: auto; overflow-y: hidden; }
-</style></head>
-<body><main id="md"></main>
-<script type="application/json" id="md-src">%(src)s</script>
-<script>
-(function () {
-  var src = JSON.parse(document.getElementById("md-src").textContent), out = document.getElementById("md");
-  if (!window.marked) { out.innerHTML = "<pre></pre>"; out.firstChild.textContent = src; return; }
-  var math = [];   // code spans/blocks are kept as they are; math outside them becomes a placeholder
-  src = src.replace(/(```[\\s\\S]*?```|`[^`\\n]*`)|\\$\\$([\\s\\S]+?)\\$\\$|\\$([^\\s$](?:[^$\\n]*?[^\\s$])?)\\$/g,
-    function (m, code, block, inline) {
-      if (code) return code;
-      math.push([block != null ? block : inline, block != null]);
-      return "MDMATH" + (math.length - 1) + "X";
-    });
-  var html = marked.parse(src).replace(/MDMATH(\\d+)X/g, function (m, i) {
-    var t = math[i];
-    if (!window.katex) return t[1] ? "$$" + t[0] + "$$" : "$" + t[0] + "$";
-    return katex.renderToString(t[0], {displayMode: t[1], throwOnError: false});
-  });
-  out.innerHTML = html;
-  var blocks = out.querySelectorAll("pre > code.language-mermaid");
-  if (blocks.length && window.mermaid) {
-    blocks.forEach(function (c) { var p = c.parentNode; p.className = "mermaid"; p.textContent = c.textContent; });
-    var dark = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches;
-    mermaid.initialize({startOnLoad: false, theme: dark ? "dark" : "default"});
-    mermaid.run({querySelector: "pre.mermaid"});
-  }
-})();
-</script>
-</body></html>
-"""
 HOUSEKEEP_S = 600     # see housekeeping()
 REPEAT_CHECK_S = 60   # how often repeated messages (review.REPEATS) are checked for being due
 NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+-]*$")   # no leading dot: no "..", no hidden folders
@@ -311,12 +252,7 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
         if os.path.isdir(path):
             if not self.path.split("?", 1)[0].endswith("/"):
                 return super().send_head()          # redirects to the trailing-slash URL
-            md = os.path.join(path, "index.md")
             path = os.path.join(path, "index.html")
-            if not os.path.isfile(path) and os.path.isfile(md):
-                path = md
-        if path.lower().endswith(".md") and os.path.isfile(path):
-            return self.send_markdown(path) if self.is_owner() else self.send_error(404)
         if not path.lower().endswith(ALLOWED_EXT) or not os.path.isfile(path):
             self.send_error(404)
             return None
@@ -351,16 +287,6 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
             m = re.search(rb"<body[^>]*>", html, re.I)
             j = m.end() if m else 0
             html = html[:j] + status + html[j:]
-        self.send_html_headers(len(html))
-        return io.BytesIO(html)
-
-    def send_markdown(self, path):
-        """A .md file rendered in the browser (MD_PAGE), plus the Home button."""
-        with open(path, encoding="utf-8", errors="replace") as f:
-            src = f.read()
-        title = os.path.relpath(path, ROOT).replace("&", "&amp;").replace("<", "&lt;")
-        src = json.dumps(src).replace("</", "<\\/")   # can't end the <script> holding it
-        html = (MD_PAGE % {"title": title, "src": src}).replace("</body>", HOME_BUTTON + "</body>").encode()
         self.send_html_headers(len(html))
         return io.BytesIO(html)
 

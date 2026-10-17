@@ -21,8 +21,6 @@ at this file; chat-with-Claude runs started from a page get them directly).
   work runs jobs in other folders, e.g. a test sweep in another checkout, put those folders in
   the page folder's `job_dirs.txt`, one absolute path per line.
 - Reference images and other files by relative path inside the tree; the server only serves
-  `.html` and image files (`.png .jpg .jpeg .gif .svg .webp`), plus `.md` files to the owner,
-  rendered in the browser (`$...$`/`$$...$$` math with KaTeX, ```` ```mermaid ```` diagrams).
-  The page itself stays `index.html`; a `.md` copy is for reading, not a replacement.
+  `.html` and image files (`.png .jpg .jpeg .gif .svg .webp`).
 - Don't add your own "Home"/back-to-list link: the server adds a Home button to every page.
 - Write absolute paths without `..` in commands.
