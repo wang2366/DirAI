@@ -108,5 +108,6 @@ The owner's MCP servers (user scope, local scope of the page's folder or one abo
 `.mcp.json` files there) are passed to every run with `--mcp-config` (`--restricted` would ignore
 `~/.claude.json`); their tools are not pre-allowed, so each call needs a grant or your answer.
 claude.ai connectors (Gmail, Drive, ...) can't be passed this way.
-New tasks pause at 95 % of Claude's 5-hour limit or 98 % of the weekly limit and resume after the
+New tasks pause when Claude's 5-hour or weekly usage reaches its stop level (100 % unless you drag
+the marker on that usage bar of the list page lower; the levels apply to all your trees) and resume after the
 reset (`claude_usage.py`).

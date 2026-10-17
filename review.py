@@ -5,8 +5,9 @@ Status per page: working (Claude is running) -> unread (new reply) -> read -> cl
 A new comment reopens a page. When a run hits the Claude usage limit, the page is "queued":
 its message is kept (in reviews.json, so it survives a restart) and sent again, in the same
 session, shortly after the limit resets; no run starts before then. Runs are also held back
-(same "queued" status) while plan usage is at or above claude_usage.SESSION_STOP % of the
-5-hour session limit or WEEKLY_STOP % of the weekly limit, until that limit resets. State for one served root lives in <root>/www/reviews.json.
+(same "queued" status) while plan usage is at or above the owner's stop levels (claude_usage.stops():
+100 % of the 5-hour session and of the weekly limit unless set lower with the list page's sliders),
+until that limit resets. State for one served root lives in <root>/www/reviews.json.
 
 Only the owner can use any of this: requests must come from 127.0.0.1 (the SSH tunnel
 lands on this node's loopback) and carry the secret key cookie (see login_key()).
@@ -1206,6 +1207,14 @@ class Reviews:
     @staticmethod
     def _model(data, page):
         return (data.get(page) or {}).get("model") or DEFAULT_MODEL
+
+    def recheck_hold(self):
+        """The owner moved a usage stop level: drop a wait that came from the old level (not one
+        from Claude actually refusing) and let the queue start again if usage allows."""
+        with self.lock:
+            if self.hold_until > time.time() and self.hold_reason.startswith("Claude usage at"):
+                self.hold_until, self.hold_reason = 0, ""
+        self._pump()
 
     def _hold_queue(self):
         """Mark every queued message as waiting for the usage limit; caller holds the lock."""

@@ -161,6 +161,11 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
                 return self.send_json({"error": "The assistant is already working on %s/." % rel})
             threading.Thread(target=rebuild_list, daemon=True).start()
             return self.send_json({"ok": True, "url": "/%s/" % rel})
+        if action == "usage_stop":    # list page slider: pause new runs at this % (all trees)
+            if not claude_usage.set_stop(body.get("name"), body.get("percent")):
+                return self.send_json({"error": "bad level"})
+            REVIEWS.recheck_hold()
+            return self.send_json({"ok": True, "stop": claude_usage.stops()})
         if action == "permissions":   # tree-wide, from the list page: "allowlist" or "ask"
             ok = REVIEWS.set_permissions(body.get("mode"))
             return self.send_json({"ok": True} if ok else {"error": "unknown mode"})

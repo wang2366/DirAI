@@ -140,7 +140,9 @@ The page stays "working" while DirAI checks the queue every 10 minutes (no token
 are done, DirAI sends Claude their results so it can update the page. You can still comment meanwhile;
 at most 5 automatic messages run in a row before it waits for you.</p>
 <h3>Usage limits</h3>
-<p>New runs pause at 95% of Claude's 5-hour limit or 98% of the weekly limit, and resume after the reset.
+<p>New runs pause when Claude's 5-hour or weekly usage reaches its stop level, and resume after the reset.
+The levels start at 100%; drag the marker on a usage bar of the list page to pause earlier (they apply
+to all your trees).
 A run cut off by the limit is resent automatically, in the same session, once the limit resets.</p>
 
 <h2 id="newagent">7. New agent: start a new page</h2>

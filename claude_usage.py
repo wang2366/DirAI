@@ -24,8 +24,10 @@ URL = "https://api.anthropic.com/api/oauth/usage"
 CACHE_S = 60                # ask at most once a minute, across all DirAI servers (shared file)
 BACKOFF_S = 300             # after a refused request (e.g. 429), wait this long before asking again
 SHARED = os.path.join(os.path.expanduser(os.environ.get("DIRAI_CONFIG_DIR", "~/.config/dirai")), "usage.json")
-SESSION_STOP = 95           # no new runs at or above this % of the 5-hour session limit
-WEEKLY_STOP = 98            # ... or this % of the weekly limit
+STOPS = os.path.join(os.path.dirname(SHARED), "usage_stop.json")
+# no new runs at or above this % of the 5-hour session limit / of the weekly limit, unless the
+# owner set other levels (the sliders on the list page, saved in STOPS for all their trees)
+DEFAULT_STOP = {"session": 100, "weekly": 100}
 RESUME_MARGIN_S = 120       # start again this long after the limit resets
 
 _lock = threading.Lock()
@@ -94,6 +96,36 @@ def _write_shared(u):
         pass
 
 
+def stops():
+    """{"session": %, "weekly": %}: where new runs wait (DEFAULT_STOP unless the owner set them)."""
+    out = dict(DEFAULT_STOP)
+    try:
+        with open(STOPS) as f:
+            saved = json.load(f)
+        out.update((k, int(v)) for k, v in saved.items() if k in out and 1 <= int(v) <= 100)
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return out
+
+
+def set_stop(name, percent):
+    """Save one stop level (1-100); False if name or percent is invalid."""
+    try:
+        percent = int(percent)
+    except (TypeError, ValueError):
+        return False
+    if name not in DEFAULT_STOP or not 1 <= percent <= 100:
+        return False
+    with _lock:
+        cur = stops()
+        cur[name] = percent
+        os.makedirs(os.path.dirname(STOPS), exist_ok=True)
+        with open(STOPS + ".%d.tmp" % os.getpid(), "w") as f:
+            json.dump(cur, f)
+        os.replace(STOPS + ".%d.tmp" % os.getpid(), STOPS)
+    return True
+
+
 def usage():
     """{"session": {"percent", "resets"}, "weekly": {...}, "checked": epoch, "error": str|None}.
     Every DirAI server on this account shares one reading (SHARED), so they don't each poll the
@@ -104,7 +136,7 @@ def usage():
         u = _read_shared() or _cache["usage"]
         if u and now - u.get("checked", 0) < (BACKOFF_S if u.get("error") else CACHE_S):
             _cache.update(checked=u["checked"], usage=u)
-            return u
+            return dict(u, stop=stops())
         try:
             new = dict(_fetch(), error=None)
         except Exception as e:      # offline, expired token, 429, changed format
@@ -114,18 +146,17 @@ def usage():
             else:
                 new = {"error": err}
         new["checked"] = now
-        new["stop"] = {"session": SESSION_STOP, "weekly": WEEKLY_STOP}
         _cache.update(checked=now, usage=new)
         _write_shared(new)
-        return new
+        return dict(new, stop=stops())
 
 
 def hold():
     """(until, reason) if new runs should wait for a limit to reset, else (0, "")."""
     u = usage()
     until, reason = 0, ""
-    for name, stop, label in (("session", SESSION_STOP, "5-hour session"), ("weekly", WEEKLY_STOP, "weekly")):
-        w = u.get(name)
+    for name, label in (("session", "5-hour session"), ("weekly", "weekly")):
+        w, stop = u.get(name), u["stop"][name]
         if w and w["percent"] >= stop and w.get("resets"):
             t = w["resets"] + RESUME_MARGIN_S
             if t > until:
