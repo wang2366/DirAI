@@ -77,6 +77,16 @@ class AgentsTest(unittest.TestCase):
         self.assertEqual(st["grants"], ["Read(/%s/other/**)" % self.root])
         self.assertTrue(st["pending"].startswith("The owner selected this text in index.html"))
 
+    def test_file_selection_prompt(self):
+        util.write(os.path.join(self.root, "p", "run.sh"), "echo one\necho two\n")
+        self.assertTrue(self.rv.comment("p", "say three", selection={
+            "text": "echo two", "heading": "", "file": "run.sh", "lines": [2, 2]}))
+        self.assertEqual(self.data()["p"]["pending"],
+                         "The owner selected this text in run.sh (source line 2; read just the lines around it "
+                         "unless you need more):\n> echo two\n\nTheir message about it:\nsay three")
+        self.rv.cancel("p")
+        self.assertFalse(self.rv.comment("p", "x", selection={"text": "a", "file": "../x.sh", "lines": [1, 1]}))
+
     def test_new_chat_and_fresh_prompt(self):
         self.assertFalse(self.rv.new_chat("p"))              # no session yet
         self.rv.comment("p", "first")

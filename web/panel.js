@@ -111,6 +111,10 @@
     $("rv-status").className = "rv-pill rv-" + (asking ? "asking" : s);
     $("rv-btn").textContent = "Agent" + (asking ? " ❗" : s === "unread" ? " •" : s === "working" || s === "queued" ? " …" : "");
     if (asking && !render.asking) scrollToEnd = true;   // bring a new prompt into view
+    // a run ended (a new reply, also before any SLURM jobs it left are done): files.js reloads the folder
+    const last = (st.thread.filter(m => m.role === "claude").pop() || {}).time || "";
+    if (render.lastReply !== undefined && last !== render.lastReply) document.dispatchEvent(new Event("dirai:run-done"));
+    render.lastReply = last;
     render.asking = asking;
     const threadKey = JSON.stringify(st.thread);
     if (threadKey !== shownThread) {
@@ -241,8 +245,9 @@
   const sig = el => el.tagName + "|" + (/^(IMG|VIDEO|IFRAME)$/.test(el.tagName) ? el.getAttribute("src")
     : el.tagName === "SVG" || el.tagName === "svg" ? el.outerHTML.length + ":" + el.textContent.slice(0, 200)
     : el.textContent.replace(/\s+/g, " ").trim());
+  // the folder's files (files.js) aren't part of index.html: never compared with it
   const leaves = root => [...root.querySelectorAll(BLOCKS)].filter(el =>
-    !el.closest(SKIP) && !(el.parentElement && el.parentElement.closest("svg")) &&
+    !el.closest(SKIP + ",#dirai-files") && !(el.parentElement && el.parentElement.closest("svg")) &&
     !el.querySelector(BLOCKS) && (el.textContent.trim() || /^(IMG|VIDEO|IFRAME|svg|SVG)$/.test(el.tagName)));
   function highlight() {
     fetch("/_review/prev?agent=" + encodeURIComponent(AGENT)).then(r => r.ok ? r.text() : null).then(old => {
@@ -266,7 +271,7 @@
   let pinned = null;
   const lineCount = t => t.split("\n").filter(l => l.trim()).length;
   function selHtml(sel) {
-    const where = (sel.heading ? ` · near "${esc(sel.heading)}"` : "") +
+    const where = (sel.file ? ` · ${esc(sel.file)}` : "") + (sel.heading ? ` · near "${esc(sel.heading)}"` : "") +
       (sel.lines ? ` · line${sel.lines[0] === sel.lines[1] ? " " + sel.lines[0] : "s " + sel.lines[0] + "–" + sel.lines[1]}` : "");
     return `<details class="rv-sel"><summary>📎 Selected text (${lineCount(sel.text)} line${lineCount(sel.text) === 1 ? "" : "s"})${where}</summary>` +
       `<div class="rv-quote">${esc(sel.text)}</div></details>`;
@@ -277,11 +282,13 @@
     chip.style.display = sel ? "flex" : "none";
     if (!sel) return chip.innerHTML = "";
     chip.innerHTML = `<details><summary>📎 "${esc(sel.text.replace(/\s+/g, " ").slice(0, 70))}${sel.text.length > 70 ? "…" : ""}" ` +
-      `(${lineCount(sel.text)} line${lineCount(sel.text) === 1 ? "" : "s"}${sel.cut ? ", cut to " + SEL_MAX + " characters" : ""})</summary>` +
+      `(${sel.file ? esc(sel.file) + ", " : ""}${lineCount(sel.text)} line${lineCount(sel.text) === 1 ? "" : "s"}${sel.cut ? ", cut to " + SEL_MAX + " characters" : ""})</summary>` +
       `<div class="rv-quote">${esc(sel.text)}</div></details><button id="rv-unsel" title="Don't send the selection">&times;</button>`;
     $("rv-unsel").onclick = () => pin(null);
   }
-  function indexSelection() {   // {text, heading} of a selection in index.html itself, else null
+  // {text, heading} of a selection in index.html, or {text, file, lines} of one in a file of the
+  // folder shown at its end (files.js: every line carries its number); else null
+  function indexSelection() {
     const s = window.getSelection();
     if (!s || s.isCollapsed || !s.rangeCount) return null;
     const r = s.getRangeAt(0), node = n => n.nodeType === 1 ? n : n.parentElement;
@@ -295,6 +302,17 @@
       if (!h.closest(SKIP) && h.compareDocumentPosition(r.startContainer) & Node.DOCUMENT_POSITION_FOLLOWING)
         heading = h.textContent.replace(/\s+/g, " ").trim().slice(0, 200);
     });
+    const line = n => node(n).closest("#dirai-files [data-line]");
+    const first = line(r.startContainer);
+    let last = line(r.endContainer);
+    // a selection that ends at the very start of a line (triple click, dragging to the line's edge) ends on the one before
+    if (last && last !== first && r.endOffset === 0 && last.previousElementSibling) last = last.previousElementSibling;
+    const file = el => el && el.closest("details[data-file]").dataset.file;
+    if (first || last) {
+      if (!first || !last || file(first) !== file(last)) return null;   // half in a file, or across two
+      return {text, heading: "", file: file(first), lines: [+first.dataset.line, +last.dataset.line], cut,
+              rect: r.getBoundingClientRect()};
+    }
     return {text, heading, cut, rect: r.getBoundingClientRect()};
   }
   function onSelect() {

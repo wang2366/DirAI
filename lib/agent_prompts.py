@@ -167,8 +167,9 @@ def selection_prompt(sel, text):
         where.append("source line%s %s; read just the lines around %s unless you need more"
                      % ("" if a == b else "s", a if a == b else "%s-%s" % (a, b), "it" if a == b else "them"))
     quoted = "\n".join("> " + l for l in sel["text"].splitlines())
-    return ("The owner selected this text in index.html%s:\n%s\n\nTheir message about it:\n%s"
-            % (" (%s)" % ", ".join(where) if where else "", quoted, text))
+    name = sel.get("file") or "index.html"   # another file: shown raw at the end of index.html
+    return ("The owner selected this text in %s%s:\n%s\n\nTheir message about it:\n%s"
+            % (name, " (%s)" % ", ".join(where) if where else "", quoted, text))
 
 
 LIMIT_RETRY = ("(Your previous attempt at the message below was cut off by the Claude usage "

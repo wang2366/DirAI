@@ -9,6 +9,7 @@ import dirai_card
 import dirai_config
 import claude_run
 import slurm
+import agent_files
 import agents
 import agent_permissions as perms
 import agent_prompts as prompts
@@ -98,6 +99,50 @@ class Selection(unittest.TestCase):
         self.assertIn("[user, t]\n" + "x" * 1500 + "...", p)
         self.assertNotIn(prompts.NEW_CHAT_MARK, p)
         self.assertTrue(p.endswith("New message:\nnew"))
+
+
+class FolderFiles(unittest.TestCase):
+    def setUp(self):
+        self.dir = os.path.join(util.new_tree("files"), "a")
+        util.write(os.path.join(self.dir, "index.html"), "<html></html>")
+        util.write(os.path.join(self.dir, "run.sh"), "#!/bin/bash\necho one\necho two\n")
+        util.write(os.path.join(self.dir, "notes.md"), "# Notes\n")
+        util.write(os.path.join(self.dir, ".env"), "TOKEN=secret")
+        util.write(os.path.join(self.dir, "plot.png"), "png")
+        with open(os.path.join(self.dir, "data.bin"), "wb") as f:
+            f.write(b"\x00\x01binary")
+        util.write(os.path.join(self.dir, "big.csv"), "x" * (agent_files.FILE_MAX + 1))
+        util.write(os.path.join(self.dir, "sub", "deep.txt"), "x")
+        util.write(os.path.join(self.dir, "child", "index.html"), "<html></html>")
+        util.write(os.path.join(util.TMP, "outside.txt"), "secret")
+        os.symlink(os.path.join(util.TMP, "outside.txt"), os.path.join(self.dir, "link.txt"))
+
+    def test_folder_files(self):
+        d = agent_files.folder_files(self.dir)
+        self.assertEqual([f["name"] for f in d["files"]], ["notes.md", "run.sh"])
+        self.assertEqual(d["files"][1]["text"], "#!/bin/bash\necho one\necho two\n")
+        self.assertEqual({f["name"]: f["why"] for f in d["other"]},
+                         {"big.csv": "over 1 MB", "data.bin": "binary", "link.txt": "not in this folder",
+                          "plot.png": "image"})                       # no .env, no index.html
+        self.assertEqual(d["dirs"], [{"name": "child", "agent": True}, {"name": "sub", "agent": False}])
+        self.assertEqual(d["more"], 0)
+
+    def test_file_path(self):
+        self.assertTrue(agent_files.file_path(self.dir, "run.sh"))
+        for bad in ("../x.txt", "sub/deep.txt", ".env", "index.html", "plot.png", "link.txt", "nope", "", None, 3):
+            self.assertIsNone(agent_files.file_path(self.dir, bad), bad)
+
+    def test_selected_lines(self):
+        path = os.path.join(self.dir, "run.sh")
+        self.assertEqual(agent_files.selected_lines(path, [2, 3]), (2, 3))
+        self.assertEqual(agent_files.selected_lines(path, [3, 2]), (2, 3))
+        self.assertEqual(agent_files.selected_lines(path, [0, 99]), (1, 4))   # kept within the file
+        for bad in (None, "x", [1], ["a", "b"]):
+            self.assertIsNone(agent_files.selected_lines(path, bad), bad)
+
+    def test_selection_prompt(self):
+        self.assertTrue(prompts.selection_prompt({"text": "a", "file": "run.sh", "lines": (3, 3)}, "m").startswith(
+            "The owner selected this text in run.sh (source line 3;"))
 
 
 class Misc(unittest.TestCase):
