@@ -9,6 +9,8 @@ import subprocess
 import threading
 import time
 
+from dirai_config import within
+
 SQUEUE_TTL_S = 30
 # Jobs come from sacct (the accounting database), not squeue: on this cluster squeue --me takes
 # seconds and sometimes hangs, sacct answers in milliseconds. With --state and no start time,
@@ -92,9 +94,8 @@ def page_jobs(page_dir, fresh=False, all_jobs=None):
     out = []
     for j in jobs(fresh) if all_jobs is None else all_jobs:
         wd = os.path.realpath(j["workdir"])
-        if any(wd == d or wd.startswith(d + os.sep) for d in dirs):
-            inside = wd == page_dir or wd.startswith(page_dir + os.sep)
-            out.append(dict(j, sub=os.path.relpath(wd, page_dir) if inside else wd))
+        if any(within(wd, d) for d in dirs):
+            out.append(dict(j, sub=os.path.relpath(wd, page_dir) if within(wd, page_dir) else wd))
     return out
 
 

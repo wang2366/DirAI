@@ -12,13 +12,15 @@ until that limit resets. State for one served root lives in <root>/www/reviews.j
 Only the owner can use any of this: requests must come from 127.0.0.1 (the SSH tunnel
 lands on this node's loopback) and carry the secret key cookie (see login_key()).
 Everyone else gets 404 for /_review/* and sees pages without the panel.
+
+What runs may do is in review_permissions.py, what they are told in review_prompts.py, and how a
+claude process is driven and read in claude_run.py.
 """
+import contextlib
 import datetime
-import glob
-import hashlib
+import html
 import json
 import os
-import re
 import secrets
 import shutil
 import signal
@@ -30,6 +32,14 @@ import claude_usage
 import dirai_config
 import dirai_card
 import page_status
+from claude_run import (Live, RunCancelled, context_tokens, limit_reset, signal_group, stop_process,
+                        submitted_jobs, transcript)
+from dirai_config import load_json
+from review_permissions import (ALWAYS_DENY, DEFAULT_ALLOW, always_denied, denial_rules, describe_denial,
+                                extra_dirs, is_read_rule, mcp_config, path_grants, read_scope,
+                                request_denial)
+from review_prompts import (APPROVAL, CARD_FIX, GIT_PROMPT, LIMIT_RETRY, NEW_CHAT_MARK, SEL_MAX,
+                            STARTER_PAGE, SYSTEM_PROMPT, fresh_prompt, selection_lines, selection_prompt)
 
 KEY_FILE = dirai_config.KEY_FILE
 WWW_DIR = dirai_config.TOOL_DIR
@@ -44,10 +54,6 @@ CLAUDE_CMD = os.environ.get("REVIEW_CLAUDE_CMD", os.path.expanduser("~/.local/bi
 # or "Allow" on a blocked read, both kept for that page only.
 TOOLS = "Bash,Read,Edit,Write,Glob,Grep,Skill,TodoWrite,NotebookEdit"
 MAX_RUNNING = 5
-# "You've hit your session limit · resets 10:20pm (America/Indiana/Indianapolis)"
-LIMIT_RE = re.compile(r"(?i)\b(hit|reached) your\b.*\blimit\b|\busage limit\b")
-RESET_RE = re.compile(r"(?i)resets?\s+(?:at\s+)?(?:([A-Z][a-z]{2})\s+(\d{1,2}),?\s+(?:at\s+)?)?"
-                      r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)")
 # A resumed session resends its whole context with every request; warn (panel, list badge) when
 # it is this big and offer Compact, which runs Claude Code's /compact on the session.
 CONTEXT_WARN = 150000
@@ -63,9 +69,6 @@ DEFAULT_MODEL = "sonnet"
 OLLAMA_URL = "http://" + os.environ.get("OLLAMA_HOST", "127.0.0.1:11434")
 LOCAL_ENV = {"ANTHROPIC_BASE_URL": OLLAMA_URL, "ANTHROPIC_AUTH_TOKEN": "ollama", "ANTHROPIC_API_KEY": "",
              "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
-TRANSCRIPTS = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")), "projects")
-LIMIT_MARGIN_S = 120        # send this long after the stated reset time
-LIMIT_FALLBACK_S = 1800     # retry after this when the reset time can't be read
 RUN_TIMEOUT_S = 4 * 3600   # working time; time spent waiting for the owner's answers doesn't count
 # Permissions, tree-wide (dirai.json "permissions", switched on the list page; read when a run starts):
 # "allowlist": --permission-mode dontAsk: only allowed actions run, the rest are refused and show in
@@ -89,7 +92,6 @@ ASK_DENIED = {
 # messages in a row (a comment from the owner resets the count), so a run that keeps resubmitting
 # can't loop.
 MAX_AUTO = 5
-SUBMITTED_RE = re.compile(r"Submitted batch job (\d+)")
 # Repeat: the owner can have a page's message sent again every hour, day or week (st["repeat"]:
 # {"every", "text", "next"}). html_server.py calls check_repeats() every minute; a run that comes
 # due while the page is busy (or waiting on SLURM jobs) goes once the page is free, and the next one
@@ -101,290 +103,6 @@ REPEATS = {"hour": 3600, "day": 86400, "week": 7 * 86400}
 # entries stay whatever their age (a New chat quotes them).
 THREAD_KEEP_S = 7 * 86400
 KEEP_LAST = 6
-
-DEFAULT_ALLOW = [
-    "Read", "Glob", "Grep", "Skill", "TodoWrite",
-    "Bash(python3:*)", "Bash(bash:*)", "Bash(sh:*)",
-    "Bash(sbatch:*)", "Bash(squeue:*)", "Bash(scancel:*)", "Bash(sacct:*)", "Bash(scontrol show:*)",
-    "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(grep:*)", "Bash(find:*)",
-    "Bash(wc:*)", "Bash(diff:*)", "Bash(awk:*)", "Bash(sed -n:*)", "Bash(sort:*)", "Bash(du:*)",
-    "Bash(mkdir:*)", "Bash(cp:*)", "Bash(mv:*)", "Bash(ln -s:*)", "Bash(cmp:*)", "Bash(date:*)",
-    "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)",
-    "Bash(git add:*)", "Bash(git commit:*)", "Bash(git push:*)", "Bash(git fetch:*)",
-    "Bash(git ls-files:*)", "Bash(git rev-parse:*)", "Bash(git remote -v)", "Bash(git branch --show-current)",
-    # deleting: only via page_rm.sh, which refuses anything outside the page folder
-    "Bash(%s/page_rm.sh:*)" % os.path.dirname(os.path.abspath(__file__)),
-    # shell plumbing Claude chains into its commands (every part of a && chain must match)
-    "Bash(cd:*)", "Bash(echo:*)", "Bash(printf:*)", "Bash(set:*)", "Bash(export:*)", "Bash(test:*)",
-    "Bash([:*)", "Bash(true)", "Bash(false)", "Bash(sleep:*)", "Bash(for:*)", "Bash(while:*)",
-    "Bash(if:*)", "Bash(type:*)", "Bash(which:*)", "Bash(tr:*)", "Bash(cut:*)", "Bash(uniq:*)",
-    "Bash(tee:*)", "Bash(xargs:*)", "Bash(basename:*)", "Bash(dirname:*)", "Bash(realpath:*)",
-    "Bash(readlink:*)", "Bash(stat:*)", "Bash(touch:*)", "Bash(paste:*)", "Bash(column:*)",
-    "Bash(sed:*)", "Bash(module:*)", "Bash(source:*)", "Bash(.:*)", "Bash(seq:*)", "Bash(env:*)",
-]   # plus the tree's dirai.json "allow" rules
-ALWAYS_DENY = [
-    "Bash(git push --force:*)", "Bash(git push -f:*)", "Bash(git push --force-with-lease:*)",
-    "Bash(git reset:*)", "Bash(git checkout:*)", "Bash(git restore:*)", "Bash(git stash:*)",
-    "Bash(git rebase:*)", "Bash(git clean:*)", "Bash(git commit --amend:*)",
-    "Bash(git -C:*)",   # would slip past the rules above (git -C x push --force)
-    "Bash(rm -rf:*)", "Bash(rm -r:*)", "Bash(sudo:*)",
-]
-
-SYSTEM_PROMPT = """You are handling a review comment the owner left on one of their HTML report pages,
-served from their tree {root}. The page is {page_file}; its
-folder ({page_dir}) is your working directory and the place for your changes. Do what the comment
-asks (fix the page, rerun scripts, regenerate plots, submit SLURM jobs for long runs), then end
-with a short reply for the comment thread: what you found, what you ran, and anything still open.
-Don't describe your edits to the page in the reply (no "Page changes" section): the owner sees them
-on the page itself, where the server highlights every added or changed part.
-Bash permissions are matched per command, and a built-in safety check refuses anything it can't
-verify, whatever is granted: command substitution $(...) or backticks, for/while loops (also
-"... | while read"), heredocs, and paths with "..". So keep each Bash call to one plain command or
-a short && chain of plain commands with literal absolute paths. For anything more (counting,
-checking several files, loops), write a small python3 or bash script file in this folder and run
-it with "python3 <file>" or "bash <file>". Always write fully
-resolved absolute paths: never "..", which a built-in safety check refuses no matter what is granted.
-You can read {scope} (this page's own area) and the folders granted to you; other folders of the
-tree are off limits until the owner names them in a comment or allows a blocked read, so if the
-work needs one, say which and why in your reply.
-Follow the page conventions below (from {pages_md_path}); in particular, keep the page's summary
-card current (its Open field lists what is unfinished), and give every figure its script path. To learn
-what another page found, run "python3 {card_py} <its folder>" instead of reading its index.html.
-{git}To delete files or folders, run "{page_rm} <path>...": it works only inside this page folder and
-deletes immediately, no trash (plain rm -r / rm -rf stay blocked).
-Rules: don't delete anything outside this folder; long or heavy work goes to
-SLURM (sbatch), not this process. Don't wait for or poll SLURM jobs (no squeue loops, no sleep):
-submit them, say what you submitted, and end your reply. The server watches the jobs you submit and
-jobs running in this folder, and messages you here when they have all finished. If the work runs
-jobs in other folders (e.g. a job that submits a test sweep in another checkout), list those
-folders in this folder's job_dirs.txt (one absolute path per line), so the server keeps waiting
-for them and shows them in the page's status bar. {approval} Exception: these are blocked permanently and can
-never be granted, so don't ask; give the owner the exact command to run themselves instead: {always_denied}."""
-
-APPROVAL = {
-    "allowlist": "Nobody can approve actions while you run: if a permission is denied, do the rest and "
-                 "say in your reply exactly what you needed and why; the owner can grant it and resume you.",
-    "ask": "An action that isn't already allowed is shown to the owner in the page chat and waits for "
-           "their answer, which may take a while; that is normal. If the owner denies an action, don't "
-           "ask for it again in this run: do the rest, finish, and say in your reply what is still needed.",
-}
-
-# Only for pages inside a git repo (a tree need not be one)
-GIT_PROMPT = """Git: you may git add / commit / push (this replaces any earlier "never commit" instruction), but
-only when the owner's message asks for it (that request is their approval). Run git from your
-working directory (this page folder, inside the repo) with no "cd ... &&" before it and no "git -C":
-a built-in check refuses git after cd, and -C is blocked.
-Stage and commit only this page's folder: "git add -- {page_dir}", then
-'git commit -m "<summary>" -m "<details>" -m "Co-Authored-By: Claude <noreply@anthropic.com>" -- {page_dir}'
-(never "git add -A" or "git add ." at the repo root: other agents share this checkout), then
-"git push origin HEAD".
-If the push is rejected (the remote moved on), stop and tell the owner; don't pull, rebase or
-force. Quote the commit hash and message in your reply.
-"""
-
-
-STARTER_PAGE = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title}</title>
-</head>
-<body>
-<h1>{title}</h1>
-<!-- dirai:card -->
-<details id="dirai-card" open>
-  <summary>Summary</summary>
-  <dl>
-    <dt>Objective</dt> <dd>{task}</dd>
-    <dt>Inputs</dt>    <dd>not yet known</dd>
-    <dt>Outputs</dt>   <dd>not yet known</dd>
-    <dt>Result</dt>    <dd>none yet: the AI assistant is working on this task</dd>
-    <dt>Open</dt>      <dd>the whole task</dd>
-    <dt>Updated</dt>   <dd>{date}</dd>
-  </dl>
-</details>
-<!-- /dirai:card -->
-<p><i>Created {date} by New agent; the AI assistant is working on this task and will replace this page.</i></p>
-<h2>Task</h2>
-<p style="white-space:pre-wrap">{task}</p>
-</body>
-</html>
-"""
-
-
-NEW_CHAT_MARK = "New chat: the next message starts a fresh session."
-# sent once, in the same session, when a run changed the page and left its summary card incomplete
-CARD_FIX = ("Before you finish: this page's summary card (the <!-- dirai:card --> block, see the page "
-            "conventions) needs fixing: %s. Fix only the card, then reply in one line.")
-
-
-def fresh_prompt(thread, text, keep=6, limit=1500):
-    """First message of a new session on a page that already has a thread: point it at the
-    page's state and quote the last few thread entries."""
-    recent = [m for m in thread if m.get("text") != NEW_CHAT_MARK][-keep:]
-    quoted = "\n\n".join("[%s, %s]\n%s" % (m["role"], m["time"], m["text"][:limit] +
-                                             ("..." if len(m["text"]) > limit else ""))
-                          for m in recent)
-    return ("This is a fresh session on a page that already has history. Before acting, read this "
-            "folder's index.html (its summary card first); the last messages of the earlier conversation follow "
-            "for context.\n\n--- earlier messages ---\n%s\n--- end ---\n\nNew message:\n%s" % (quoted, text))
-
-
-SKIP_RE = re.compile(r"(?is)<(script|style)\b.*?</\1\s*>|<!--.*?-->|<[^>]*>|&#?\w+;|\s+")
-SEL_MAX = 4000      # characters of selected page text sent with a message
-SEL_KEY = 30        # characters (whitespace removed) used to find the selection's start/end in the source
-
-
-def visible_chars(html):
-    """The page's text with tags, scripts and whitespace removed, plus each character's source line."""
-    import html as htmllib
-    chars, lines, line, pos = [], [], 1, 0
-    for m in SKIP_RE.finditer(html):
-        for c in html[pos:m.start()]:
-            chars.append(c); lines.append(line)
-        tok = m.group(0)
-        if tok.startswith("&"):
-            for c in re.sub(r"\s", "", htmllib.unescape(tok)):
-                chars.append(c); lines.append(line)
-        line += tok.count("\n")
-        pos = m.end()
-    for c in html[pos:]:
-        chars.append(c); lines.append(line)
-    return "".join(chars), lines
-
-
-def selection_lines(path, text):
-    """(first, last) source lines of the selected page text in path, or None if it can't be found
-    (text built by scripts, or split by markup the browser shows differently)."""
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            page, lines = visible_chars(f.read())
-    except OSError:
-        return None
-    sel = re.sub(r"\s", "", text)
-    head, tail = sel[:SEL_KEY], sel[-SEL_KEY:]
-    i = page.find(head) if head else -1
-    if i < 0:
-        return None
-    j = page.find(tail, i)
-    if j < 0 or j - i > 2 * len(sel) + 200:   # end not found near the start: give the start only
-        return lines[i], lines[i]
-    return lines[i], lines[j + len(tail) - 1]
-
-
-def selection_prompt(sel, text):
-    """The owner's message with the page text they selected quoted in front of it."""
-    where = ["index.html"]
-    if sel.get("heading"):
-        where.append('near the heading "%s"' % sel["heading"])
-    if sel.get("lines"):
-        a, b = sel["lines"]
-        where.append("source line%s %s; read just the lines around %s unless you need more"
-                     % ("" if a == b else "s", a if a == b else "%s-%s" % (a, b), "it" if a == b else "them"))
-    quoted = "\n".join("> " + l for l in sel["text"].splitlines())
-    return ("The owner selected this text on the page (%s):\n%s\n\nTheir message about it:\n%s"
-            % (", ".join(where), quoted, text))
-
-
-def limit_reset(reply):
-    """Epoch time the usage limit resets, if reply is Claude's usage-limit message, else None.
-    The stated clock time is taken as server-local time, at its next occurrence."""
-    if not reply or len(reply) > 300 or not LIMIT_RE.search(reply):
-        return None
-    m = RESET_RE.search(reply)
-    if not m:
-        return time.time() + LIMIT_FALLBACK_S
-    mon, day, hour, minute, ampm = m.groups()
-    hour = int(hour) % 12 + (12 if ampm.lower() == "pm" else 0)
-    nowdt = datetime.datetime.now()
-    at = nowdt.replace(hour=hour, minute=int(minute or 0), second=0, microsecond=0)
-    if mon:
-        try:
-            at = at.replace(month=datetime.datetime.strptime(mon, "%b").month, day=int(day))
-        except ValueError:
-            return time.time() + LIMIT_FALLBACK_S
-        if at < nowdt - datetime.timedelta(days=180):
-            at = at.replace(year=at.year + 1)
-    elif at <= nowdt:
-        at += datetime.timedelta(days=1)
-    return time.mktime(at.timetuple()) + LIMIT_MARGIN_S
-
-
-_ctx_cache = {}
-
-
-def context_tokens(session_id):
-    """Tokens in the session's context: the last request's input (uncached + cache write +
-    cache read), or the size recorded by a later compaction. None if unknown."""
-    if not session_id:
-        return None
-    paths = glob.glob(os.path.join(TRANSCRIPTS, "*", session_id + ".jsonl"))
-    if not paths:
-        return None
-    try:
-        mtime = os.path.getmtime(paths[0])
-        if _ctx_cache.get(paths[0], (None,))[0] == mtime:
-            return _ctx_cache[paths[0]][1]
-        ctx = None
-        with open(paths[0], encoding="utf-8", errors="replace") as f:
-            for line in f:
-                if '"usage"' not in line and "compact_boundary" not in line:
-                    continue
-                try:
-                    d = json.loads(line)
-                except ValueError:
-                    continue
-                if d.get("subtype") == "compact_boundary":
-                    ctx = (d.get("compactMetadata") or {}).get("postTokens", ctx)
-                m = d.get("message")
-                u = m.get("usage") if d.get("type") == "assistant" and isinstance(m, dict) else None
-                if isinstance(u, dict):
-                    n = sum(u.get(k) or 0 for k in ("input_tokens", "cache_creation_input_tokens",
-                                                    "cache_read_input_tokens"))
-                    if n:       # synthetic replies (e.g. the usage-limit message) carry 0
-                        ctx = n
-    except OSError:
-        return None
-    _ctx_cache[paths[0]] = (mtime, ctx)
-    return ctx
-
-
-def transcript(session_id):
-    paths = glob.glob(os.path.join(TRANSCRIPTS, "*", session_id + ".jsonl")) if session_id else []
-    return paths[0] if paths else None
-
-
-def submitted_jobs(session_id, offset):
-    """Job ids sbatch printed in the session's transcript after byte offset (this run's part)."""
-    path = transcript(session_id)
-    if not path:
-        return []
-    try:
-        with open(path, "rb") as f:
-            f.seek(offset)
-            text = f.read().decode("utf-8", "replace")
-    except OSError:
-        return []
-    return list(dict.fromkeys(SUBMITTED_RE.findall(text)))
-
-
-class RunCancelled(Exception):
-    pass
-
-
-def stop_process(p):
-    """SIGTERM a claude run and the commands it started (its own process group), SIGKILL
-    whatever is left after 10 s."""
-    def kill(sig):
-        try:
-            os.killpg(p.pid, sig)
-        except OSError:
-            pass
-    kill(signal.SIGTERM)
-    t = threading.Timer(10, kill, args=(signal.SIGKILL,))
-    t.daemon = True
-    t.start()
 
 
 def busy(st):
@@ -400,12 +118,17 @@ def clock(t):
     return time.strftime("%H:%M" if t - time.time() < 20 * 3600 else "%b %d %H:%M", time.localtime(t))
 
 
-def html_escape(s):
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
 def now():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def system_entry(text):
+    """A thread entry from the server (not the owner or the assistant)."""
+    return {"role": "system", "time": now(), "text": text}
+
+
+def note(st, text):
+    st["thread"].append(system_entry(text))
 
 
 def login_key():
@@ -427,82 +150,6 @@ def load_text(path):
         return ""
 
 
-def load_json(path, default):
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return default
-
-
-def mcp_config(page_dir, root):
-    """An --mcp-config file with the owner's MCP servers for a run in page_dir, or None.
-    --restricted ignores ~/.claude.json, so the servers Claude Code would load in that folder are
-    passed explicitly: user scope, local scope of the folder or any folder above it, and the
-    .mcp.json files there. Their tools are not pre-allowed: each needs a grant or the owner's answer.
-    claude.ai connectors can't be passed this way."""
-    cfg = load_json(os.path.expanduser("~/.claude.json"), {})
-    servers = dict(cfg.get("mcpServers", {}))
-    ups, d = [], page_dir
-    while d not in ups:
-        ups.append(d)
-        d = os.path.dirname(d)
-    for d in reversed(ups):   # nearer folders override farther ones
-        servers.update(load_json(os.path.join(d, ".mcp.json"), {}).get("mcpServers", {}))
-        servers.update(cfg.get("projects", {}).get(d, {}).get("mcpServers", {}))
-    if not servers:
-        return None
-    text = json.dumps({"mcpServers": servers}, sort_keys=True)
-    path = os.path.join(dirai_config.data_dir(root), "mcp-%s.json" % hashlib.sha1(text.encode()).hexdigest()[:12])
-    if not os.path.exists(path):   # may hold tokens (headers, env): owner-only
-        fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(text)
-        os.replace(path + ".tmp", path)
-    return path
-
-
-class Live:
-    """A running claude driven over stream-json: its stdin, and (ask mode) its permission prompts
-    waiting for the owner. Reviews.lock guards pending, granted and the waiting clock."""
-    def __init__(self, proc):
-        self.proc, self.lock = proc, threading.Lock()
-        self.pending = {}       # request_id -> its can_use_tool request
-        self.granted = set()    # rules the owner answered "Always allow" during this run
-        self.waited, self.since = 0.0, None
-        self.timed_out, self.err = False, ""
-
-    def send(self, msg):
-        with self.lock:
-            try:
-                self.proc.stdin.write(json.dumps(msg).encode() + b"\n")
-                self.proc.stdin.flush()
-            except (OSError, ValueError):
-                pass    # the run has ended
-
-    def close(self):
-        with self.lock:
-            try:
-                self.proc.stdin.close()
-            except OSError:
-                pass
-
-    def waiting(self):
-        """Total time this run has spent waiting for the owner's answers."""
-        return self.waited + (time.time() - self.since if self.since else 0)
-
-    def hold(self, rid, req):
-        self.pending[rid] = req
-        self.since = self.since or time.time()
-
-    def release(self, rid):
-        req = self.pending.pop(rid, None)
-        if req is not None and not self.pending and self.since:
-            self.waited += time.time() - self.since
-            self.since = None
-        return req
-
-
 def end_asks(st):
     """The run is over: its unanswered prompts can't be answered any more."""
     for e in st.get("thread", []):
@@ -512,120 +159,7 @@ def end_asks(st):
 
 
 def save_json(path, data):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=1, ensure_ascii=False)
-    os.replace(tmp, path)
-
-
-def split_command(cmd):
-    """Pieces of a chained shell command (split on &&, ||, ;, | outside quotes): Claude Code
-    checks permissions per piece, so a grant has to name each piece."""
-    pieces, cur, quote, i = [], "", None, 0
-    while i < len(cmd):
-        c = cmd[i]
-        if quote:
-            if c == quote:
-                quote = None
-            elif c == "\\" and quote == '"' and i + 1 < len(cmd):
-                cur += c
-                i += 1
-                c = cmd[i]
-        elif c in "'\"":
-            quote = c
-        elif cmd.startswith(("&&", "||"), i):
-            pieces.append(cur)
-            cur, i = "", i + 2
-            continue
-        elif c in ";|\n":
-            pieces.append(cur)
-            cur, i = "", i + 1
-            continue
-        cur += c
-        i += 1
-    pieces.append(cur)
-    return [p.strip() for p in pieces if p.strip()]
-
-
-def denial_rules(d):
-    """Allow rules that grant exactly the denied action (one per piece of a chained command)."""
-    if d.get("tool_name") == "Bash":
-        return ["Bash(%s)" % p for p in split_command((d.get("tool_input") or {}).get("command", ""))]
-    return [denial_rule(d)]
-
-
-def denial_rule(d):
-    """Turn a permission_denials entry into an allow rule granting exactly that action."""
-    tool, inp = d.get("tool_name", ""), d.get("tool_input", {}) or {}
-    if tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
-        path = inp.get("file_path") or inp.get("notebook_path") or ""
-        return "Edit(/%s)" % path if path.startswith("/") else "Edit(%s)" % path
-    if tool == "Bash":
-        return "Bash(%s)" % inp.get("command", "")
-    if tool in ("Read", "Grep", "Glob"):
-        # blocked by the working-folder limit: grant read access to the folder
-        path = inp.get("file_path") or inp.get("path") or ""
-        if path.startswith("/"):
-            folder = path if os.path.isdir(path) else os.path.dirname(path)
-            return "Read(/%s/**)" % folder
-    if tool in ("WebFetch",) and inp.get("url"):
-        from urllib.parse import urlparse
-        return "WebFetch(domain:%s)" % urlparse(inp["url"]).netloc
-    return tool
-
-
-def always_denied(rule):
-    """True if ALWAYS_DENY blocks this rule no matter what is granted (deny beats allow)."""
-    if rule in ALWAYS_DENY:
-        return True
-    if rule.startswith("Bash(") and rule.endswith(")"):
-        cmd = rule[5:-1].strip()
-        for d in ALWAYS_DENY:
-            if d.startswith("Bash(") and d.endswith(":*)"):
-                prefix = d[5:-3]
-                if cmd == prefix or cmd.startswith(prefix + " "):
-                    return True
-    return False
-
-
-def read_scope(page_dir, root):
-    """What a page's assistant may read by default: the nearest git repo at or above the page, not
-    above the tree (a page sees its own repo, the tree's top page sees the whole tree), else the
-    page folder itself (and everything below it)."""
-    d = page_dir
-    while True:
-        if os.path.exists(os.path.join(d, ".git")):   # a folder, or a file in submodules/worktrees
-            return d
-        if d == root or not d.startswith(root + os.sep):
-            return page_dir
-        d = os.path.dirname(d)
-
-
-# /abs/path, ~/path or tree/relative/path (a bare word never counts: it needs a slash)
-PATH_TOKEN_RE = re.compile(r"""(?:~/|/)[\w.+-]+(?:/[\w.+-]*)*|[\w.+-]+(?:/[\w.+-]*)+""")
-
-
-def path_grants(text, root, scope):
-    """Read rules for the tree folders the owner names in a comment (the request is the approval):
-    absolute, ~/ or tree-relative paths that exist inside the tree and outside the page's scope.
-    A named file grants its folder."""
-    rules = []
-    for tok in PATH_TOKEN_RE.findall(text):
-        tok = tok.rstrip(".")
-        path = os.path.expanduser(tok) if tok.startswith("~") else tok
-        path = os.path.realpath(path if path.startswith("/") else os.path.join(root, path))
-        if not os.path.exists(path):
-            continue
-        folder = path if os.path.isdir(path) else os.path.dirname(path)
-        if not (folder == root or folder.startswith(root + os.sep)):
-            continue   # outside the tree: dirai.json "read_dirs", or Allow on a blocked read
-        if folder == scope or folder.startswith(scope + os.sep):
-            continue   # already readable
-        rule = "Read(/%s/**)" % folder
-        if rule not in rules:
-            rules.append(rule)
-    return rules
+    dirai_config.save_json(path, data, indent=1, ensure_ascii=False)
 
 
 def in_git(path):
@@ -633,32 +167,7 @@ def in_git(path):
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
 
-def is_read_rule(rule):
-    return rule.startswith("Read(//")
-
-
-def extra_dirs(allow, page_dir, read_dirs):
-    """Working directories a run needs beyond read_dirs: restricted mode only lets tools touch
-    working directories, so granted edits, and granted commands naming absolute paths, bring
-    their folders along."""
-    extra = {os.path.dirname(r[len("Edit(/"):-1]) for r in allow if r.startswith("Edit(//")}
-    extra |= {r[len("Read(/"):-1].rstrip("*").rstrip("/") for r in allow if r.startswith("Read(//")}
-    for r in allow:
-        if r.startswith("Bash(") and not r.endswith(":*)"):
-            for tok in re.findall(r"""(?<![\w.])/[^\s'"|;&<>()]+""", r[5:-1]):
-                extra.add(tok if os.path.isdir(tok) else os.path.dirname(tok))
-    return sorted(d for d in extra if d and d != "/" and os.path.isdir(d)
-                  and not any(d == r or d.startswith(r + "/") for r in read_dirs + [page_dir]))
-
-
-def describe_denial(d):
-    tool, inp = d.get("tool_name", ""), d.get("tool_input", {}) or {}
-    detail = inp.get("command") or inp.get("file_path") or inp.get("url") or json.dumps(inp)[:200]
-    return "%s: %s" % (tool, detail)
-
-
-LIMIT_RETRY = ("(Your previous attempt at the message below was cut off by the Claude usage "
-               "limit. Check what is already done before continuing.)\n\n")
+ALL = object()      # Reviews._edit(): the whole state, not one page
 
 
 class Reviews:
@@ -676,8 +185,7 @@ class Reviews:
         self.hold_reason = ""
         self.timer = None
         self.cards = {}         # index.html path -> (mtime, its summary card's problems)
-        with self.lock:
-            data = load_json(self.path, {})
+        with self._edit() as data:
             for page, st in data.items():           # runs don't survive a restart
                 end_asks(st)
                 if st.get("status") == "queued" and st.get("pending"):   # queued ones do
@@ -686,10 +194,8 @@ class Reviews:
                         self.hold_until, self.hold_reason = st["queued_until"], st.get("queued_reason", "")
                 elif st.get("status") == "working" and not st.get("watch"):   # watches resume
                     st["status"] = "unread"
-                    st["thread"].append({"role": "system", "time": now(),
-                                         "text": "The server restarted while this was running; "
-                                                 "the run was lost. Comment again to retry."})
-            self._save(data)
+                    note(st, "The server restarted while this was running; "
+                             "the run was lost. Comment again to retry.")
         if self.queue:
             self._pump()
 
@@ -698,7 +204,6 @@ class Reviews:
         return load_json(self.path, {})
 
     def _save(self, data):
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
         save_json(self.path, data)
 
     def prev_path(self, page):
@@ -707,9 +212,36 @@ class Reviews:
         name = page.replace("/", "%2F") if page else "%top"
         return os.path.join(self.root, "www", "page_prev", name + ".html")
 
+    @staticmethod
+    def _blank():
+        return {"status": "read", "thread": [], "session_id": None, "denials": [], "grants": []}
+
     def _page(self, data, page):
-        return data.setdefault(page, {"status": "read", "thread": [], "session_id": None,
-                                      "denials": [], "grants": []})
+        return data.setdefault(page, self._blank())
+
+    @contextlib.contextmanager
+    def _edit(self, page=ALL):
+        """Lock the state and yield it for changing: one page's entry (created if missing) or, with
+        no page, all of it ({page: entry}). Saved when the block ends, if anything changed (a block
+        that returns early without changing anything writes nothing); an exception discards it."""
+        with self.lock:
+            with self._changes(page) as st:
+                yield st
+
+    @contextlib.contextmanager
+    def _changes(self, page=ALL):
+        """_edit for a caller that already holds the lock."""
+        data = self._load()
+        before = json.dumps(data, sort_keys=True)
+        if page is ALL:
+            yield data
+        else:
+            new = page not in data
+            yield self._page(data, page)
+            if new and data[page] == self._blank():
+                del data[page]      # only looked at
+        if json.dumps(data, sort_keys=True) != before:
+            self._save(data)
 
     def all_status(self):
         with self.lock:
@@ -758,10 +290,13 @@ class Reviews:
             st["permissions"] = self.permissions()
             st["watching"] = (st.get("watch") or {}).get("jobs", [])
             st["card"] = self.card_problems(page)
-            st["denials"] = [{"text": describe_denial(d), "rules": denial_rules(d),
-                              "blocked": any(always_denied(r) for r in denial_rules(d)),
-                              "granted": all(r in granted for r in denial_rules(d))}
-                             for d in st.get("denials", [])]
+            denials = []
+            for d in st.get("denials", []):
+                rules = denial_rules(d)
+                denials.append({"text": describe_denial(d), "rules": rules,
+                                "blocked": any(always_denied(r) for r in rules),
+                                "granted": all(r in granted for r in rules)})
+            st["denials"] = denials
             return st
 
     def working(self, page):
@@ -778,10 +313,8 @@ class Reviews:
         """The model for this page's next runs (the session continues; only the model changes)."""
         if model not in MODELS:
             return False
-        with self.lock:
-            data = self._load()
-            self._page(data, page)["model"] = model
-            self._save(data)
+        with self._edit(page) as st:
+            st["model"] = model
         if model in LOCAL_MODELS:
             self._pump()    # a page queued for the Claude limits can start now
         return True
@@ -791,19 +324,15 @@ class Reviews:
         text = (text or "").strip()
         if every != "off" and (every not in REPEATS or not text):
             return False
-        with self.lock:
-            data = self._load()
-            st = self._page(data, page)
+        with self._edit(page) as st:
             if every == "off":
                 if not st.pop("repeat", None):
                     return False
-                st["thread"].append({"role": "system", "time": now(), "text": "Repeat turned off."})
+                note(st, "Repeat turned off.")
             else:
                 st["repeat"] = {"every": every, "text": text, "next": time.time() + REPEATS[every]}
-                st["thread"].append({"role": "system", "time": now(), "text":
-                                     "Repeats every %s, next at %s:\n%s" % (every,
-                                                                             clock(st["repeat"]["next"]), text)})
-            self._save(data)
+                note(st, "Repeats every %s, next at %s:\n%s" % (every,
+                         clock(st["repeat"]["next"]), text))
             return True
 
     def check_repeats(self):
@@ -821,47 +350,33 @@ class Reviews:
                       "next run can compare.)\n\n%s" % (rep["every"], rep["text"]))
             if not self.comment(page, rep["text"], prompt=prompt, scheduled=rep["every"]):
                 continue    # became busy meanwhile: try again next pass
-            with self.lock:
-                data = self._load()
-                st = data.get(page) or {}
+            with self._edit(page) as st:
                 if st.get("repeat"):
                     nxt, step = st["repeat"]["next"], REPEATS[st["repeat"]["every"]]
                     while nxt <= t:
                         nxt += step
                     st["repeat"]["next"] = nxt
-                    self._save(data)
 
     def prune_threads(self):
         """Drop thread entries older than THREAD_KEEP_S, keeping each page's last KEEP_LAST."""
         cutoff = datetime.datetime.fromtimestamp(time.time() - THREAD_KEEP_S).strftime("%Y-%m-%d %H:%M:%S")
-        with self.lock:
-            data = self._load()
-            changed = False
+        with self._edit() as data:
             for st in data.values():
                 th = st.get("thread", [])
-                kept = [m for m in th[:-KEEP_LAST] if m.get("time", "") >= cutoff] + th[-KEEP_LAST:]
-                if len(kept) < len(th):
-                    st["thread"], changed = kept, True
-            if changed:
-                self._save(data)
+                st["thread"] = [m for m in th[:-KEEP_LAST] if m.get("time", "") >= cutoff] + th[-KEEP_LAST:]
 
     def set_status(self, page, status):
-        with self.lock:
-            data = self._load()
-            st = self._page(data, page)
+        with self._edit(page) as st:
             if st["status"] in ("working", "queued"):
                 return False
             st["status"] = status
-            self._save(data)
             return True
 
     def cancel(self, page):
         """Stop the page's run, or drop its message from the queue, or stop waiting on its SLURM
         jobs (the jobs themselves keep running). The session is kept, so the next message
         continues it, with whatever model is picked by then."""
-        with self.lock:
-            data = self._load()
-            st = self._page(data, page)
+        with self._edit(page) as st:
             if st["status"] not in ("working", "queued"):
                 return False
             queued = [i for i in self.queue if i[0] == page]
@@ -871,8 +386,7 @@ class Reviews:
                 for k in ("watch", "queued_until", "pending", "queued_reason"):
                     st.pop(k, None)
                 st["status"] = "unread"
-                st["thread"].append({"role": "system", "time": now(), "text": "Cancelled by the owner."})
-                self._save(data)
+                note(st, "Cancelled by the owner.")
                 return True
             # running (or about to start): _run sees the flag, stops the process and records it
             self.cancelled.add(page)
@@ -889,10 +403,7 @@ class Reviews:
             procs = list(self.procs.values())
         for sig, wait in ((signal.SIGTERM, 5), (signal.SIGKILL, 0)):
             for p in procs:
-                try:
-                    os.killpg(p.pid, sig)
-                except OSError:
-                    pass
+                signal_group(p, sig)
             end = time.time() + wait
             while time.time() < end and any(p.poll() is None for p in procs):
                 time.sleep(0.2)
@@ -907,9 +418,9 @@ class Reviews:
         index = os.path.join(full, "index.html")
         created = not os.path.exists(index)
         if created:
-            title = html_escape(os.path.basename(page) or page)
+            title = html.escape(os.path.basename(page) or page, quote=False)
             with open(index, "w", encoding="utf-8") as f:
-                f.write(STARTER_PAGE.format(title=title, task=html_escape(task), date=now()[:10]))
+                f.write(STARTER_PAGE.format(title=title, task=html.escape(task, quote=False), date=now()[:10]))
         prompt = task
         if created:
             prompt = ("This folder and its index.html were just created for this task (the page is a "
@@ -923,30 +434,23 @@ class Reviews:
 
     def new_chat(self, page):
         """Next message starts a fresh Claude session (the thread stays, with a divider)."""
-        with self.lock:
-            data = self._load()
-            st = self._page(data, page)
+        with self._edit(page) as st:
             if busy(st) or not st.get("session_id"):
                 return False
             st["session_id"], st["denials"] = None, []
-            st["thread"].append({"role": "system", "time": now(), "text": NEW_CHAT_MARK})
-            self._save(data)
+            note(st, NEW_CHAT_MARK)
             return True
 
     def compact(self, page):
         """Run /compact on the page's session (queued like a message)."""
-        with self.lock:
-            data = self._load()
-            st = self._page(data, page)
+        with self._edit(page) as st:
             if busy(st) or not st.get("session_id"):
                 return False
             st.pop("watch", None)   # the run re-checks the queue when it ends
-            st["thread"].append({"role": "system", "time": now(), "text":
-                                 "Compact requested (context %s tokens)." % kilo(context_tokens(st["session_id"]))})
+            note(st, "Compact requested (context %s tokens)." % kilo(context_tokens(st["session_id"])))
             st["denials"] = []
             st["status"] = "working"
             st["working_on"], st["started"] = "Compact the conversation", None
-            self._save(data)
         self._enqueue(page, COMPACT)
         return True
 
@@ -958,16 +462,14 @@ class Reviews:
             selection = {"text": selection["text"][:SEL_MAX], "heading": selection.get("heading", "")[:200],
                          "lines": selection_lines(os.path.join(self.root, page, "index.html"), selection["text"])}
             prompt = prompt or selection_prompt(selection, text)
-        with self.lock:
-            data = self._load()
-            st = self._page(data, page)
+        with self._edit(page) as st:
             if busy(st):
                 return False
             st.pop("watch", None)   # the run re-checks the queue when it ends
             st["auto_runs"] = 0
             if scheduled and st.get("session_id"):
                 st["session_id"] = None
-                st["thread"].append({"role": "system", "time": now(), "text": NEW_CHAT_MARK})
+                note(st, NEW_CHAT_MARK)
             elif not st.get("session_id") and st["thread"] and (prompt is None or selection):
                 prompt = fresh_prompt(st["thread"], prompt or text)   # New chat: catch up from the page and thread
             st["thread"].append(dict({"role": "user", "time": now(), "text": text},
@@ -978,12 +480,10 @@ class Reviews:
                      if r not in st.get("grants", [])]
             if named:
                 st["grants"] = sorted(set(st.get("grants", [])) | set(named))
-                st["thread"].append({"role": "system", "time": now(),
-                                     "text": "Read access for this page (named in your message): " + ", ".join(named)})
+                note(st, "Read access for this page (named in your message): " + ", ".join(named))
             st["denials"] = []
             st["status"] = "working"   # waiting for a free slot counts as working
             st["working_on"], st["started"] = text, None
-            self._save(data)
         prompt = prompt or text
         self._enqueue(page, prompt)
         return True
@@ -992,9 +492,7 @@ class Reviews:
         rules = [r for r in rules if r and not always_denied(r)]
         if not rules:
             return False
-        with self.lock:
-            data = self._load()
-            st = self._page(data, page)
+        with self._edit(page) as st:
             if busy(st) or not st.get("session_id"):
                 return False
             st.pop("watch", None)
@@ -1003,7 +501,6 @@ class Reviews:
             st["denials"] = []
             st["status"] = "working"   # waiting for a free slot counts as working
             st["working_on"], st["started"] = "Retry with granted: " + ", ".join(rules), None
-            self._save(data)
         self._enqueue(page, "The owner granted these permissions: %s. Retry what was blocked "
                             "and finish the review." % ", ".join(rules))
         return True
@@ -1020,32 +517,27 @@ class Reviews:
             perms = load_json(PERMS_FILE, {"always": []})
             perms["always"] = sorted(set(perms["always"]) | set(global_rules))
             save_json(PERMS_FILE, perms)
-            st["thread"].append({"role": "system", "time": now(),
-                                 "text": "Granted (always): " + ", ".join(global_rules)})
+            note(st, "Granted (always): " + ", ".join(global_rules))
         if page_rules:
             st["grants"] = sorted(set(st.get("grants", [])) | set(page_rules))
-            st["thread"].append({"role": "system", "time": now(),
-                                 "text": "Granted (this page): " + ", ".join(page_rules)})
+            note(st, "Granted (this page): " + ", ".join(page_rules))
 
     # --- permission prompts (ask mode) ---------------------------------------------------
     def _ask(self, page, live, rid, req):
         """A permission prompt from the run: put it in the page thread for the owner. Answered
         at once when the owner chose Always allow for the same action earlier in this run, or
         when the run has used up its ASK_WAIT_S of waiting."""
-        d = {"tool_name": req.get("tool_name", ""), "tool_input": req.get("input") or {}}
+        d = request_denial(req)
         rules = denial_rules(d)
-        with self.lock:
+        with self._edit(page) as st:
             choice = ("allow" if rules and all(r in live.granted for r in rules)
                       else "timeout" if live.waiting() >= ASK_WAIT_S else None)
-            data = self._load()
-            st = self._page(data, page)
             st["thread"].append({"role": "ask", "time": now(), "id": rid, "text": describe_denial(d),
                                  "detail": json.dumps(d["tool_input"], indent=1)[:4000],
                                  "rules": rules, "answer": choice})
             if not choice:
                 live.hold(rid, req)
                 st["asking"] = True
-            self._save(data)
         if choice:
             self._respond(live, rid, req, choice)
 
@@ -1054,13 +546,11 @@ class Reviews:
         the Always allow button), deny; the watchdog answers timeout."""
         if choice not in ("allow", "always", "deny", "timeout"):
             return False
-        with self.lock:
+        with self._edit(page) as st:
             live = self.live.get(page)
             req = live.release(rid) if live else None
             if req is None:
                 return False
-            data = self._load()
-            st = self._page(data, page)
             rules = []
             for e in st["thread"]:
                 if e.get("role") == "ask" and e.get("id") == rid and not e.get("answer"):
@@ -1072,14 +562,13 @@ class Reviews:
                 self._save_grants(st, rules, True)
                 # prompts already waiting for what was just granted (parallel tool calls) go too
                 for other, oreq in list(live.pending.items()):
-                    orules = denial_rules({"tool_name": oreq.get("tool_name", ""), "tool_input": oreq.get("input") or {}})
+                    orules = denial_rules(request_denial(oreq))
                     if orules and all(r in live.granted for r in orules):
                         also.append((other, live.release(other)))
                 for e in st["thread"]:
                     if e.get("role") == "ask" and e.get("id") in dict(also) and not e.get("answer"):
                         e["answer"] = "allow"
             st["asking"] = bool(live.pending)
-            self._save(data)
         self._respond(live, rid, req, choice)
         for other, oreq in also:
             self._respond(live, other, oreq, "allow")
@@ -1087,16 +576,13 @@ class Reviews:
 
     def _withdraw(self, page, live, rid):
         """claude took a prompt back (e.g. the turn was interrupted)."""
-        with self.lock:
+        with self._edit(page) as st:
             if live.release(rid) is None:
                 return
-            data = self._load()
-            st = self._page(data, page)
             for e in st["thread"]:
                 if e.get("role") == "ask" and e.get("id") == rid and not e.get("answer"):
                     e["answer"] = "withdrawn"
             st["asking"] = bool(live.pending)
-            self._save(data)
 
     @staticmethod
     def _respond(live, rid, req, choice):
@@ -1218,31 +704,50 @@ class Reviews:
 
     def _hold_queue(self):
         """Mark every queued message as waiting for the usage limit; caller holds the lock."""
-        data = self._load()
-        for page, prompt in self.queue:
-            st = self._page(data, page)
-            if st["status"] != "queued":
-                st["thread"].append({"role": "system", "time": now(), "text":
-                                     "%s. Queued: this message will be sent automatically at %s."
-                                     % (self.hold_reason or "Claude usage limit", clock(self.hold_until))})
-            if st["status"] != "queued" or st.get("queued_until") != self.hold_until:
-                st["status"], st["queued_until"], st["pending"] = "queued", self.hold_until, prompt
-                st["queued_reason"], st["started"] = self.hold_reason, None
-        self._save(data)
+        with self._changes() as data:
+            for page, prompt in self.queue:
+                st = self._page(data, page)
+                if st["status"] != "queued":
+                    note(st, "%s. Queued: this message will be sent automatically at %s."
+                             % (self.hold_reason or "Claude usage limit", clock(self.hold_until)))
+                if st["status"] != "queued" or st.get("queued_until") != self.hold_until:
+                    st["status"], st["queued_until"], st["pending"] = "queued", self.hold_until, prompt
+                    st["queued_reason"], st["started"] = self.hold_reason, None
+
+    def _command(self, page_dir, model, grants, session):
+        """The claude command line for a run in page_dir: its permissions, folders, MCP servers
+        and instructions."""
+        allow = DEFAULT_ALLOW + self.config["allow"] + ["Edit(/%s/**)" % page_dir] + \
+            load_json(PERMS_FILE, {"always": []})["always"] + grants
+        scope = read_scope(page_dir, self.root)
+        read_dirs = [scope] + self.config["read_dirs"]
+        dirs = read_dirs + extra_dirs(allow, page_dir, read_dirs)
+        mode = self.permissions()
+        mcp_file = mcp_config(page_dir, self.root)
+        # stream-json both ways in both modes: the prompt goes in on stdin, and in ask mode so
+        # do the owner's answers to claude's permission prompts
+        cmd = [CLAUDE_CMD, "-p", "--model", model, "--input-format", "stream-json",
+               "--output-format", "stream-json", "--verbose"] + (
+               ["--permission-mode", "manual", "--permission-prompt-tool", "stdio"] if mode == "ask"
+               else ["--permission-mode", "dontAsk"]) + [
+               "--restricted", "--strict-mcp-config"] + (["--mcp-config", mcp_file] if mcp_file else []) + [
+               "--tools", TOOLS, "--add-dir"] + dirs + [
+               "--append-system-prompt", SYSTEM_PROMPT.format(root=self.root,
+                   page_file=os.path.join(page_dir, "index.html"), page_dir=page_dir, scope=scope,
+                   git=GIT_PROMPT.format(page_dir=page_dir) if in_git(page_dir) else "",
+                   approval=APPROVAL[mode], always_denied=", ".join(ALWAYS_DENY), pages_md_path=AGENT_RULE_MD,
+                   page_rm=os.path.join(WWW_DIR, "page_rm.sh"),
+                   card_py=os.path.join(WWW_DIR, "dirai_card.py"))
+                   + "\n\n" + load_text(AGENT_RULE_MD),
+               "--allowedTools"] + allow + ["--disallowedTools"] + ALWAYS_DENY
+        if session:
+            cmd += ["--resume", session]
+        return cmd
 
     def _run(self, page, prompt):
-        card_note = None
+        """One message to the page's assistant, from its slot in the queue to its reply in the thread."""
         try:
-            with self.lock:
-                data = self._load()
-                st = self._page(data, page)
-                st["status"] = "working"
-                st["started"] = time.time()
-                for k in ("queued_until", "pending", "queued_reason"):
-                    st.pop(k, None)
-                session, grants = st.get("session_id"), list(st.get("grants", []))
-                model = st.get("model") or DEFAULT_MODEL
-                self._save(data)
+            session, grants, model = self._begin(page)
             before = context_tokens(session)
             path = transcript(session)
             offset = os.path.getsize(path) if path and os.path.exists(path) else 0
@@ -1253,71 +758,12 @@ class Reviews:
                 shutil.copyfile(index, snap)
             except OSError:
                 pass
-            allow = DEFAULT_ALLOW + self.config["allow"] + ["Edit(/%s/**)" % page_dir] + \
-                load_json(PERMS_FILE, {"always": []})["always"] + grants
-            scope = read_scope(page_dir, self.root)
-            read_dirs = [scope] + self.config["read_dirs"]
-            dirs = read_dirs + extra_dirs(allow, page_dir, read_dirs)
-            mode = self.permissions()
-            mcp_file = mcp_config(page_dir, self.root)
-            # stream-json both ways in both modes: the prompt goes in on stdin, and in ask mode so
-            # do the owner's answers to claude's permission prompts
-            cmd = [CLAUDE_CMD, "-p", "--model", model, "--input-format", "stream-json",
-                   "--output-format", "stream-json", "--verbose"] + (
-                   ["--permission-mode", "manual", "--permission-prompt-tool", "stdio"] if mode == "ask"
-                   else ["--permission-mode", "dontAsk"]) + [
-                   "--restricted", "--strict-mcp-config"] + (["--mcp-config", mcp_file] if mcp_file else []) + [
-                   "--tools", TOOLS, "--add-dir"] + dirs + [
-                   "--append-system-prompt", SYSTEM_PROMPT.format(root=self.root,
-                       page_file=os.path.join(page_dir, "index.html"), page_dir=page_dir, scope=scope,
-                       git=GIT_PROMPT.format(page_dir=page_dir) if in_git(page_dir) else "",
-                       approval=APPROVAL[mode], always_denied=", ".join(ALWAYS_DENY), pages_md_path=AGENT_RULE_MD,
-                       page_rm=os.path.join(WWW_DIR, "page_rm.sh"),
-                       card_py=os.path.join(WWW_DIR, "dirai_card.py"))
-                       + "\n\n" + load_text(AGENT_RULE_MD),
-                   "--allowedTools"] + allow + ["--disallowedTools"] + ALWAYS_DENY
-            if session:
-                cmd += ["--resume", session]
-            try:
-                env = dict(os.environ, REVIEW_PAGE_DIR=page_dir, **(LOCAL_ENV if model in LOCAL_MODELS else {}))
-                p = subprocess.Popen(cmd, cwd=page_dir, env=env, stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                     start_new_session=True)   # its own group, so Cancel stops its commands too
-                live = Live(p)
-                with self.lock:
-                    self.procs[page], self.live[page] = p, live
-                    if page in self.cancelled:      # cancelled before it started
-                        stop_process(p)
-                live.send({"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}})
-                live.send({"type": "user", "message": {"role": "user", "content": prompt}})
-                out = self._drive(page, live, None if prompt == COMPACT else lambda: self._card_fix(index, snap))
-                with self.lock:
-                    self.procs.pop(page, None)
-                    if page in self.cancelled:
-                        raise RunCancelled()
-                if live.timed_out:
-                    raise subprocess.TimeoutExpired(cmd, RUN_TIMEOUT_S)
-                reply = out.get("result") or live.err[-2000:] or "(no reply)"
-                entry = {"role": "claude", "time": now(), "text": reply, "model": model}
-                if "followup" in out:
-                    left = dirai_card.problems(index, now()[:10])
-                    card_note = {"role": "system", "time": now(), "text": "The summary card needed fixing; "
-                                 + ("the assistant fixed it." if not left else "it still has problems: " + "; ".join(left) + ".")}
-                if out.get("total_cost_usd") is not None and model not in LOCAL_MODELS:
-                    entry["cost"] = round(out["total_cost_usd"], 3)
-                denials = out.get("permission_denials", [])
-                session = out.get("session_id") or session
-            except RunCancelled:
-                entry, denials = {"role": "system", "time": now(), "text": "Cancelled by the owner."}, []
-            except subprocess.TimeoutExpired:
-                entry, denials = {"role": "system", "time": now(), "text": "Run timed out after %d h." % (RUN_TIMEOUT_S // 3600)}, []
-            except (ValueError, OSError) as e:
-                entry, denials = {"role": "system", "time": now(), "text": "Run failed: %s" % e}, []
+            entry, card_note, denials, session = self._attempt(page, prompt, model, grants, session, page_dir, snap)
             until = limit_reset(entry["text"]) if entry["role"] == "claude" and model not in LOCAL_MODELS else None
             if prompt == COMPACT and entry["role"] == "claude" and not until:
                 after = context_tokens(session)
-                entry = {"role": "system", "time": now(), "text": "Conversation compacted: %s -> %s tokens." % (
-                    kilo(before), kilo(after)) if after != before else "Compact finished: " + entry["text"]}
+                entry = system_entry("Conversation compacted: %s -> %s tokens." % (
+                    kilo(before), kilo(after)) if after != before else "Compact finished: " + entry["text"])
             if not until:   # the run changed the page: highlight against the copy from before it
                 try:
                     with open(snap, "rb") as a, open(index, "rb") as b:
@@ -1328,46 +774,97 @@ class Reviews:
             if os.path.exists(snap):
                 os.remove(snap)
             if until:
-                # keep the message and send it again after the reset, in the same session
-                retry = prompt if prompt == COMPACT or prompt.startswith(LIMIT_RETRY) else LIMIT_RETRY + prompt
-                with self.lock:
-                    if until > self.hold_until:
-                        self.hold_until, self.hold_reason = until, "Claude usage limit hit (%s)" % entry["text"]
-                    self.queue.insert(0, (page, retry))
-                    data = self._load()
-                    st = self._page(data, page)
-                    st["session_id"] = session
-                    self._save(data)
+                self._retry_after_limit(page, prompt, entry, session, until)
                 return
             ids = [] if entry["text"] == "Cancelled by the owner." else self._jobs_to_watch(page_dir, session, offset)
-            with self.lock:
-                data = self._load()
-                st = self._page(data, page)
-                st["thread"].append(entry)
-                if card_note:
-                    st["thread"].append(card_note)
-                st["denials"] = denials
-                st["session_id"] = session
-                st["status"] = "unread"
-                if ids and st.get("auto_runs", 0) >= MAX_AUTO:
-                    st["thread"].append({"role": "system", "time": now(), "text":
-                                         "SLURM jobs %s are still queued, but the assistant has already been "
-                                         "messaged automatically %d times in a row; not watching them. Comment "
-                                         "to continue." % (", ".join(ids), MAX_AUTO)})
-                elif ids:
-                    self._start_watch(st, ids)
-                self._save(data)
+            self._finish(page, entry, card_note, denials, session, ids)
         finally:
             with self.lock:
                 self.running -= 1
                 self.procs.pop(page, None)
                 self.cancelled.discard(page)
                 if self.live.pop(page, None):
-                    data = self._load()
-                    if page in data:
-                        end_asks(data[page])
-                        self._save(data)
+                    with self._changes() as data:
+                        if page in data:
+                            end_asks(data[page])
             self._pump()
+
+    def _begin(self, page):
+        """Mark the page working as its run starts: (session, page grants, model)."""
+        with self._edit(page) as st:
+            st["status"] = "working"
+            st["started"] = time.time()
+            for k in ("queued_until", "pending", "queued_reason"):
+                st.pop(k, None)
+            return st.get("session_id"), list(st.get("grants", [])), st.get("model") or DEFAULT_MODEL
+
+    def _attempt(self, page, prompt, model, grants, session, page_dir, snap):
+        """Run claude on prompt until it replies, is cancelled, times out or fails to start:
+        (thread entry, summary-card note or None, permission denials, session)."""
+        index = os.path.join(page_dir, "index.html")
+        cmd = self._command(page_dir, model, grants, session)
+        card_note = None
+        try:
+            env = dict(os.environ, REVIEW_PAGE_DIR=page_dir, **(LOCAL_ENV if model in LOCAL_MODELS else {}))
+            p = subprocess.Popen(cmd, cwd=page_dir, env=env, stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 start_new_session=True)   # its own group, so Cancel stops its commands too
+            live = Live(p)
+            with self.lock:
+                self.procs[page], self.live[page] = p, live
+                if page in self.cancelled:      # cancelled before it started
+                    stop_process(p)
+            live.send({"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}})
+            live.send({"type": "user", "message": {"role": "user", "content": prompt}})
+            out = self._drive(page, live, None if prompt == COMPACT else lambda: self._card_fix(index, snap))
+            with self.lock:
+                self.procs.pop(page, None)
+                if page in self.cancelled:
+                    raise RunCancelled()
+            if live.timed_out:
+                raise subprocess.TimeoutExpired(cmd, RUN_TIMEOUT_S)
+            reply = out.get("result") or live.err[-2000:] or "(no reply)"
+            entry = {"role": "claude", "time": now(), "text": reply, "model": model}
+            if "followup" in out:
+                left = dirai_card.problems(index, now()[:10])
+                card_note = system_entry("The summary card needed fixing; " + (
+                    "the assistant fixed it." if not left else "it still has problems: " + "; ".join(left) + "."))
+            if out.get("total_cost_usd") is not None and model not in LOCAL_MODELS:
+                entry["cost"] = round(out["total_cost_usd"], 3)
+            return entry, card_note, out.get("permission_denials", []), out.get("session_id") or session
+        except RunCancelled:
+            return system_entry("Cancelled by the owner."), None, [], session
+        except subprocess.TimeoutExpired:
+            return system_entry("Run timed out after %d h." % (RUN_TIMEOUT_S // 3600)), None, [], session
+        except (ValueError, OSError) as e:
+            return system_entry("Run failed: %s" % e), None, [], session
+
+    def _retry_after_limit(self, page, prompt, entry, session, until):
+        """Claude refused for the usage limit: keep the message and send it again after the reset,
+        in the same session, ahead of the rest of the queue."""
+        retry = prompt if prompt == COMPACT or prompt.startswith(LIMIT_RETRY) else LIMIT_RETRY + prompt
+        with self.lock:
+            if until > self.hold_until:
+                self.hold_until, self.hold_reason = until, "Claude usage limit hit (%s)" % entry["text"]
+            self.queue.insert(0, (page, retry))
+            with self._changes(page) as st:
+                st["session_id"] = session
+
+    def _finish(self, page, entry, card_note, denials, session, ids):
+        """Put the run's reply in the thread, and wait for the SLURM jobs ids if there are any."""
+        with self._edit(page) as st:
+            st["thread"].append(entry)
+            if card_note:
+                st["thread"].append(card_note)
+            st["denials"] = denials
+            st["session_id"] = session
+            st["status"] = "unread"
+            if ids and st.get("auto_runs", 0) >= MAX_AUTO:
+                note(st, "SLURM jobs %s are still queued, but the assistant has already been "
+                         "messaged automatically %d times in a row; not watching them. Comment "
+                         "to continue." % (", ".join(ids), MAX_AUTO))
+            elif ids:
+                self._start_watch(st, ids)
 
     # --- waiting on SLURM jobs ------------------------------------------------------------
     @staticmethod
@@ -1399,9 +896,8 @@ class Reviews:
         st["status"], st["started"] = "working", time.time()
         st["watch"] = {"jobs": ids, "since": st["started"]}
         st["working_on"] = self._waiting_text(ids)
-        st["thread"].append({"role": "system", "time": now(), "text":
-                             "Waiting for SLURM jobs %s. When they have all left the queue, the assistant will be "
-                             "asked to check the results and update the page." % ", ".join(ids)})
+        note(st, "Waiting for SLURM jobs %s. When they have all left the queue, the assistant will be "
+                 "asked to check the results and update the page." % ", ".join(ids))
 
     @staticmethod
     def _waiting_text(ids):
@@ -1427,29 +923,23 @@ class Reviews:
                 if page_status.base_id(j["id"]) not in mine:
                     mine.append(page_status.base_id(j["id"]))
             (waiting if mine else done)[p] = mine or ids
-        with self.lock:     # keep the status bar's "Waiting for ..." line current
-            data = self._load()
+        with self._edit() as data:     # keep the status bar's "Waiting for ..." line current
             for p, mine in waiting.items():
                 st = data.get(p)
                 if st and st.get("watch"):
                     st["working_on"] = self._waiting_text(mine)
-            self._save(data)
         for page, ids in done.items():
             report = page_status.job_report(ids)
-            with self.lock:
-                data = self._load()
-                st = data.get(page)
-                if not st or not st.get("watch"):
+            with self._edit(page) as st:
+                if not st.get("watch"):
                     continue
                 st.pop("watch")
                 st["auto_runs"] = st.get("auto_runs", 0) + 1
-                st["thread"].append({"role": "system", "time": now(),
-                                     "text": "SLURM jobs finished:\n" + report})
+                note(st, "SLURM jobs finished:\n" + report)
                 st["working_on"], st["started"] = "Check the finished SLURM jobs %s" % ", ".join(ids), None
                 text = ("(Automatic message from the DirAI server, not the owner.) The SLURM jobs you were "
                         "waiting on have left the queue:\n%s\n\nCheck their output and logs, update the page "
                         "and its summary card with the results, and reply with a short summary. If you submit new "
                         "jobs, end your reply; you will be messaged again when they finish." % report)
                 prompt = text if st.get("session_id") or not st["thread"] else fresh_prompt(st["thread"], text)
-                self._save(data)
             self._enqueue(page, prompt)

@@ -80,7 +80,7 @@ Opening a page as the owner: connect through an SSH tunnel to the node, then vis
 
 | Where | What |
 |---|---|
-| this repo | the tool: server, list builder, assistant (`review.py`), panel scripts, `AGENT_RULE.md` rules for page agents |
+| this repo | the tool: server, list builder, assistant (`review.py`, with `review_permissions.py`, `review_prompts.py`, `claude_run.py`), panel scripts, `AGENT_RULE.md` rules for page agents |
 | `<repo>/www/` | per tree, generated and gitignored: list page, threads (`reviews.json`), caches, `server_host.txt`, logs, and `dirai.json` settings |
 | `~/.config/dirai/` | per user: owner key, "Always allow" grants, shared Claude usage reading, the list of trees, and `AGENT_RULE.md` (a link to this checkout's rules for page agents) |
 
@@ -98,7 +98,7 @@ Claude Code permission rules for them. `slurm`: extra `sbatch` options for `DirA
 
 ## Assistant safety
 
-Runs use `claude -p --restricted` with an allow list (`review.py`): reads only inside the page's
+Runs use `claude -p --restricted` with an allow list (`review_permissions.py`): reads only inside the page's
 own area (its nearest git repo, or its own folder outside any repo; the tree's top page sees the
 whole tree) and `read_dirs`. To let a page read another folder of the tree, name the path in your
 comment (granted for that page automatically) or click Allow when a read is blocked; folder reads
@@ -127,3 +127,14 @@ the list page lower; it resumes after the reset. The weekly level follows the da
 its **Auto** button is on (the default): n/7 of the limit on day n of the 7-day window, so a paused
 run resumes when the next day starts; dragging its marker sets it by hand (Auto off) and it resumes
 after the weekly reset. The levels apply to all your trees.
+
+## Tests
+
+```bash
+python3 -m unittest discover -s tests -t .     # from the DirAI checkout; no extra packages
+```
+
+`tests/test_helpers.py` covers the pure helpers (permission rules, selections, summary cards,
+config), `tests/test_reviews.py` the comment queue and its state in `reviews.json`, and
+`tests/test_server.py` runs `html_server.py` on a temporary tree with `tests/fake_claude.py`
+standing in for `claude`. Nothing touches `~/.config/dirai` or `~/.claude`.

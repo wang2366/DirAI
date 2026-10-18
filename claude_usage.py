@@ -18,14 +18,15 @@ import threading
 import time
 import urllib.request
 
-CREDENTIALS = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")),
-                           ".credentials.json")
+import dirai_config
+
+CREDENTIALS = os.path.join(dirai_config.CLAUDE_DIR, ".credentials.json")
 KEYCHAIN_ITEM = "Claude Code-credentials"   # macOS: same JSON as the Linux file
 URL = "https://api.anthropic.com/api/oauth/usage"
 CACHE_S = 60                # ask at most once a minute, across all DirAI servers (shared file)
 BACKOFF_S = 300             # after a refused request (e.g. 429), wait this long before asking again
-SHARED = os.path.join(os.path.expanduser(os.environ.get("DIRAI_CONFIG_DIR", "~/.config/dirai")), "usage.json")
-STOPS = os.path.join(os.path.dirname(SHARED), "usage_stop.json")
+SHARED = os.path.join(dirai_config.CONFIG_DIR, "usage.json")
+STOPS = os.path.join(dirai_config.CONFIG_DIR, "usage_stop.json")
 # no new runs at or above this % of the 5-hour session limit / of the weekly limit, unless the
 # owner set other levels (the sliders on the list page, saved in STOPS for all their trees). With
 # weekly auto on (the default) the weekly level follows the day instead: n/7 on day n of the week.
@@ -34,7 +35,7 @@ RESUME_MARGIN_S = 120
 DAY_S, WEEK_S = 86400, 7 * 86400       # start again this long after the limit resets
 
 _lock = threading.Lock()
-_cache = {"checked": 0, "usage": None}
+_cache = {"usage": None}
 
 
 def _epoch(iso):
@@ -81,35 +82,16 @@ def _fetch():
     return out
 
 
-def _read_shared():
-    try:
-        with open(SHARED) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
-
-
-def _write_shared(u):
-    try:
-        os.makedirs(os.path.dirname(SHARED), exist_ok=True)
-        with open(SHARED + ".%d.tmp" % os.getpid(), "w") as f:
-            json.dump(u, f)
-        os.replace(SHARED + ".%d.tmp" % os.getpid(), SHARED)
-    except OSError:
-        pass
-
-
 def settings():
     """The owner's levels: {"session": %, "weekly": %, "weekly_auto": bool} (DEFAULT_STOP and
     weekly_auto on, unless set on the list page)."""
     out = dict(DEFAULT_STOP, weekly_auto=True)
     try:
-        with open(STOPS) as f:
-            saved = json.load(f)
+        saved = dirai_config.load_json(STOPS, {})
         out.update((k, int(v)) for k, v in saved.items() if k in DEFAULT_STOP and 1 <= int(v) <= 100)
         if isinstance(saved.get("weekly_auto"), bool):
             out["weekly_auto"] = saved["weekly_auto"]
-    except (OSError, ValueError, TypeError, AttributeError):
+    except (ValueError, TypeError, AttributeError):
         pass
     return out
 
@@ -123,10 +105,7 @@ def _save(**changes):
     with _lock:
         cur = settings()
         cur.update(changes)
-        os.makedirs(os.path.dirname(STOPS), exist_ok=True)
-        with open(STOPS + ".%d.tmp" % os.getpid(), "w") as f:
-            json.dump(cur, f)
-        os.replace(STOPS + ".%d.tmp" % os.getpid(), STOPS)
+        dirai_config.save_json(STOPS, cur)
 
 
 def set_stop(name, percent):
@@ -177,9 +156,9 @@ def usage():
     "stale", and isn't retried for BACKOFF_S."""
     with _lock:
         now = time.time()
-        u = _read_shared() or _cache["usage"]
+        u = dirai_config.load_json(SHARED, None) or _cache["usage"]
         if u and now - u.get("checked", 0) < (BACKOFF_S if u.get("error") else CACHE_S):
-            _cache.update(checked=u["checked"], usage=u)
+            _cache["usage"] = u
             return dict(u, stop=levels(u))
         try:
             new = dict(_fetch(), error=None)
@@ -190,8 +169,11 @@ def usage():
             else:
                 new = {"error": err}
         new["checked"] = now
-        _cache.update(checked=now, usage=new)
-        _write_shared(new)
+        _cache["usage"] = new
+        try:
+            dirai_config.save_json(SHARED, new)
+        except OSError:
+            pass
         return dict(new, stop=levels(new))
 
 

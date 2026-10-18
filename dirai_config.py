@@ -20,6 +20,8 @@ import os
 
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_DIR = os.path.expanduser(os.environ.get("DIRAI_CONFIG_DIR", "~/.config/dirai"))
+CLAUDE_DIR = os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude"))   # Claude Code's own
+TRANSCRIPTS = os.path.join(CLAUDE_DIR, "projects")     # its session transcripts (*.jsonl)
 KEY_FILE = os.path.join(CONFIG_DIR, "key")
 PERMS_FILE = os.path.join(CONFIG_DIR, "permissions.json")
 TREES_FILE = os.path.join(CONFIG_DIR, "trees")
@@ -29,6 +31,30 @@ FIRST_PORT = 8765
 
 def data_dir(root):
     return os.path.join(root, DATA)
+
+
+def within(path, top):
+    """True if path is top or inside it (both already resolved)."""
+    return path == top or path.startswith(top + os.sep)
+
+
+def load_json(path, default):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def save_json(path, data, **dump_args):
+    """Write path atomically. The temporary file is per process, since several DirAI servers
+    may write one shared file (~/.config/dirai) at once."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    with open(tmp, "w") as f:
+        json.dump(data, f, **dump_args)
+        f.write("\n")
+    os.replace(tmp, path)
 
 
 def tree_config(root):
@@ -46,13 +72,6 @@ def tree_config(root):
 def set_tree_option(root, key, value):
     """Save one setting in the tree's www/dirai.json, keeping the others."""
     path = os.path.join(data_dir(root), "dirai.json")
-    try:
-        with open(path) as f:
-            cfg = json.load(f)
-    except (OSError, ValueError):
-        cfg = {}
+    cfg = load_json(path, {})
     cfg[key] = value
-    with open(path + ".tmp", "w") as f:
-        json.dump(cfg, f, indent=1)
-        f.write("\n")
-    os.replace(path + ".tmp", path)
+    save_json(path, cfg, indent=1)
