@@ -96,18 +96,19 @@ open "http://127.0.0.1:$PORT/_review/login?key=$(cat ~/.config/dirai/key)"</code
 else only gets the <code>index.html</code> files, read-only. The panel, which runs Claude with your account and files, needs
 both a connection from this machine <i>and</i> the secret cookie. On a shared cluster node, other users
 can reach <code>127.0.0.1</code> too; the key is what proves it's you.</div>
-<h3>One command for all of it</h3>
-<p>A shell function for <code>~/.zshrc</code> (or <code>~/.bashrc</code>) that links the command,
-sets up the tree the first time, (re)starts the server and opens the list logged in:</p>
-<pre><code>dirai-up() {
-  local tree=~/work
-  ln -sfn ~/work/DirAI/bin/DirAI ~/.local/bin/DirAI
-  [[ -s $tree/www/dirai.json ]] || DirAI -C "$tree" init || return
-  DirAI -C "$tree" restart >/dev/null 2>&amp;1 || DirAI -C "$tree" start || return
-  local port
-  port=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' "$tree/www/dirai.json") || return
-  open "http://127.0.0.1:$port/_review/login?key=$(cat ~/.config/dirai/key)"
-}</code></pre>
+<h3>From your laptop: <code>DirAI connect</code></h3>
+<p>When the tree runs on another machine (a server you ssh to, or a cluster node), run this there, in the
+tree, telling it once how your laptop reaches that machine:</p>
+<pre><code>DirAI connect kuang@100.90.173.94 -p 26     <span class="c"># what you type after "ssh"; remembered in dirai.json</span></code></pre>
+<p>It prints a shell function named after the tree (e.g. <code>dirai-my_assistant</code>). Paste it into
+<code>~/.zshrc</code> or <code>~/.bashrc</code> on your laptop and run it: it fetches the owner key over ssh,
+opens the tunnel (on a cluster, through the login node to the server's own node), and opens the agent list in
+your browser, logged in. It looks up the server's node and port each time, so it keeps working after a restart
+or a <code>--job</code> on another node, and it reconnects when the connection drops. Pass a local port if the
+default one is taken (<code>dirai-my_assistant 18765</code>); pick the browser with
+<code>export DIRAI_BROWSER="Google Chrome"</code>.</p>
+<div class="note">Trees on several machines can be open side by side: each machine's login cookie has
+its own name, so logging in to one doesn't log you out of another.</div>
 
 <h2 id="list">5. The agent list</h2>
 <p><code>/www/index.html</code> lists every agent in the tree, newest first, with each
@@ -245,6 +246,7 @@ different port (<code>DirAI init</code> picks one that's free; <code>start</code
 <tr><td><code>DirAI restart</code></td><td>Reload with the current DirAI code, same node and port.</td></tr>
 <tr><td><code>DirAI stop</code></td><td>Stop the server (and its job, if it has one).</td></tr>
 <tr><td><code>DirAI build</code></td><td>Rebuild the agent list now.</td></tr>
+<tr><td><code>DirAI connect [SSH…]</code></td><td>Print a shell function for your laptop that tunnels to this tree and opens it, logged in.</td></tr>
 <tr><td><code>DirAI list</code></td><td>Every tree you've started, up or down, with port and node.</td></tr>
 <tr><td><code>DirAI -C DIR &lt;cmd&gt;</code></td><td>Act on the tree holding DIR.</td></tr>
 </table></div>

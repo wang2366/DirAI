@@ -1,4 +1,5 @@
 """server.py end to end: a real server on a temp tree, with tests/fake_claude.py as claude."""
+import hashlib
 import json
 import os
 import socket
@@ -116,7 +117,19 @@ class Server(unittest.TestCase):
         self.assertEqual(self.get_raw("/_review/login?key=wrong")[0], 404)
         code, headers, _ = self.get_raw("/_review/login?key=" + self.key)
         self.assertEqual(code, 302)
-        self.assertIn("review_key=" + self.key, headers["Set-Cookie"])
+        name = "review_key_" + hashlib.sha256(self.key.encode()).hexdigest()[:10]
+        self.assertIn("%s=%s;" % (name, self.key), headers["Set-Cookie"])
+        # that cookie, or the plain review_key of earlier versions, makes you the owner
+        for cookie in (name, "review_key"):
+            req = urllib.request.Request("http://127.0.0.1:%d/_review/all" % self.port,
+                                         headers={"Cookie": "%s=%s" % (cookie, self.key)})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                self.assertEqual(r.status, 200, cookie)
+        # another machine's cookie (another key) beside it doesn't get in the way
+        req = urllib.request.Request("http://127.0.0.1:%d/_review/all" % self.port, headers={
+            "Cookie": "review_key_0123456789=other; %s=%s" % (name, self.key)})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            self.assertEqual(r.status, 200)
 
     # --- owner --------------------------------------------------------------------------
     def test_owner_index_and_agent_list(self):
@@ -218,6 +231,37 @@ class AgentList(unittest.TestCase):
         self.assertIn('href="../b/c/index.html"', out)
         self.assertIn(">Tokens</th>", out)
         self.assertTrue(os.path.exists(os.path.join(self.root, "www", "agent_tokens.json")))
+
+
+class Connect(unittest.TestCase):
+    """DirAI connect: the laptop function it prints, and the ssh destination it remembers."""
+    def run_connect(self, root, *args):
+        env = dict(os.environ, USER="me")
+        return subprocess.run([os.path.join(util.TOOL, "bin", "DirAI"), "-C", root, "connect"] + list(args),
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, universal_newlines=True)
+
+    def test_function(self):
+        root = util.new_tree("connect")
+        util.write(os.path.join(root, "www", "dirai.json"), json.dumps({"port": 8771}))
+        out = self.run_connect(root, "me@100.90.173.94", "-p", "26")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("dirai-connect() {", out.stdout)
+        self.assertIn('local lport="${1:-8771}"', out.stdout)
+        self.assertIn("info=$(ssh me@100.90.173.94 -p 26 \"cat '", out.stdout)
+        self.assertIn("'%s/www/server_host.txt'" % root, out.stdout)
+        self.assertIn('-o "ProxyCommand=ssh me@100.90.173.94 -p 26 -W %h:%p"', out.stdout)
+        check = subprocess.run(["bash", "-n"], input=out.stdout, universal_newlines=True)
+        self.assertEqual(check.returncode, 0)
+        # remembered: no arguments next time
+        self.assertIn("ssh me@100.90.173.94 -p 26", self.run_connect(root).stdout)
+
+    def test_refuses_shell_syntax(self):
+        root = util.new_tree("connect-bad")
+        util.write(os.path.join(root, "www", "dirai.json"), json.dumps({"port": 8772}))
+        out = self.run_connect(root, "me;rm", "-rf")
+        self.assertNotEqual(out.returncode, 0)
+        with open(os.path.join(root, "www", "dirai.json")) as f:
+            self.assertNotIn("ssh", json.load(f))   # nothing saved
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
