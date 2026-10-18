@@ -192,6 +192,33 @@ class ReviewsTest(unittest.TestCase):
         self.assertIn("SLURM jobs finished:\nreport for 11,12", self.texts())
         self.assertIn("The SLURM jobs you were waiting on have left the queue:\nreport for 11,12", st["pending"])
 
+    def test_retry_after_limit(self):
+        self.rv.hold_until = 0
+        until = time.time() + 600
+        self.rv._retry_after_limit("p", "do it", {"text": "You've hit your limit"}, "s1", until)
+        self.assertEqual(self.rv.queue, [("p", review_prompts.LIMIT_RETRY + "do it")])
+        self.assertEqual(self.rv.hold_until, until)
+        self.assertEqual(self.rv.hold_reason, "Claude usage limit hit (You've hit your limit)")
+        self.assertEqual(self.data()["p"]["session_id"], "s1")
+        self.rv.queue.clear()
+        self.rv._retry_after_limit("p", review_prompts.LIMIT_RETRY + "x", {"text": "t"}, "s1", until - 60)
+        self.assertEqual(self.rv.queue, [("p", review_prompts.LIMIT_RETRY + "x")])   # not wrapped twice
+        self.assertEqual(self.rv.hold_until, until)                                  # the later wait stays
+
+    def test_finish_watches_jobs_up_to_max_auto(self):
+        entry = {"role": "claude", "time": review.now(), "text": "submitted"}
+        self.rv._finish("p", entry, None, [], "s1", ["7"])
+        st = self.data()["p"]
+        self.assertEqual((st["status"], st["watch"]["jobs"]), ("working", ["7"]))
+        with self.rv._edit("p") as st:
+            st.pop("watch")
+            st["auto_runs"] = review.MAX_AUTO
+        self.rv._finish("p", entry, None, [], "s1", ["8"])
+        st = self.data()["p"]
+        self.assertEqual(st["status"], "unread")
+        self.assertNotIn("watch", st)
+        self.assertTrue(self.texts()[-1].startswith("SLURM jobs 8 are still queued"))
+
     def test_command(self):
         page_dir = os.path.join(self.root, "p")
         cmd = self.rv._command(page_dir, "haiku", ["Read(//data/**)"], "sess9")

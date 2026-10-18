@@ -745,15 +745,9 @@ class Reviews:
         return cmd
 
     def _run(self, page, prompt):
-        card_note = None
+        """One message to the page's assistant, from its slot in the queue to its reply in the thread."""
         try:
-            with self._edit(page) as st:
-                st["status"] = "working"
-                st["started"] = time.time()
-                for k in ("queued_until", "pending", "queued_reason"):
-                    st.pop(k, None)
-                session, grants = st.get("session_id"), list(st.get("grants", []))
-                model = st.get("model") or DEFAULT_MODEL
+            session, grants, model = self._begin(page)
             before = context_tokens(session)
             path = transcript(session)
             offset = os.path.getsize(path) if path and os.path.exists(path) else 0
@@ -764,42 +758,7 @@ class Reviews:
                 shutil.copyfile(index, snap)
             except OSError:
                 pass
-            cmd = self._command(page_dir, model, grants, session)
-            try:
-                env = dict(os.environ, REVIEW_PAGE_DIR=page_dir, **(LOCAL_ENV if model in LOCAL_MODELS else {}))
-                p = subprocess.Popen(cmd, cwd=page_dir, env=env, stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                     start_new_session=True)   # its own group, so Cancel stops its commands too
-                live = Live(p)
-                with self.lock:
-                    self.procs[page], self.live[page] = p, live
-                    if page in self.cancelled:      # cancelled before it started
-                        stop_process(p)
-                live.send({"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}})
-                live.send({"type": "user", "message": {"role": "user", "content": prompt}})
-                out = self._drive(page, live, None if prompt == COMPACT else lambda: self._card_fix(index, snap))
-                with self.lock:
-                    self.procs.pop(page, None)
-                    if page in self.cancelled:
-                        raise RunCancelled()
-                if live.timed_out:
-                    raise subprocess.TimeoutExpired(cmd, RUN_TIMEOUT_S)
-                reply = out.get("result") or live.err[-2000:] or "(no reply)"
-                entry = {"role": "claude", "time": now(), "text": reply, "model": model}
-                if "followup" in out:
-                    left = dirai_card.problems(index, now()[:10])
-                    card_note = system_entry("The summary card needed fixing; " + (
-                        "the assistant fixed it." if not left else "it still has problems: " + "; ".join(left) + "."))
-                if out.get("total_cost_usd") is not None and model not in LOCAL_MODELS:
-                    entry["cost"] = round(out["total_cost_usd"], 3)
-                denials = out.get("permission_denials", [])
-                session = out.get("session_id") or session
-            except RunCancelled:
-                entry, denials = system_entry("Cancelled by the owner."), []
-            except subprocess.TimeoutExpired:
-                entry, denials = system_entry("Run timed out after %d h." % (RUN_TIMEOUT_S // 3600)), []
-            except (ValueError, OSError) as e:
-                entry, denials = system_entry("Run failed: %s" % e), []
+            entry, card_note, denials, session = self._attempt(page, prompt, model, grants, session, page_dir, snap)
             until = limit_reset(entry["text"]) if entry["role"] == "claude" and model not in LOCAL_MODELS else None
             if prompt == COMPACT and entry["role"] == "claude" and not until:
                 after = context_tokens(session)
@@ -815,29 +774,10 @@ class Reviews:
             if os.path.exists(snap):
                 os.remove(snap)
             if until:
-                # keep the message and send it again after the reset, in the same session
-                retry = prompt if prompt == COMPACT or prompt.startswith(LIMIT_RETRY) else LIMIT_RETRY + prompt
-                with self.lock:
-                    if until > self.hold_until:
-                        self.hold_until, self.hold_reason = until, "Claude usage limit hit (%s)" % entry["text"]
-                    self.queue.insert(0, (page, retry))
-                    with self._changes(page) as st:
-                        st["session_id"] = session
+                self._retry_after_limit(page, prompt, entry, session, until)
                 return
             ids = [] if entry["text"] == "Cancelled by the owner." else self._jobs_to_watch(page_dir, session, offset)
-            with self._edit(page) as st:
-                st["thread"].append(entry)
-                if card_note:
-                    st["thread"].append(card_note)
-                st["denials"] = denials
-                st["session_id"] = session
-                st["status"] = "unread"
-                if ids and st.get("auto_runs", 0) >= MAX_AUTO:
-                    note(st, "SLURM jobs %s are still queued, but the assistant has already been "
-                             "messaged automatically %d times in a row; not watching them. Comment "
-                             "to continue." % (", ".join(ids), MAX_AUTO))
-                elif ids:
-                    self._start_watch(st, ids)
+            self._finish(page, entry, card_note, denials, session, ids)
         finally:
             with self.lock:
                 self.running -= 1
@@ -848,6 +788,83 @@ class Reviews:
                         if page in data:
                             end_asks(data[page])
             self._pump()
+
+    def _begin(self, page):
+        """Mark the page working as its run starts: (session, page grants, model)."""
+        with self._edit(page) as st:
+            st["status"] = "working"
+            st["started"] = time.time()
+            for k in ("queued_until", "pending", "queued_reason"):
+                st.pop(k, None)
+            return st.get("session_id"), list(st.get("grants", [])), st.get("model") or DEFAULT_MODEL
+
+    def _attempt(self, page, prompt, model, grants, session, page_dir, snap):
+        """Run claude on prompt until it replies, is cancelled, times out or fails to start:
+        (thread entry, summary-card note or None, permission denials, session)."""
+        index = os.path.join(page_dir, "index.html")
+        cmd = self._command(page_dir, model, grants, session)
+        card_note = None
+        try:
+            env = dict(os.environ, REVIEW_PAGE_DIR=page_dir, **(LOCAL_ENV if model in LOCAL_MODELS else {}))
+            p = subprocess.Popen(cmd, cwd=page_dir, env=env, stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 start_new_session=True)   # its own group, so Cancel stops its commands too
+            live = Live(p)
+            with self.lock:
+                self.procs[page], self.live[page] = p, live
+                if page in self.cancelled:      # cancelled before it started
+                    stop_process(p)
+            live.send({"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}})
+            live.send({"type": "user", "message": {"role": "user", "content": prompt}})
+            out = self._drive(page, live, None if prompt == COMPACT else lambda: self._card_fix(index, snap))
+            with self.lock:
+                self.procs.pop(page, None)
+                if page in self.cancelled:
+                    raise RunCancelled()
+            if live.timed_out:
+                raise subprocess.TimeoutExpired(cmd, RUN_TIMEOUT_S)
+            reply = out.get("result") or live.err[-2000:] or "(no reply)"
+            entry = {"role": "claude", "time": now(), "text": reply, "model": model}
+            if "followup" in out:
+                left = dirai_card.problems(index, now()[:10])
+                card_note = system_entry("The summary card needed fixing; " + (
+                    "the assistant fixed it." if not left else "it still has problems: " + "; ".join(left) + "."))
+            if out.get("total_cost_usd") is not None and model not in LOCAL_MODELS:
+                entry["cost"] = round(out["total_cost_usd"], 3)
+            return entry, card_note, out.get("permission_denials", []), out.get("session_id") or session
+        except RunCancelled:
+            return system_entry("Cancelled by the owner."), None, [], session
+        except subprocess.TimeoutExpired:
+            return system_entry("Run timed out after %d h." % (RUN_TIMEOUT_S // 3600)), None, [], session
+        except (ValueError, OSError) as e:
+            return system_entry("Run failed: %s" % e), None, [], session
+
+    def _retry_after_limit(self, page, prompt, entry, session, until):
+        """Claude refused for the usage limit: keep the message and send it again after the reset,
+        in the same session, ahead of the rest of the queue."""
+        retry = prompt if prompt == COMPACT or prompt.startswith(LIMIT_RETRY) else LIMIT_RETRY + prompt
+        with self.lock:
+            if until > self.hold_until:
+                self.hold_until, self.hold_reason = until, "Claude usage limit hit (%s)" % entry["text"]
+            self.queue.insert(0, (page, retry))
+            with self._changes(page) as st:
+                st["session_id"] = session
+
+    def _finish(self, page, entry, card_note, denials, session, ids):
+        """Put the run's reply in the thread, and wait for the SLURM jobs ids if there are any."""
+        with self._edit(page) as st:
+            st["thread"].append(entry)
+            if card_note:
+                st["thread"].append(card_note)
+            st["denials"] = denials
+            st["session_id"] = session
+            st["status"] = "unread"
+            if ids and st.get("auto_runs", 0) >= MAX_AUTO:
+                note(st, "SLURM jobs %s are still queued, but the assistant has already been "
+                         "messaged automatically %d times in a row; not watching them. Comment "
+                         "to continue." % (", ".join(ids), MAX_AUTO))
+            elif ids:
+                self._start_watch(st, ids)
 
     # --- waiting on SLURM jobs ------------------------------------------------------------
     @staticmethod
