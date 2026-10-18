@@ -80,7 +80,7 @@ Opening a page as the owner: connect through an SSH tunnel to the node, then vis
 
 | Where | What |
 |---|---|
-| this repo | the tool: server, list builder, assistant (`review.py`), panel scripts, `AGENT_RULE.md` rules for page agents |
+| this repo | the tool: server, list builder, assistant (`review.py`, with `review_permissions.py`, `review_prompts.py`, `claude_run.py`), panel scripts, `AGENT_RULE.md` rules for page agents |
 | `<repo>/www/` | per tree, generated and gitignored: list page, threads (`reviews.json`), caches, `server_host.txt`, logs, and `dirai.json` settings |
 | `~/.config/dirai/` | per user: owner key, "Always allow" grants, shared Claude usage reading, the list of trees, and `AGENT_RULE.md` (a link to this checkout's rules for page agents) |
 
@@ -98,7 +98,7 @@ Claude Code permission rules for them. `slurm`: extra `sbatch` options for `DirA
 
 ## Assistant safety
 
-Runs use `claude -p --restricted` with an allow list (`review.py`): reads only inside the page's
+Runs use `claude -p --restricted` with an allow list (`review_permissions.py`): reads only inside the page's
 own area (its nearest git repo, or its own folder outside any repo; the tree's top page sees the
 whole tree) and `read_dirs`. To let a page read another folder of the tree, name the path in your
 comment (granted for that page automatically) or click Allow when a read is blocked; folder reads

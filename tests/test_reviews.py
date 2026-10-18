@@ -9,6 +9,7 @@ import unittest
 from tests import util
 
 import review
+import review_prompts
 
 
 class ReviewsTest(unittest.TestCase):
@@ -81,7 +82,7 @@ class ReviewsTest(unittest.TestCase):
         with open(os.path.join(self.root, "www", "reviews.json"), "w") as f:
             json.dump(data, f)
         self.assertTrue(self.rv.new_chat("p"))
-        self.assertEqual(self.texts()[-1], review.NEW_CHAT_MARK)
+        self.assertEqual(self.texts()[-1], review_prompts.NEW_CHAT_MARK)
         self.rv.comment("p", "second")
         self.assertTrue(self.data()["p"]["pending"].startswith("This is a fresh session on a page"))
 
