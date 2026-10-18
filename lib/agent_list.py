@@ -2,11 +2,8 @@
 """Regenerate the agent list, <root>/www/index.html: a link to every agent (a folder holding an
 index.html) under <root>.
 
-Usage: agent_list.py [ROOT] [--sizes | --public]   (ROOT defaults to the top of the git repo
-holding the current directory; DirAI build runs it for the tree you are in.)
-
---public (DirAI publish): the list for the public gh-pages site, without the Folder size and
-Tokens columns, so nothing is measured, no transcript is read and no cache file is written.
+Usage: agent_list.py [ROOT] [--sizes]   (ROOT defaults to the top of the git repo holding the
+current directory; DirAI build runs it for the tree you are in.)
 
 Skipped folders: PRUNE_DIRS anywhere, other trees' www/ data folders, and the tree's dirai.json
 "exclude" list (folder names anywhere, or tree-relative paths with a slash).
@@ -41,11 +38,10 @@ import time
 import dirai_config
 
 ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
-PUBLIC = "--public" in sys.argv[1:]
 ROOT = os.path.abspath(ARGS[0]) if ARGS else \
     subprocess.run(["git", "rev-parse", "--show-toplevel"], stdout=subprocess.PIPE,
                    universal_newlines=True, check=True).stdout.strip()
-TITLE = os.environ.get("DIRAI_TITLE") or ROOT   # agent list heading: the tree's path
+TITLE = ROOT   # agent list heading: the tree's path
 OUT = os.path.join(ROOT, "www", "index.html")
 SIZES = os.path.join(ROOT, "www", "agent_sizes.json")
 SIZE_LOCK = SIZES + ".lock"
@@ -251,27 +247,21 @@ def human_size(n):
 
 
 def render(agents, cache, tokens):
-    """The list's HTML. cache and tokens None (--public): no Folder size and Tokens columns."""
-    public = cache is None
     rows = []
     for p in agents:
         label = html.escape(p["dir"] + "/" if p["dir"] else "(top)")
         href = html.escape("../" + (p["dir"] + "/" if p["dir"] else "") + "index.html", quote=True)
         title = html.escape(p["title"]) if p["title"] else ""
         when = datetime.datetime.fromtimestamp(p["mtime"]).strftime("%Y-%m-%d %H:%M")
-        c = None if public else cache.get(p["dir"])
-        if public:
-            size = ""
-        elif c and c.get("mtime") == p["mtime"]:
+        c = cache.get(p["dir"])
+        if c and c.get("mtime") == p["mtime"]:
             measured = datetime.datetime.fromtimestamp(c["measured"]).strftime("%Y-%m-%d %H:%M")
             size = '<td class="num" data-v="%d" title="measured %s">%s</td>' % (
                 c["size"], measured, human_size(c["size"]))
         else:
             size = '<td class="num" data-v="-1" title="being measured">&hellip;</td>'
-        t = None if public else tokens.get(p["dir"])
-        if public:
-            tok = ""
-        elif t:
+        t = tokens.get(p["dir"])
+        if t:
             tok = '<td class="num" data-v="%d" title="%d session%s&#10;input %s&#10;cache write %s&#10;cache read %s&#10;output %s">%s</td>' % (
                 sum(t["tok"]), t["sessions"], "" if t["sessions"] == 1 else "s",
                 *(human_count(x) for x in t["tok"]), human_count(sum(t["tok"])))
@@ -281,14 +271,7 @@ def render(agents, cache, tokens):
                     % (label, href, label, '<div class="sub">%s</div>' % title if title else "",
                        p["mtime"], when, size, tok))
     generated = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    return TEMPLATE.format(title=html.escape(TITLE), count=len(agents), generated=generated, rows="\n".join(rows),
-                           private_heads="" if public else PRIVATE_HEADS)
-
-
-# the columns a --public list leaves out
-PRIVATE_HEADS = """
-  <th data-col="2" title="everything under the agent's folder; re-measured when its index.html changes">Folder size</th>
-  <th data-col="3" title="tokens of the Claude Code sessions run in this folder (input + cache write + cache read + output); hover a cell for the breakdown">Tokens</th>"""
+    return TEMPLATE.format(title=html.escape(TITLE), count=len(agents), generated=generated, rows="\n".join(rows))
 
 
 TEMPLATE = """<!doctype html>
@@ -325,7 +308,9 @@ TEMPLATE = """<!doctype html>
   by DirAI's <code>agent_list.py</code> &middot; click a column to sort</div>
 <input id="q" type="search" placeholder="Filter by folder or title&hellip;" autofocus>
 <table>
-<thead><tr><th data-col="0">Agent</th><th data-col="1">Modified</th>{private_heads}</tr></thead>
+<thead><tr><th data-col="0">Agent</th><th data-col="1">Modified</th>
+  <th data-col="2" title="everything under the agent's folder; re-measured when its index.html changes">Folder size</th>
+  <th data-col="3" title="tokens of the Claude Code sessions run in this folder (input + cache write + cache read + output); hover a cell for the breakdown">Tokens</th></tr></thead>
 <tbody id="rows">
 {rows}
 </tbody>
@@ -368,14 +353,6 @@ if __name__ == "__main__":
         walk = {}
         agents = find_agents(walk)
         steps.done("find agents", "%d folders walked, %d agents" % (walk.get("walked", 0), len(agents)))
-        if PUBLIC:      # nothing measured, read or cached
-            os.makedirs(os.path.dirname(OUT), exist_ok=True)
-            with open(OUT + ".tmp", "w", encoding="utf-8") as f:
-                f.write(render(agents, None, None))
-            os.replace(OUT + ".tmp", OUT)
-            steps.done("write index.html")
-            print("Wrote %s (%d agents, public)" % (OUT, len(agents)))
-            sys.exit(0)
         cache = load_cache()
         todo = stale(agents, cache)
         steps.done("size cache", "%d of %d folders stale" % (len(todo), len(agents)))

@@ -77,8 +77,8 @@ DirAI status | restart | stop | build | list
 
 Later commands work from anywhere below the tree: DirAI uses the nearest folder above you holding
 `www/dirai.json`, else the git repo you are in. Outside git, `init` asks before adding the agent
-rules to `CLAUDE.md` (there it would reach every project below), skips `.gitignore`, and `publish`
-is unavailable; agents get git instructions only when their folder is inside a repo. `init` refuses
+rules to `CLAUDE.md` (there it would reach every project below), and skips `.gitignore`;
+agents get git instructions only when their folder is inside a repo. `init` refuses
 `/` and your home folder, and `start` refuses a tree that overlaps one already running.
 
 Each tree (each clone, even of the same repo) runs its own server on its own port, so trees start
@@ -87,15 +87,11 @@ and stop independently. `DirAI list` shows them all.
 Opening an agent as the owner: connect through an SSH tunnel to the node, then visit
 `/_review/login?key=<~/.config/dirai/key>` once to set the owner cookie.
 
-`DirAI publish` puts the tree's committed `*.html` files and an agent list on its `gh-pages` branch
-for GitHub Pages. That list has no folder sizes or token counts, and nothing else from `www/` is
-published.
-
 ## Where things live
 
 | Where | What |
 |---|---|
-| this repo | the tool: `bin/` the `DirAI` command and `dirai_serve`; `lib/` the Python (`server.py`, the agent list `agent_list.py`, the agents `agents.py` with `agent_permissions.py`, `agent_prompts.py`, `claude_run.py`, SLURM jobs `slurm.py`); `web/` `index.css` and the panel scripts; `scripts/` `agent_rm.sh`, `publish_pages.sh`; `AGENT_RULE.md` rules for agents |
+| this repo | the tool: `bin/` the `DirAI` command and `dirai_serve`; `lib/` the Python (`server.py`, the agent list `agent_list.py`, the agents `agents.py` with `agent_permissions.py`, `agent_prompts.py`, `claude_run.py`, SLURM jobs `slurm.py`); `web/` `index.css` and the panel scripts; `scripts/` `agent_rm.sh`; `AGENT_RULE.md` rules for agents |
 | `<repo>/www/` | per tree, generated and gitignored: the agent list, threads and agent state (`agents.json`), `before_run/`, caches, `server_host.txt`, logs, and `dirai.json` settings |
 | `~/.config/dirai/` | per user: owner key, "Always allow" grants, shared Claude usage reading, the list of trees, and `AGENT_RULE.md` (a link to this checkout's rules for agents) |
 
@@ -152,5 +148,5 @@ python3 -m unittest discover -s tests -t .     # from the DirAI checkout; no ext
 `tests/test_helpers.py` covers the pure helpers (permission rules, selections, summary cards,
 config), `tests/test_agents.py` the message queue and its state in `agents.json`, and
 `tests/test_server.py` runs `lib/server.py` on a temporary tree with `tests/fake_claude.py`
-standing in for `claude`, and the agent list (`--public` included). Nothing touches
+standing in for `claude`, and the agent list. Nothing touches
 `~/.config/dirai` or `~/.claude`.

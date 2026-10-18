@@ -1,7 +1,7 @@
 """Where DirAI keeps things.
 
 - The tool itself: one checkout, anywhere (e.g. ~/DirAI): bin/ (commands), lib/ (this Python),
-  web/ (the browser side: index.css, the panel scripts), scripts/ (agent_rm.sh, publish_pages.sh).
+  web/ (the browser side: index.css, the panel scripts), scripts/ (agent_rm.sh).
 - Per tree (a git repo being served): <tree>/www/ holds the agent list and state
   (index.html, agents.json, agent_sizes.json, agent_tokens.json, before_run/, server_host.txt, logs: all
   generated) and dirai.json, the tree's settings. dirai.json is local too (gitignored): two clones

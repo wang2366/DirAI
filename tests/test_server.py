@@ -219,14 +219,6 @@ class AgentList(unittest.TestCase):
         self.assertIn(">Tokens</th>", out)
         self.assertTrue(os.path.exists(os.path.join(self.root, "www", "agent_tokens.json")))
 
-    def test_public_writes_no_caches(self):
-        """DirAI publish: no folder sizes or token counts, and no cache files beside the list."""
-        out = self.build("--public")
-        self.assertIn('href="../a/index.html"', out)
-        self.assertNotIn("Tokens", out)
-        self.assertNotIn("Folder size", out)
-        self.assertEqual(os.listdir(os.path.join(self.root, "www")), ["index.html"])
-
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):

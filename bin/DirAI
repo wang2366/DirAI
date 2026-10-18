@@ -12,7 +12,6 @@
 #   DirAI restart              reload in place: same node/port, current code, fresh agent list
 #   DirAI stop                 stop this tree's server
 #   DirAI build                rebuild this tree's agent list (www/index.html) now
-#   DirAI publish [-n]         publish the tree's committed *.html to its gh-pages branch
 #   DirAI list                 every tree DirAI has started, and whether it is up
 #   DirAI -C DIR <command>     act on the tree holding DIR instead of the current directory
 # Each tree has its own server, port and state (www/), so trees start and stop independently;
@@ -47,7 +46,7 @@ find_root() {   # the nearest folder at or above here holding www/dirai.json, el
     git rev-parse --show-toplevel 2>/dev/null
 }
 
-case "$CMD" in -h|--help|help) sed -n '2,19p' "$0"; exit 0 ;; list) ;; *)
+case "$CMD" in -h|--help|help) sed -n '2,18p' "$0"; exit 0 ;; list) ;; *)
     ROOT=$(find_root)
     if [[ -z "$ROOT" ]]; then
         [[ "$CMD" == init ]] || { echo "No DirAI tree here or above; run  DirAI init  in the folder to serve (or use DirAI -C DIR)." >&2; exit 1; }
@@ -280,8 +279,6 @@ case "$CMD" in
     stop)    stop ;;
     build)   python3 "$TOOL/lib/agent_list.py" "$ROOT" ;;
     init)    init ;;
-    publish) [[ $IS_GIT == 1 ]] || { echo "$ROOT is not a git repo; publish needs one (it pushes a gh-pages branch)." >&2; exit 1; }
-             (cd "$ROOT" && "$TOOL/scripts/publish_pages.sh" "$@") ;;
     list)    list ;;
-    *) sed -n '2,17p' "$0"; exit 1 ;;
+    *) sed -n '2,16p' "$0"; exit 1 ;;
 esac
