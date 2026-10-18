@@ -2,6 +2,7 @@
 text files raw (collapsed, with line numbers), and the names of the rest and of its subfolders.
 """
 import os
+import re
 
 from dirai_config import within
 
@@ -9,6 +10,8 @@ FILE_MAX = 1 << 20      # bytes; a bigger file is listed, not shown
 TOTAL_MAX = 4 << 20     # bytes shown per agent in all; files after that are listed, not shown
 SHOW_MAX = 30           # files shown per agent
 LIST_MAX = 100          # names of files not shown, and of subfolders, per agent
+SEL_KEY = 30            # characters (markdown and whitespace removed) that find a selection's start/end
+MD_SKIP_RE = re.compile(r"[\s*_`#>\[\]()!~|=-]")   # markdown the rendered text doesn't show
 NOT_SHOWN = {"index.html"}
 IMAGES = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".bmp", ".tif", ".tiff", ".pdf")
 
@@ -97,3 +100,27 @@ def selected_lines(path, lines):
         return None
     a, b = sorted((max(1, min(a, n)), max(1, min(b, n))))
     return a, b
+
+
+def rendered_lines(path, block, text):
+    """(first, last) source lines of text selected in a rendered .md at path. block: the (first, last)
+    lines of the rendered blocks the selection spans, as the browser reports them; narrowed to the
+    lines holding the selection's start and end when they can be found there, else block itself."""
+    block = selected_lines(path, block)
+    if block is None:
+        return None
+    a, b = block
+    with open(path, encoding="utf-8", errors="replace") as f:
+        lines = f.read().split("\n")
+    chars, where = [], []
+    for n in range(a, b + 1):
+        for c in MD_SKIP_RE.sub("", lines[n - 1]):
+            chars.append(c)
+            where.append(n)
+    src, sel = "".join(chars), MD_SKIP_RE.sub("", text)
+    head, tail = sel[:SEL_KEY], sel[-SEL_KEY:]
+    i = src.find(head) if head else -1
+    if i < 0:
+        return a, b
+    j = src.find(tail, i)
+    return (where[i], b) if j < 0 else (where[i], where[j + len(tail) - 1])

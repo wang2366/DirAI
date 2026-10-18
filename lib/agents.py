@@ -480,7 +480,10 @@ class Agents:
                 path = agent_files.file_path(os.path.join(self.root, agent), md)
                 if path is None:
                     return False
-                lines = agent_files.selected_lines(path, selection.get("lines"))
+                if selection.get("rendered"):   # a rendered .md: its blocks' lines, narrowed to the text
+                    lines = agent_files.rendered_lines(path, selection.get("lines"), selection["text"])
+                else:
+                    lines = agent_files.selected_lines(path, selection.get("lines"))
             else:
                 lines = selection_lines(os.path.join(self.root, agent, "index.html"), selection["text"])
             selection = dict({"text": selection["text"][:SEL_MAX], "heading": selection.get("heading", "")[:200],

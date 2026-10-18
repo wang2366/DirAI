@@ -140,6 +140,15 @@ class FolderFiles(unittest.TestCase):
         for bad in (None, "x", [1], ["a", "b"]):
             self.assertIsNone(agent_files.selected_lines(path, bad), bad)
 
+    def test_rendered_lines(self):
+        path = os.path.join(self.dir, "doc.md")
+        util.write(path, "# Notes\n\nSome **bold** text here, and more of it.\n\n- one\n- two item\n")
+        self.assertEqual(agent_files.rendered_lines(path, [3, 3], "Some bold text here"), (3, 3))
+        self.assertEqual(agent_files.rendered_lines(path, [5, 6], "two item"), (6, 6))
+        self.assertEqual(agent_files.rendered_lines(path, [5, 6], "not there"), (5, 6))   # the blocks
+        self.assertEqual(agent_files.rendered_lines(path, [1, 99], "Notes"), (1, 1))      # within the file
+        self.assertIsNone(agent_files.rendered_lines(path, None, "x"))
+
     def test_selection_prompt(self):
         self.assertTrue(prompts.selection_prompt({"text": "a", "file": "run.sh", "lines": (3, 3)}, "m").startswith(
             "The owner selected this text in run.sh (source line 3;"))
