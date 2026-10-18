@@ -16,6 +16,7 @@ Everyone else gets 404 for /_review/* and sees pages without the panel.
 import datetime
 import glob
 import hashlib
+import html
 import json
 import os
 import re
@@ -25,11 +26,13 @@ import signal
 import subprocess
 import threading
 import time
+from urllib.parse import urlparse
 
 import claude_usage
 import dirai_config
 import dirai_card
 import page_status
+from dirai_config import load_json, within
 
 KEY_FILE = dirai_config.KEY_FILE
 WWW_DIR = dirai_config.TOOL_DIR
@@ -63,7 +66,7 @@ DEFAULT_MODEL = "sonnet"
 OLLAMA_URL = "http://" + os.environ.get("OLLAMA_HOST", "127.0.0.1:11434")
 LOCAL_ENV = {"ANTHROPIC_BASE_URL": OLLAMA_URL, "ANTHROPIC_AUTH_TOKEN": "ollama", "ANTHROPIC_API_KEY": "",
              "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
-TRANSCRIPTS = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")), "projects")
+TRANSCRIPTS = dirai_config.TRANSCRIPTS
 LIMIT_MARGIN_S = 120        # send this long after the stated reset time
 LIMIT_FALLBACK_S = 1800     # retry after this when the reset time can't be read
 RUN_TIMEOUT_S = 4 * 3600   # working time; time spent waiting for the owner's answers doesn't count
@@ -236,20 +239,19 @@ SEL_MAX = 4000      # characters of selected page text sent with a message
 SEL_KEY = 30        # characters (whitespace removed) used to find the selection's start/end in the source
 
 
-def visible_chars(html):
+def visible_chars(source):
     """The page's text with tags, scripts and whitespace removed, plus each character's source line."""
-    import html as htmllib
     chars, lines, line, pos = [], [], 1, 0
-    for m in SKIP_RE.finditer(html):
-        for c in html[pos:m.start()]:
+    for m in SKIP_RE.finditer(source):
+        for c in source[pos:m.start()]:
             chars.append(c); lines.append(line)
         tok = m.group(0)
         if tok.startswith("&"):
-            for c in re.sub(r"\s", "", htmllib.unescape(tok)):
+            for c in re.sub(r"\s", "", html.unescape(tok)):
                 chars.append(c); lines.append(line)
         line += tok.count("\n")
         pos = m.end()
-    for c in html[pos:]:
+    for c in source[pos:]:
         chars.append(c); lines.append(line)
     return "".join(chars), lines
 
@@ -317,17 +319,15 @@ _ctx_cache = {}
 def context_tokens(session_id):
     """Tokens in the session's context: the last request's input (uncached + cache write +
     cache read), or the size recorded by a later compaction. None if unknown."""
-    if not session_id:
-        return None
-    paths = glob.glob(os.path.join(TRANSCRIPTS, "*", session_id + ".jsonl"))
-    if not paths:
+    path = transcript(session_id)
+    if not path:
         return None
     try:
-        mtime = os.path.getmtime(paths[0])
-        if _ctx_cache.get(paths[0], (None,))[0] == mtime:
-            return _ctx_cache[paths[0]][1]
+        mtime = os.path.getmtime(path)
+        if _ctx_cache.get(path, (None,))[0] == mtime:
+            return _ctx_cache[path][1]
         ctx = None
-        with open(paths[0], encoding="utf-8", errors="replace") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             for line in f:
                 if '"usage"' not in line and "compact_boundary" not in line:
                     continue
@@ -346,11 +346,12 @@ def context_tokens(session_id):
                         ctx = n
     except OSError:
         return None
-    _ctx_cache[paths[0]] = (mtime, ctx)
+    _ctx_cache[path] = (mtime, ctx)
     return ctx
 
 
 def transcript(session_id):
+    """Path of the session's transcript, or None."""
     paths = glob.glob(os.path.join(TRANSCRIPTS, "*", session_id + ".jsonl")) if session_id else []
     return paths[0] if paths else None
 
@@ -373,16 +374,19 @@ class RunCancelled(Exception):
     pass
 
 
+def signal_group(p, sig):
+    """Send sig to the run's process group (it may have exited already)."""
+    try:
+        os.killpg(p.pid, sig)
+    except OSError:
+        pass
+
+
 def stop_process(p):
     """SIGTERM a claude run and the commands it started (its own process group), SIGKILL
     whatever is left after 10 s."""
-    def kill(sig):
-        try:
-            os.killpg(p.pid, sig)
-        except OSError:
-            pass
-    kill(signal.SIGTERM)
-    t = threading.Timer(10, kill, args=(signal.SIGKILL,))
+    signal_group(p, signal.SIGTERM)
+    t = threading.Timer(10, signal_group, args=(p, signal.SIGKILL))
     t.daemon = True
     t.start()
 
@@ -400,12 +404,17 @@ def clock(t):
     return time.strftime("%H:%M" if t - time.time() < 20 * 3600 else "%b %d %H:%M", time.localtime(t))
 
 
-def html_escape(s):
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
 def now():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def system_entry(text):
+    """A thread entry from the server (not the owner or the assistant)."""
+    return {"role": "system", "time": now(), "text": text}
+
+
+def note(st, text):
+    st["thread"].append(system_entry(text))
 
 
 def login_key():
@@ -425,14 +434,6 @@ def load_text(path):
             return f.read()
     except OSError:
         return ""
-
-
-def load_json(path, default):
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return default
 
 
 def mcp_config(page_dir, root):
@@ -512,11 +513,7 @@ def end_asks(st):
 
 
 def save_json(path, data):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=1, ensure_ascii=False)
-    os.replace(tmp, path)
+    dirai_config.save_json(path, data, indent=1, ensure_ascii=False)
 
 
 def split_command(cmd):
@@ -548,6 +545,11 @@ def split_command(cmd):
     return [p.strip() for p in pieces if p.strip()]
 
 
+def request_denial(req):
+    """A can_use_tool permission prompt in the shape of a permission_denials entry."""
+    return {"tool_name": req.get("tool_name", ""), "tool_input": req.get("input") or {}}
+
+
 def denial_rules(d):
     """Allow rules that grant exactly the denied action (one per piece of a chained command)."""
     if d.get("tool_name") == "Bash":
@@ -556,21 +558,18 @@ def denial_rules(d):
 
 
 def denial_rule(d):
-    """Turn a permission_denials entry into an allow rule granting exactly that action."""
+    """Turn a non-Bash permission_denials entry into an allow rule granting exactly that action."""
     tool, inp = d.get("tool_name", ""), d.get("tool_input", {}) or {}
     if tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
         path = inp.get("file_path") or inp.get("notebook_path") or ""
         return "Edit(/%s)" % path if path.startswith("/") else "Edit(%s)" % path
-    if tool == "Bash":
-        return "Bash(%s)" % inp.get("command", "")
     if tool in ("Read", "Grep", "Glob"):
         # blocked by the working-folder limit: grant read access to the folder
         path = inp.get("file_path") or inp.get("path") or ""
         if path.startswith("/"):
             folder = path if os.path.isdir(path) else os.path.dirname(path)
             return "Read(/%s/**)" % folder
-    if tool in ("WebFetch",) and inp.get("url"):
-        from urllib.parse import urlparse
+    if tool == "WebFetch" and inp.get("url"):
         return "WebFetch(domain:%s)" % urlparse(inp["url"]).netloc
     return tool
 
@@ -618,9 +617,9 @@ def path_grants(text, root, scope):
         if not os.path.exists(path):
             continue
         folder = path if os.path.isdir(path) else os.path.dirname(path)
-        if not (folder == root or folder.startswith(root + os.sep)):
+        if not within(folder, root):
             continue   # outside the tree: dirai.json "read_dirs", or Allow on a blocked read
-        if folder == scope or folder.startswith(scope + os.sep):
+        if within(folder, scope):
             continue   # already readable
         rule = "Read(/%s/**)" % folder
         if rule not in rules:
@@ -686,9 +685,8 @@ class Reviews:
                         self.hold_until, self.hold_reason = st["queued_until"], st.get("queued_reason", "")
                 elif st.get("status") == "working" and not st.get("watch"):   # watches resume
                     st["status"] = "unread"
-                    st["thread"].append({"role": "system", "time": now(),
-                                         "text": "The server restarted while this was running; "
-                                                 "the run was lost. Comment again to retry."})
+                    note(st, "The server restarted while this was running; "
+                             "the run was lost. Comment again to retry.")
             self._save(data)
         if self.queue:
             self._pump()
@@ -698,7 +696,6 @@ class Reviews:
         return load_json(self.path, {})
 
     def _save(self, data):
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
         save_json(self.path, data)
 
     def prev_path(self, page):
@@ -758,10 +755,13 @@ class Reviews:
             st["permissions"] = self.permissions()
             st["watching"] = (st.get("watch") or {}).get("jobs", [])
             st["card"] = self.card_problems(page)
-            st["denials"] = [{"text": describe_denial(d), "rules": denial_rules(d),
-                              "blocked": any(always_denied(r) for r in denial_rules(d)),
-                              "granted": all(r in granted for r in denial_rules(d))}
-                             for d in st.get("denials", [])]
+            denials = []
+            for d in st.get("denials", []):
+                rules = denial_rules(d)
+                denials.append({"text": describe_denial(d), "rules": rules,
+                                "blocked": any(always_denied(r) for r in rules),
+                                "granted": all(r in granted for r in rules)})
+            st["denials"] = denials
             return st
 
     def working(self, page):
@@ -797,12 +797,11 @@ class Reviews:
             if every == "off":
                 if not st.pop("repeat", None):
                     return False
-                st["thread"].append({"role": "system", "time": now(), "text": "Repeat turned off."})
+                note(st, "Repeat turned off.")
             else:
                 st["repeat"] = {"every": every, "text": text, "next": time.time() + REPEATS[every]}
-                st["thread"].append({"role": "system", "time": now(), "text":
-                                     "Repeats every %s, next at %s:\n%s" % (every,
-                                                                             clock(st["repeat"]["next"]), text)})
+                note(st, "Repeats every %s, next at %s:\n%s" % (every,
+                         clock(st["repeat"]["next"]), text))
             self._save(data)
             return True
 
@@ -871,7 +870,7 @@ class Reviews:
                 for k in ("watch", "queued_until", "pending", "queued_reason"):
                     st.pop(k, None)
                 st["status"] = "unread"
-                st["thread"].append({"role": "system", "time": now(), "text": "Cancelled by the owner."})
+                note(st, "Cancelled by the owner.")
                 self._save(data)
                 return True
             # running (or about to start): _run sees the flag, stops the process and records it
@@ -889,10 +888,7 @@ class Reviews:
             procs = list(self.procs.values())
         for sig, wait in ((signal.SIGTERM, 5), (signal.SIGKILL, 0)):
             for p in procs:
-                try:
-                    os.killpg(p.pid, sig)
-                except OSError:
-                    pass
+                signal_group(p, sig)
             end = time.time() + wait
             while time.time() < end and any(p.poll() is None for p in procs):
                 time.sleep(0.2)
@@ -907,9 +903,9 @@ class Reviews:
         index = os.path.join(full, "index.html")
         created = not os.path.exists(index)
         if created:
-            title = html_escape(os.path.basename(page) or page)
+            title = html.escape(os.path.basename(page) or page, quote=False)
             with open(index, "w", encoding="utf-8") as f:
-                f.write(STARTER_PAGE.format(title=title, task=html_escape(task), date=now()[:10]))
+                f.write(STARTER_PAGE.format(title=title, task=html.escape(task, quote=False), date=now()[:10]))
         prompt = task
         if created:
             prompt = ("This folder and its index.html were just created for this task (the page is a "
@@ -929,7 +925,7 @@ class Reviews:
             if busy(st) or not st.get("session_id"):
                 return False
             st["session_id"], st["denials"] = None, []
-            st["thread"].append({"role": "system", "time": now(), "text": NEW_CHAT_MARK})
+            note(st, NEW_CHAT_MARK)
             self._save(data)
             return True
 
@@ -941,8 +937,7 @@ class Reviews:
             if busy(st) or not st.get("session_id"):
                 return False
             st.pop("watch", None)   # the run re-checks the queue when it ends
-            st["thread"].append({"role": "system", "time": now(), "text":
-                                 "Compact requested (context %s tokens)." % kilo(context_tokens(st["session_id"]))})
+            note(st, "Compact requested (context %s tokens)." % kilo(context_tokens(st["session_id"])))
             st["denials"] = []
             st["status"] = "working"
             st["working_on"], st["started"] = "Compact the conversation", None
@@ -967,7 +962,7 @@ class Reviews:
             st["auto_runs"] = 0
             if scheduled and st.get("session_id"):
                 st["session_id"] = None
-                st["thread"].append({"role": "system", "time": now(), "text": NEW_CHAT_MARK})
+                note(st, NEW_CHAT_MARK)
             elif not st.get("session_id") and st["thread"] and (prompt is None or selection):
                 prompt = fresh_prompt(st["thread"], prompt or text)   # New chat: catch up from the page and thread
             st["thread"].append(dict({"role": "user", "time": now(), "text": text},
@@ -978,8 +973,7 @@ class Reviews:
                      if r not in st.get("grants", [])]
             if named:
                 st["grants"] = sorted(set(st.get("grants", [])) | set(named))
-                st["thread"].append({"role": "system", "time": now(),
-                                     "text": "Read access for this page (named in your message): " + ", ".join(named)})
+                note(st, "Read access for this page (named in your message): " + ", ".join(named))
             st["denials"] = []
             st["status"] = "working"   # waiting for a free slot counts as working
             st["working_on"], st["started"] = text, None
@@ -1020,19 +1014,17 @@ class Reviews:
             perms = load_json(PERMS_FILE, {"always": []})
             perms["always"] = sorted(set(perms["always"]) | set(global_rules))
             save_json(PERMS_FILE, perms)
-            st["thread"].append({"role": "system", "time": now(),
-                                 "text": "Granted (always): " + ", ".join(global_rules)})
+            note(st, "Granted (always): " + ", ".join(global_rules))
         if page_rules:
             st["grants"] = sorted(set(st.get("grants", [])) | set(page_rules))
-            st["thread"].append({"role": "system", "time": now(),
-                                 "text": "Granted (this page): " + ", ".join(page_rules)})
+            note(st, "Granted (this page): " + ", ".join(page_rules))
 
     # --- permission prompts (ask mode) ---------------------------------------------------
     def _ask(self, page, live, rid, req):
         """A permission prompt from the run: put it in the page thread for the owner. Answered
         at once when the owner chose Always allow for the same action earlier in this run, or
         when the run has used up its ASK_WAIT_S of waiting."""
-        d = {"tool_name": req.get("tool_name", ""), "tool_input": req.get("input") or {}}
+        d = request_denial(req)
         rules = denial_rules(d)
         with self.lock:
             choice = ("allow" if rules and all(r in live.granted for r in rules)
@@ -1072,7 +1064,7 @@ class Reviews:
                 self._save_grants(st, rules, True)
                 # prompts already waiting for what was just granted (parallel tool calls) go too
                 for other, oreq in list(live.pending.items()):
-                    orules = denial_rules({"tool_name": oreq.get("tool_name", ""), "tool_input": oreq.get("input") or {}})
+                    orules = denial_rules(request_denial(oreq))
                     if orules and all(r in live.granted for r in orules):
                         also.append((other, live.release(other)))
                 for e in st["thread"]:
@@ -1222,13 +1214,42 @@ class Reviews:
         for page, prompt in self.queue:
             st = self._page(data, page)
             if st["status"] != "queued":
-                st["thread"].append({"role": "system", "time": now(), "text":
-                                     "%s. Queued: this message will be sent automatically at %s."
-                                     % (self.hold_reason or "Claude usage limit", clock(self.hold_until))})
+                note(st, "%s. Queued: this message will be sent automatically at %s."
+                         % (self.hold_reason or "Claude usage limit", clock(self.hold_until)))
             if st["status"] != "queued" or st.get("queued_until") != self.hold_until:
                 st["status"], st["queued_until"], st["pending"] = "queued", self.hold_until, prompt
                 st["queued_reason"], st["started"] = self.hold_reason, None
         self._save(data)
+
+    def _command(self, page_dir, model, grants, session):
+        """The claude command line for a run in page_dir: its permissions, folders, MCP servers
+        and instructions."""
+        allow = DEFAULT_ALLOW + self.config["allow"] + ["Edit(/%s/**)" % page_dir] + \
+            load_json(PERMS_FILE, {"always": []})["always"] + grants
+        scope = read_scope(page_dir, self.root)
+        read_dirs = [scope] + self.config["read_dirs"]
+        dirs = read_dirs + extra_dirs(allow, page_dir, read_dirs)
+        mode = self.permissions()
+        mcp_file = mcp_config(page_dir, self.root)
+        # stream-json both ways in both modes: the prompt goes in on stdin, and in ask mode so
+        # do the owner's answers to claude's permission prompts
+        cmd = [CLAUDE_CMD, "-p", "--model", model, "--input-format", "stream-json",
+               "--output-format", "stream-json", "--verbose"] + (
+               ["--permission-mode", "manual", "--permission-prompt-tool", "stdio"] if mode == "ask"
+               else ["--permission-mode", "dontAsk"]) + [
+               "--restricted", "--strict-mcp-config"] + (["--mcp-config", mcp_file] if mcp_file else []) + [
+               "--tools", TOOLS, "--add-dir"] + dirs + [
+               "--append-system-prompt", SYSTEM_PROMPT.format(root=self.root,
+                   page_file=os.path.join(page_dir, "index.html"), page_dir=page_dir, scope=scope,
+                   git=GIT_PROMPT.format(page_dir=page_dir) if in_git(page_dir) else "",
+                   approval=APPROVAL[mode], always_denied=", ".join(ALWAYS_DENY), pages_md_path=AGENT_RULE_MD,
+                   page_rm=os.path.join(WWW_DIR, "page_rm.sh"),
+                   card_py=os.path.join(WWW_DIR, "dirai_card.py"))
+                   + "\n\n" + load_text(AGENT_RULE_MD),
+               "--allowedTools"] + allow + ["--disallowedTools"] + ALWAYS_DENY
+        if session:
+            cmd += ["--resume", session]
+        return cmd
 
     def _run(self, page, prompt):
         card_note = None
@@ -1253,31 +1274,7 @@ class Reviews:
                 shutil.copyfile(index, snap)
             except OSError:
                 pass
-            allow = DEFAULT_ALLOW + self.config["allow"] + ["Edit(/%s/**)" % page_dir] + \
-                load_json(PERMS_FILE, {"always": []})["always"] + grants
-            scope = read_scope(page_dir, self.root)
-            read_dirs = [scope] + self.config["read_dirs"]
-            dirs = read_dirs + extra_dirs(allow, page_dir, read_dirs)
-            mode = self.permissions()
-            mcp_file = mcp_config(page_dir, self.root)
-            # stream-json both ways in both modes: the prompt goes in on stdin, and in ask mode so
-            # do the owner's answers to claude's permission prompts
-            cmd = [CLAUDE_CMD, "-p", "--model", model, "--input-format", "stream-json",
-                   "--output-format", "stream-json", "--verbose"] + (
-                   ["--permission-mode", "manual", "--permission-prompt-tool", "stdio"] if mode == "ask"
-                   else ["--permission-mode", "dontAsk"]) + [
-                   "--restricted", "--strict-mcp-config"] + (["--mcp-config", mcp_file] if mcp_file else []) + [
-                   "--tools", TOOLS, "--add-dir"] + dirs + [
-                   "--append-system-prompt", SYSTEM_PROMPT.format(root=self.root,
-                       page_file=os.path.join(page_dir, "index.html"), page_dir=page_dir, scope=scope,
-                       git=GIT_PROMPT.format(page_dir=page_dir) if in_git(page_dir) else "",
-                       approval=APPROVAL[mode], always_denied=", ".join(ALWAYS_DENY), pages_md_path=AGENT_RULE_MD,
-                       page_rm=os.path.join(WWW_DIR, "page_rm.sh"),
-                       card_py=os.path.join(WWW_DIR, "dirai_card.py"))
-                       + "\n\n" + load_text(AGENT_RULE_MD),
-                   "--allowedTools"] + allow + ["--disallowedTools"] + ALWAYS_DENY
-            if session:
-                cmd += ["--resume", session]
+            cmd = self._command(page_dir, model, grants, session)
             try:
                 env = dict(os.environ, REVIEW_PAGE_DIR=page_dir, **(LOCAL_ENV if model in LOCAL_MODELS else {}))
                 p = subprocess.Popen(cmd, cwd=page_dir, env=env, stdin=subprocess.PIPE,
@@ -1301,23 +1298,23 @@ class Reviews:
                 entry = {"role": "claude", "time": now(), "text": reply, "model": model}
                 if "followup" in out:
                     left = dirai_card.problems(index, now()[:10])
-                    card_note = {"role": "system", "time": now(), "text": "The summary card needed fixing; "
-                                 + ("the assistant fixed it." if not left else "it still has problems: " + "; ".join(left) + ".")}
+                    card_note = system_entry("The summary card needed fixing; " + (
+                        "the assistant fixed it." if not left else "it still has problems: " + "; ".join(left) + "."))
                 if out.get("total_cost_usd") is not None and model not in LOCAL_MODELS:
                     entry["cost"] = round(out["total_cost_usd"], 3)
                 denials = out.get("permission_denials", [])
                 session = out.get("session_id") or session
             except RunCancelled:
-                entry, denials = {"role": "system", "time": now(), "text": "Cancelled by the owner."}, []
+                entry, denials = system_entry("Cancelled by the owner."), []
             except subprocess.TimeoutExpired:
-                entry, denials = {"role": "system", "time": now(), "text": "Run timed out after %d h." % (RUN_TIMEOUT_S // 3600)}, []
+                entry, denials = system_entry("Run timed out after %d h." % (RUN_TIMEOUT_S // 3600)), []
             except (ValueError, OSError) as e:
-                entry, denials = {"role": "system", "time": now(), "text": "Run failed: %s" % e}, []
+                entry, denials = system_entry("Run failed: %s" % e), []
             until = limit_reset(entry["text"]) if entry["role"] == "claude" and model not in LOCAL_MODELS else None
             if prompt == COMPACT and entry["role"] == "claude" and not until:
                 after = context_tokens(session)
-                entry = {"role": "system", "time": now(), "text": "Conversation compacted: %s -> %s tokens." % (
-                    kilo(before), kilo(after)) if after != before else "Compact finished: " + entry["text"]}
+                entry = system_entry("Conversation compacted: %s -> %s tokens." % (
+                    kilo(before), kilo(after)) if after != before else "Compact finished: " + entry["text"])
             if not until:   # the run changed the page: highlight against the copy from before it
                 try:
                     with open(snap, "rb") as a, open(index, "rb") as b:
@@ -1350,10 +1347,9 @@ class Reviews:
                 st["session_id"] = session
                 st["status"] = "unread"
                 if ids and st.get("auto_runs", 0) >= MAX_AUTO:
-                    st["thread"].append({"role": "system", "time": now(), "text":
-                                         "SLURM jobs %s are still queued, but the assistant has already been "
-                                         "messaged automatically %d times in a row; not watching them. Comment "
-                                         "to continue." % (", ".join(ids), MAX_AUTO)})
+                    note(st, "SLURM jobs %s are still queued, but the assistant has already been "
+                             "messaged automatically %d times in a row; not watching them. Comment "
+                             "to continue." % (", ".join(ids), MAX_AUTO))
                 elif ids:
                     self._start_watch(st, ids)
                 self._save(data)
@@ -1399,9 +1395,8 @@ class Reviews:
         st["status"], st["started"] = "working", time.time()
         st["watch"] = {"jobs": ids, "since": st["started"]}
         st["working_on"] = self._waiting_text(ids)
-        st["thread"].append({"role": "system", "time": now(), "text":
-                             "Waiting for SLURM jobs %s. When they have all left the queue, the assistant will be "
-                             "asked to check the results and update the page." % ", ".join(ids)})
+        note(st, "Waiting for SLURM jobs %s. When they have all left the queue, the assistant will be "
+                 "asked to check the results and update the page." % ", ".join(ids))
 
     @staticmethod
     def _waiting_text(ids):
@@ -1443,8 +1438,7 @@ class Reviews:
                     continue
                 st.pop("watch")
                 st["auto_runs"] = st.get("auto_runs", 0) + 1
-                st["thread"].append({"role": "system", "time": now(),
-                                     "text": "SLURM jobs finished:\n" + report})
+                note(st, "SLURM jobs finished:\n" + report)
                 st["working_on"], st["started"] = "Check the finished SLURM jobs %s" % ", ".join(ids), None
                 text = ("(Automatic message from the DirAI server, not the owner.) The SLURM jobs you were "
                         "waiting on have left the queue:\n%s\n\nCheck their output and logs, update the page "

@@ -11,6 +11,7 @@ review panel on every index.html and the /_review/* API; see review.py.
 
 Pages with no <style> of their own get the shared page.css (/_dirai/page.css), linked first in <head>.
 """
+import html as htmllib
 import http.server
 import io
 import json
@@ -26,6 +27,7 @@ from http import cookies
 from urllib.parse import parse_qs, urlparse
 
 import claude_usage
+import dirai_config
 import node_load
 import page_status
 import review
@@ -35,11 +37,19 @@ PORT = int(sys.argv[2])
 BIND = sys.argv[3] if len(sys.argv) > 3 else "0.0.0.0"
 ALLOWED_EXT = (".html", ".htm", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp")
 WWW_DIR = os.path.dirname(os.path.abspath(__file__))
+UI_SCRIPTS = ("panel.js", "list.js", "newagent.js")    # /_review/<name>, from review_<name>
 
 
 def ui_version():
     """Newest mtime of the scripts served under /_review/ (they are read from disk per request)."""
-    return max(os.path.getmtime(os.path.join(WWW_DIR, "review_%s.js" % n)) for n in ("panel", "list", "newagent"))
+    return max(os.path.getmtime(os.path.join(WWW_DIR, "review_" + n)) for n in UI_SCRIPTS)
+
+
+def in_root(path):
+    """True if the resolved path is ROOT or inside it."""
+    return dirai_config.within(path, ROOT)
+
+
 LIST_PAGE = os.path.join(ROOT, "www", "index.html")
 REVIEWS = review.Reviews(ROOT)
 HOME_BUTTON = ('<a href="/www/index.html" title="All pages" style="position:fixed;left:16px;bottom:16px;'
@@ -47,7 +57,7 @@ HOME_BUTTON = ('<a href="/www/index.html" title="All pages" style="position:fixe
                'color:#fff;font:600 14px system-ui;text-decoration:none">&#8962; Home</a>')
 KEY = review.login_key()
 NEWAGENT_TAG = ('<script src="/_review/newagent.js" data-base="%s" data-root="'
-                + ROOT.replace("&", "&amp;").replace('"', "&quot;") + '"></script>')
+                + htmllib.escape(ROOT) + '"></script>')
 PAGE_CSS = os.path.join(WWW_DIR, "page.css")
 PAGE_CSS_TAG = b'<link rel="stylesheet" href="/_dirai/page.css">'
 HOUSEKEEP_S = 600     # see housekeeping()
@@ -61,14 +71,14 @@ def clean_rel(rel):
     if not parts or not all(NAME_RE.match(p) for p in parts) or parts[0] == "www":
         return None
     full = os.path.realpath(os.path.join(ROOT, *parts))
-    return "/".join(parts) if full.startswith(ROOT + os.sep) else None
+    return "/".join(parts) if full != ROOT and in_root(full) else None
 
 
 def list_dirs(prefix, limit=40):
     """Autocomplete: existing folders 'parent/name/' matching what has been typed."""
     parent, _, start = prefix.lstrip("/").rpartition("/")
     base = os.path.realpath(os.path.join(ROOT, parent))
-    if base != ROOT and not base.startswith(ROOT + os.sep):
+    if not in_root(base):
         return []
     try:
         names = sorted(n for n in os.listdir(base) if not n.startswith(".") and n.startswith(start)
@@ -115,14 +125,23 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
         c = cookies.SimpleCookie(self.headers.get("Cookie", ""))
         return "review_key" in c and c["review_key"].value == KEY
 
-    def send_json(self, obj, code=200):
-        body = json.dumps(obj).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
+    def send_body(self, body, ctype, cache="no-store", code=200):
+        self.send_headers(len(body), ctype, cache, code)
         self.wfile.write(body)
+
+    def send_headers(self, length, ctype, cache="no-store", code=200):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(length))
+        self.send_header("Cache-Control", cache)
+        self.end_headers()
+
+    def send_file(self, path, ctype, cache="no-store"):
+        with open(path, "rb") as f:
+            self.send_body(f.read(), ctype, cache)
+
+    def send_json(self, obj, code=200):
+        self.send_body(json.dumps(obj).encode(), "application/json", code=code)
 
     # --- /_review/* ---------------------------------------------------------------------
     def do_GET(self):
@@ -130,15 +149,7 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
         if url.path.startswith("/_review/"):
             return self.review_get(url)
         if url.path == "/_dirai/page.css":     # every visitor: it styles every page
-            with open(PAGE_CSS, "rb") as f:
-                body = f.read()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/css; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
-            self.wfile.write(body)
-            return
+            return self.send_file(PAGE_CSS, "text/css; charset=utf-8", "no-cache")
         return super().do_GET()
 
     def do_POST(self):
@@ -238,19 +249,9 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
                     body = f.read()
             except (OSError, TypeError):
                 return self.send_error(404)
-            self.send_html_headers(len(body))
-            self.wfile.write(body)
-            return
-        if action in ("panel.js", "list.js", "newagent.js"):
-            with open(os.path.join(WWW_DIR, "review_" + action), "rb") as f:
-                body = f.read()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/javascript")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
-            return
+            return self.send_body(body, "text/html; charset=utf-8")
+        if action in UI_SCRIPTS:
+            return self.send_file(os.path.join(WWW_DIR, "review_" + action), "application/javascript")
         self.send_error(404)
 
     @staticmethod
@@ -258,7 +259,7 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
         """'a/b' for ROOT/a/b/ holding index.html, or None if there is no such page."""
         page = page.strip("/")
         full = os.path.realpath(os.path.join(ROOT, page))
-        if not (full == ROOT or full.startswith(ROOT + os.sep)) or not os.path.isdir(full):
+        if not in_root(full) or not os.path.isdir(full):
             return None
         if os.path.isfile(os.path.join(full, "index.html")):
             return os.path.relpath(full, ROOT) if full != ROOT else ""
@@ -267,7 +268,7 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
     # --- static files -------------------------------------------------------------------
     def send_head(self):
         path = os.path.realpath(self.translate_path(self.path))
-        if path != ROOT and not path.startswith(ROOT + os.sep):
+        if not in_root(path):
             self.send_error(404)
             return None
         if os.path.isdir(path):
@@ -286,17 +287,19 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
         with open(path, "rb") as f:
             html = f.read()
         owner = self.is_owner()
+        page = os.path.relpath(os.path.dirname(path), ROOT)
+        page = "" if page == "." else page
         if path == LIST_PAGE:
             if not owner:
-                return io.BytesIO(html) if self.send_html_headers(len(html)) else None
+                self.send_html_headers(len(html))
+                return io.BytesIO(html)
             tag = '<script src="/_review/list.js"></script>' + NEWAGENT_TAG % ""
         else:
             tag = HOME_BUTTON
             if owner:
-                page = os.path.relpath(os.path.dirname(path), ROOT)
-                page = "" if page == "." else page.replace("&", "&amp;").replace('"', "&quot;")
-                tag += '<script src="/_review/panel.js" data-page="%s"></script>' % page
-                tag += NEWAGENT_TAG % page
+                attr = htmllib.escape(page)
+                tag += '<script src="/_review/panel.js" data-page="%s"></script>' % attr
+                tag += NEWAGENT_TAG % attr
         tag = tag.encode()
         i = html.lower().rfind(b"</body>")
         html = html[:i] + tag + html[i:] if i >= 0 else html + tag
@@ -305,9 +308,8 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
             j = m.end() if m else 0
             html = html[:j] + PAGE_CSS_TAG + html[j:]
         if path != LIST_PAGE:   # work + job status bar at the top of the page
-            page = os.path.relpath(os.path.dirname(path), ROOT)
             # "Working on" quotes the owner's chat message: owner only
-            work = REVIEWS.working("" if page == "." else page) if owner else None
+            work = REVIEWS.working(page) if owner else None
             status = page_status.bar(os.path.dirname(path), work).encode()
             m = re.search(rb"<body[^>]*>", html, re.I)
             j = m.end() if m else 0
@@ -316,12 +318,7 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
         return io.BytesIO(html)
 
     def send_html_headers(self, length):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(length))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        return True
+        self.send_headers(length, "text/html; charset=utf-8")
 
     def list_directory(self, path):
         self.send_error(404)

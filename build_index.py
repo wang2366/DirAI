@@ -45,7 +45,7 @@ OUT = os.path.join(ROOT, "www", "index.html")
 SIZES = os.path.join(ROOT, "www", "page_sizes.json")
 SIZE_LOCK = SIZES + ".lock"
 TOKENS = os.path.join(ROOT, "www", "page_tokens.json")
-TRANSCRIPTS = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")), "projects")
+TRANSCRIPTS = dirai_config.TRANSCRIPTS
 PRUNE_DIRS = {".git", "node_modules", "__pycache__", ".claude", ".venv", "venv", "site-packages",
               ".tox", ".mypy_cache", ".pytest_cache", ".ipynb_checkpoints"}
 _EXCLUDE = dirai_config.tree_config(ROOT)["exclude"]
@@ -124,16 +124,13 @@ def folder_size(path):
 
 def load_cache():
     try:
-        with open(SIZES) as f:
-            return json.load(f).get("pages", {})
-    except (OSError, ValueError, AttributeError):
+        return dirai_config.load_json(SIZES, {}).get("pages", {})
+    except AttributeError:
         return {}
 
 
 def save_cache(cache):
-    with open(SIZES + ".tmp", "w") as f:
-        json.dump({"pages": cache}, f, indent=1)
-    os.replace(SIZES + ".tmp", SIZES)
+    dirai_config.save_json(SIZES, {"pages": cache}, indent=1)
 
 
 def stale(pages, cache):
@@ -185,11 +182,7 @@ def transcript_usage(path):
 def session_tokens(pages, stats=None):
     """{page dir: {"tok": [in, cache write, cache read, out], "sessions": n}}. A transcript goes
     to the deepest page folder holding its cwd; subagent transcripts add tokens, not sessions."""
-    try:
-        with open(TOKENS) as f:
-            cache = json.load(f)
-    except (OSError, ValueError):
-        cache = {}
+    cache = dirai_config.load_json(TOKENS, {})
     new = {}
     for dirpath, dirnames, filenames in os.walk(TRANSCRIPTS):
         for name in filenames:
@@ -214,9 +207,7 @@ def session_tokens(pages, stats=None):
                 c = {"key": key, "cwd": cwd, "tok": tok, "sub": "subagents" in dirpath.split(os.sep)}
             new[path] = c
     try:
-        with open(TOKENS + ".tmp", "w") as f:
-            json.dump(new, f)
-        os.replace(TOKENS + ".tmp", TOKENS)
+        dirai_config.save_json(TOKENS, new)
     except OSError:
         pass
     roots = {os.path.abspath(ROOT), os.path.realpath(ROOT)}
@@ -226,8 +217,7 @@ def session_tokens(pages, stats=None):
         cwd = c["cwd"]
         if not cwd:
             continue
-        rel = next((os.path.relpath(cwd, r) for r in roots
-                    if cwd == r or cwd.startswith(r + os.sep)), None)
+        rel = next((os.path.relpath(cwd, r) for r in roots if dirai_config.within(cwd, r)), None)
         if rel is None:
             continue
         rel = "" if rel == "." else rel
