@@ -36,13 +36,13 @@ ROOT = os.path.realpath(sys.argv[1])
 PORT = int(sys.argv[2])
 BIND = sys.argv[3] if len(sys.argv) > 3 else "0.0.0.0"
 ALLOWED_EXT = (".html", ".htm", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp")
-WWW_DIR = os.path.dirname(os.path.abspath(__file__))
-UI_SCRIPTS = ("panel.js", "list.js", "newagent.js")    # /_review/<name>, from review_<name>
+WEB_DIR = dirai_config.WEB_DIR
+UI_SCRIPTS = ("panel.js", "list.js", "newagent.js")    # /_review/<name>, from web/review_<name>
 
 
 def ui_version():
     """Newest mtime of the scripts served under /_review/ (they are read from disk per request)."""
-    return max(os.path.getmtime(os.path.join(WWW_DIR, "review_" + n)) for n in UI_SCRIPTS)
+    return max(os.path.getmtime(os.path.join(WEB_DIR, "review_" + n)) for n in UI_SCRIPTS)
 
 
 def in_root(path):
@@ -58,7 +58,7 @@ HOME_BUTTON = ('<a href="/www/index.html" title="All pages" style="position:fixe
 KEY = review.login_key()
 NEWAGENT_TAG = ('<script src="/_review/newagent.js" data-base="%s" data-root="'
                 + htmllib.escape(ROOT) + '"></script>')
-PAGE_CSS = os.path.join(WWW_DIR, "page.css")
+PAGE_CSS = os.path.join(WEB_DIR, "page.css")
 PAGE_CSS_TAG = b'<link rel="stylesheet" href="/_dirai/page.css">'
 HOUSEKEEP_S = 600     # see housekeeping()
 REPEAT_CHECK_S = 60   # how often repeated messages (review.REPEATS) are checked for being due
@@ -89,7 +89,7 @@ def list_dirs(prefix, limit=40):
 
 
 def rebuild_list():
-    subprocess.run([sys.executable, os.path.join(WWW_DIR, "build_index.py"), ROOT],
+    subprocess.run([sys.executable, os.path.join(dirai_config.LIB_DIR, "build_index.py"), ROOT],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -251,7 +251,7 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
                 return self.send_error(404)
             return self.send_body(body, "text/html; charset=utf-8")
         if action in UI_SCRIPTS:
-            return self.send_file(os.path.join(WWW_DIR, "review_" + action), "application/javascript")
+            return self.send_file(os.path.join(WEB_DIR, "review_" + action), "application/javascript")
         self.send_error(404)
 
     @staticmethod

@@ -59,7 +59,7 @@ case "$CMD" in -h|--help|help) sed -n '2,18p' "$0"; exit 0 ;; list) ;; *)
 esac
 
 cfg() {   # cfg KEY [TREE]: a value from the tree's dirai.json (lists space-separated)
-    python3 - "$TOOL" "${2:-$ROOT}" "$1" <<'EOF'
+    python3 - "$TOOL/lib" "${2:-$ROOT}" "$1" <<'EOF'
 import sys; sys.path.insert(0, sys.argv[1]); import dirai_config as c
 v = c.tree_config(sys.argv[2]).get(sys.argv[3])
 print(" ".join(v) if isinstance(v, list) else ("" if v is None else v))
@@ -127,7 +127,7 @@ status() {
     echo "url:     http://$(url_host "$NODE"):${HPORT:-$port}/www/index.html"
     echo "started: $STARTED_D $STARTED_T"
     if [[ "$JOB" != nojob ]]; then
-        local left; left=$(PYTHONPATH=$TOOL python3 -c 'import sys, page_status as p
+        local left; left=$(PYTHONPATH=$TOOL/lib python3 -c 'import sys, page_status as p
 j = [j for j in p.active_jobs() or [] if j["id"] == sys.argv[1]]
 print("%s, %s left" % (j[0]["state"], j[0]["left"]) if j else "")' "$JOB" 2>/dev/null)   # sacct: squeue is slow here
         echo "job:     $JOB (${left:-not in queue anymore})"
@@ -271,10 +271,10 @@ case "$CMD" in
     status)  status ;;
     restart) restart ;;
     stop)    stop ;;
-    build)   python3 "$TOOL/build_index.py" "$ROOT" ;;
+    build)   python3 "$TOOL/lib/build_index.py" "$ROOT" ;;
     init)    init ;;
     publish) [[ $IS_GIT == 1 ]] || { echo "$ROOT is not a git repo; publish needs one (it pushes a gh-pages branch)." >&2; exit 1; }
-             (cd "$ROOT" && "$TOOL/publish_pages.sh" "$@") ;;
+             (cd "$ROOT" && "$TOOL/scripts/publish_pages.sh" "$@") ;;
     list)    list ;;
     *) sed -n '2,16p' "$0"; exit 1 ;;
 esac

@@ -80,7 +80,7 @@ Opening a page as the owner: connect through an SSH tunnel to the node, then vis
 
 | Where | What |
 |---|---|
-| this repo | the tool: server, list builder, assistant (`review.py`, with `review_permissions.py`, `review_prompts.py`, `claude_run.py`), panel scripts, `AGENT_RULE.md` rules for page agents |
+| this repo | the tool: `bin/` the `DirAI` command and `dirai_serve`; `lib/` the Python (server `html_server.py`, list builder `build_index.py`, assistant `review.py` with `review_permissions.py`, `review_prompts.py`, `claude_run.py`); `web/` `page.css` and the panel scripts; `scripts/` `page_rm.sh`, `publish_pages.sh`; `AGENT_RULE.md` rules for page agents |
 | `<repo>/www/` | per tree, generated and gitignored: list page, threads (`reviews.json`), caches, `server_host.txt`, logs, and `dirai.json` settings |
 | `~/.config/dirai/` | per user: owner key, "Always allow" grants, shared Claude usage reading, the list of trees, and `AGENT_RULE.md` (a link to this checkout's rules for page agents) |
 
@@ -136,5 +136,5 @@ python3 -m unittest discover -s tests -t .     # from the DirAI checkout; no ext
 
 `tests/test_helpers.py` covers the pure helpers (permission rules, selections, summary cards,
 config), `tests/test_reviews.py` the comment queue and its state in `reviews.json`, and
-`tests/test_server.py` runs `html_server.py` on a temporary tree with `tests/fake_claude.py`
+`tests/test_server.py` runs `lib/html_server.py` on a temporary tree with `tests/fake_claude.py`
 standing in for `claude`. Nothing touches `~/.config/dirai` or `~/.claude`.

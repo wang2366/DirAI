@@ -6,6 +6,7 @@ import sys
 import tempfile
 
 TOOL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LIB = os.path.join(TOOL, "lib")
 TMP = os.path.realpath(tempfile.mkdtemp(prefix="dirai-test-"))
 atexit.register(shutil.rmtree, TMP, ignore_errors=True)
 # before any DirAI module is imported: they read these at import time
@@ -13,8 +14,8 @@ os.environ["DIRAI_CONFIG_DIR"] = os.path.join(TMP, "config")
 os.environ["CLAUDE_CONFIG_DIR"] = os.path.join(TMP, "claude")
 os.environ["REVIEW_CLAUDE_CMD"] = os.path.join(TOOL, "tests", "fake_claude.py")
 os.makedirs(os.path.join(TMP, "claude", "projects"), exist_ok=True)
-if TOOL not in sys.path:
-    sys.path.insert(0, TOOL)
+if LIB not in sys.path:
+    sys.path.insert(0, LIB)
 
 
 def new_tree(name):

@@ -1,6 +1,7 @@
 """Where DirAI keeps things.
 
-- The tool itself: this folder (one checkout, anywhere; e.g. ~/DirAI).
+- The tool itself: one checkout, anywhere (e.g. ~/DirAI): bin/ (commands), lib/ (this Python),
+  web/ (the browser side: page.css, the panel scripts), scripts/ (page_rm.sh, publish_pages.sh).
 - Per tree (a git repo being served): <tree>/www/ holds the list page and state
   (index.html, reviews.json, page_sizes.json, page_tokens.json, server_host.txt, logs: all
   generated) and dirai.json, the tree's settings. dirai.json is local too (gitignored): two clones
@@ -18,7 +19,10 @@
 import json
 import os
 
-TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
+LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+TOOL_DIR = os.path.dirname(LIB_DIR)                     # the checkout
+WEB_DIR = os.path.join(TOOL_DIR, "web")
+SCRIPTS_DIR = os.path.join(TOOL_DIR, "scripts")
 CONFIG_DIR = os.path.expanduser(os.environ.get("DIRAI_CONFIG_DIR", "~/.config/dirai"))
 CLAUDE_DIR = os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude"))   # Claude Code's own
 TRANSCRIPTS = os.path.join(CLAUDE_DIR, "projects")     # its session transcripts (*.jsonl)

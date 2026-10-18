@@ -30,10 +30,10 @@ class Server(unittest.TestCase):
                    "<html><head><title>P one</title></head><body><p>hello</p></body></html>")
         util.write(os.path.join(root, "p1", "x.png"), "png")
         util.write(os.path.join(root, "p1", "x.txt"), "secret")
-        subprocess.run([sys.executable, os.path.join(util.TOOL, "build_index.py"), root],
+        subprocess.run([sys.executable, os.path.join(util.LIB, "build_index.py"), root],
                        stdout=subprocess.DEVNULL, check=True)
         cls.log = open(os.path.join(util.TMP, "server.log"), "w")
-        cls.proc = subprocess.Popen([sys.executable, os.path.join(util.TOOL, "html_server.py"),
+        cls.proc = subprocess.Popen([sys.executable, os.path.join(util.LIB, "html_server.py"),
                                      root, str(cls.port), "127.0.0.1"], stdout=cls.log, stderr=cls.log)
         for _ in range(100):
             try:

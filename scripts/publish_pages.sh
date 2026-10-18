@@ -10,7 +10,7 @@ DRY_RUN=0
 [[ "${1:-}" == "-n" ]] && DRY_RUN=1
 
 REPO=$(git rev-parse --show-toplevel)          # the tree DirAI was run in
-TOOL=$(dirname "$(readlink -f "$0")")
+TOOL=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 BRANCH=gh-pages
 WT=$(mktemp -d) && rmdir "$WT"        # git worktree add creates it
 TMP_BRANCH="$BRANCH-tmp-$$"            # only used when gh-pages doesn't exist yet
@@ -36,7 +36,7 @@ mapfile -t pages < <(git ls-tree -r --name-only origin/main | grep -iE '\.html?$
 : > "$WT/.nojekyll"
 # the list page at www/index.html, headed by the tree's path like its own (not the worktree's)
 TITLE=$REPO
-DIRAI_TITLE=$TITLE python3 "$TOOL/build_index.py" "$WT" >/dev/null
+DIRAI_TITLE=$TITLE python3 "$TOOL/lib/build_index.py" "$WT" >/dev/null
 cat > "$WT/index.html" <<EOF
 <!doctype html>
 <meta charset="utf-8">

@@ -42,9 +42,8 @@ from review_prompts import (APPROVAL, CARD_FIX, GIT_PROMPT, LIMIT_RETRY, NEW_CHA
                             STARTER_PAGE, SYSTEM_PROMPT, fresh_prompt, selection_lines, selection_prompt)
 
 KEY_FILE = dirai_config.KEY_FILE
-WWW_DIR = dirai_config.TOOL_DIR
 PERMS_FILE = dirai_config.PERMS_FILE
-AGENT_RULE_MD = os.path.join(WWW_DIR, "AGENT_RULE.md")   # page conventions, appended to every run's instructions
+AGENT_RULE_MD = os.path.join(dirai_config.TOOL_DIR, "AGENT_RULE.md")   # page conventions, appended to every run's instructions
 CLAUDE_CMD = os.environ.get("REVIEW_CLAUDE_CMD", os.path.expanduser("~/.local/bin/claude"))
 # Background runs use --restricted: user/project/local settings files are ignored (so rules
 # granted to interactive sessions never leak in) and file tools stay inside the page's read scope
@@ -736,8 +735,8 @@ class Reviews:
                    page_file=os.path.join(page_dir, "index.html"), page_dir=page_dir, scope=scope,
                    git=GIT_PROMPT.format(page_dir=page_dir) if in_git(page_dir) else "",
                    approval=APPROVAL[mode], always_denied=", ".join(ALWAYS_DENY), pages_md_path=AGENT_RULE_MD,
-                   page_rm=os.path.join(WWW_DIR, "page_rm.sh"),
-                   card_py=os.path.join(WWW_DIR, "dirai_card.py"))
+                   page_rm=os.path.join(dirai_config.SCRIPTS_DIR, "page_rm.sh"),
+                   card_py=os.path.join(dirai_config.LIB_DIR, "dirai_card.py"))
                    + "\n\n" + load_text(AGENT_RULE_MD),
                "--allowedTools"] + allow + ["--disallowedTools"] + ALWAYS_DENY
         if session:

@@ -14,7 +14,7 @@ TOOL=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 ROOT=$(cd "${1:?usage: dirai_serve TREE}" && pwd -P)
 DATA=$ROOT/www
 HOST_FILE=$DATA/server_host.txt
-PORT=$(python3 -c "import sys; sys.path.insert(0, '$TOOL'); import dirai_config as c; print(c.tree_config('$ROOT')['port'] or '')")
+PORT=$(python3 -c "import sys; sys.path.insert(0, '$TOOL/lib'); import dirai_config as c; print(c.tree_config('$ROOT')['port'] or '')")
 [[ -n "$PORT" ]] || { echo "no port in $DATA/dirai.json (run: DirAI init)" >&2; exit 1; }
 mkdir -p "$DATA"
 SERVER_PID=
@@ -28,8 +28,8 @@ cleanup() {
 }
 
 start_server() {
-    python3 "$TOOL/build_index.py" "$ROOT"
-    python3 "$TOOL/html_server.py" "$ROOT" "$PORT" 0.0.0.0 &
+    python3 "$TOOL/lib/build_index.py" "$ROOT"
+    python3 "$TOOL/lib/html_server.py" "$ROOT" "$PORT" 0.0.0.0 &
     SERVER_PID=$!
 }
 

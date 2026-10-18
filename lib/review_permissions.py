@@ -22,7 +22,7 @@ DEFAULT_ALLOW = [
     "Bash(git add:*)", "Bash(git commit:*)", "Bash(git push:*)", "Bash(git fetch:*)",
     "Bash(git ls-files:*)", "Bash(git rev-parse:*)", "Bash(git remote -v)", "Bash(git branch --show-current)",
     # deleting: only via page_rm.sh, which refuses anything outside the page folder
-    "Bash(%s/page_rm.sh:*)" % os.path.dirname(os.path.abspath(__file__)),
+    "Bash(%s/page_rm.sh:*)" % dirai_config.SCRIPTS_DIR,
     # shell plumbing Claude chains into its commands (every part of a && chain must match)
     "Bash(cd:*)", "Bash(echo:*)", "Bash(printf:*)", "Bash(set:*)", "Bash(export:*)", "Bash(test:*)",
     "Bash([:*)", "Bash(true)", "Bash(false)", "Bash(sleep:*)", "Bash(for:*)", "Bash(while:*)",
