@@ -40,7 +40,7 @@ from dirai_config import load_json
 from agent_permissions import (ALWAYS_DENY, DEFAULT_ALLOW, always_denied, denial_rules, describe_denial,
                                 extra_dirs, is_read_rule, mcp_config, path_grants, read_scope,
                                 request_denial)
-from agent_prompts import (APPROVAL, CARD_FIX, QUEUED, GIT_PROMPT, LIMIT_RETRY, NEW_CHAT_MARK, SEL_MAX,
+from agent_prompts import (APPROVAL, CARD_FIX, GIT_PROMPT, LIMIT_RETRY, NEW_CHAT_MARK, SEL_MAX,
                             STARTER_INDEX, SYSTEM_PROMPT, fresh_prompt, selection_lines, selection_prompt)
 
 KEY_FILE = dirai_config.KEY_FILE
@@ -203,9 +203,6 @@ class Agents:
                     st["status"] = "unread"
                     note(st, "The server restarted while this was running; "
                              "the run was lost. Comment again to retry.")
-        for agent, st in self._load().items():   # queued behind a run that was lost
-            if st.get("inbox") and not busy(st):
-                self._deliver(agent)
         if self.queue:
             self._start_queued()
 
@@ -306,7 +303,6 @@ class Agents:
             st["model_labels"] = MODEL_LABELS
             st["permissions"] = self.permissions()
             st["watching"] = (st.get("job_wait") or {}).get("jobs", [])
-            st["queued_messages"] = len(st.pop("inbox", None) or [])
             st["card"] = self.card_problems(agent)
             denials = []
             for d in st.get("denials", []):
@@ -397,12 +393,6 @@ class Agents:
         with self._edit(agent) as st:
             if st["status"] not in ("working", "queued"):
                 return False
-            dropped = len(st.pop("inbox", []))   # messages queued behind the run go too
-            for e in st["thread"]:
-                if e.pop("queued", None):
-                    e["dropped"] = True
-            if dropped:
-                note(st, "Cancelled: %d queued message%s not sent." % (dropped, "" if dropped == 1 else "s"))
             queued = [i for i in self.queue if i[0] == agent]
             if queued or st.get("job_wait") or st["status"] == "queued":
                 for item in queued:
@@ -450,7 +440,7 @@ class Agents:
             prompt = ("This folder and its index.html were just created for this task (index.html is a "
                       "placeholder). Do the task, and turn index.html into the report of it.\n\n"
                       "Task: " + task)
-        if not self.comment(agent, task, prompt, queue=False):
+        if not self.comment(agent, task, prompt):
             return False
         if every in REPEATS:
             self.set_repeat(agent, every, task)
@@ -478,15 +468,12 @@ class Agents:
         self._enqueue(agent, COMPACT)
         return True
 
-    def comment(self, agent, text, prompt=None, selection=None, scheduled=None, queue=True):
+    def comment(self, agent, text, prompt=None, selection=None, scheduled=None):
         """selection: {"text", "heading"} of index.html text the owner selected, quoted in the prompt,
         or {"text", "heading", "file", "lines"} of text in a file of the agent's folder (shown raw at the
         end of index.html, with its line numbers). False if file isn't one of those.
         scheduled: the repeat period when check_repeats() sends it (shown in the thread); it starts
-        a fresh session, its prompt pointing at index.html instead of the thread.
-        While the agent is busy the message is queued (st["inbox"], shown in the thread as queued) and
-        sent when the run ends, with any others queued meanwhile (_deliver()); queue=False (and a
-        scheduled message): False instead."""
+        a fresh session, its prompt pointing at index.html instead of the thread."""
         if selection:
             md = selection.get("file")
             if md:
@@ -504,13 +491,7 @@ class Agents:
             prompt = prompt or selection_prompt(selection, text)
         with self._edit(agent) as st:
             if busy(st):
-                if not queue or scheduled:
-                    return False
-                st.setdefault("inbox", []).append({"text": text, "prompt": prompt})
-                st["thread"].append(dict({"role": "user", "time": now(), "text": text, "queued": True},
-                                         **({"selection": selection} if selection else {})))
-                self._grant_named(st, agent, text)
-                return True
+                return False
             st.pop("job_wait", None)   # the run re-checks the queue when it ends
             st["auto_runs"] = 0
             if scheduled and st.get("session_id"):
@@ -521,43 +502,18 @@ class Agents:
             st["thread"].append(dict({"role": "user", "time": now(), "text": text},
                                      **({"selection": selection} if selection else {}),
                                      **({"scheduled": scheduled} if scheduled else {})))
-            self._grant_named(st, agent, text)
+            agent_dir = os.path.join(self.root, agent)
+            named = [r for r in path_grants(text, self.root, read_scope(agent_dir, self.root))
+                     if r not in st.get("grants", [])]
+            if named:
+                st["grants"] = sorted(set(st.get("grants", [])) | set(named))
+                note(st, "Read access for this agent (named in your message): " + ", ".join(named))
             st["denials"] = []
             st["status"] = "working"   # waiting for a free slot counts as working
             st["working_on"], st["started"] = text, None
         prompt = prompt or text
         self._enqueue(agent, prompt)
         return True
-
-    def _grant_named(self, st, agent, text):
-        """Read access to the tree folders the owner's message names (path_grants()); caller holds the lock."""
-        agent_dir = os.path.join(self.root, agent)
-        named = [r for r in path_grants(text, self.root, read_scope(agent_dir, self.root))
-                 if r not in st.get("grants", [])]
-        if named:
-            st["grants"] = sorted(set(st.get("grants", [])) | set(named))
-            note(st, "Read access for this agent (named in your message): " + ", ".join(named))
-
-    def _deliver(self, agent):
-        """Send the messages the owner queued while the agent was busy, all together, if it is free now."""
-        with self._edit(agent) as st:
-            items = st.get("inbox")
-            if not items or busy(st):
-                return
-            del st["inbox"]
-            for e in st["thread"]:
-                e.pop("queued", None)
-            st.pop("job_wait", None)   # the run re-checks the queue when it ends
-            st["auto_runs"] = 0
-            prompts = [i["prompt"] or i["text"] for i in items]
-            prompt = prompts[0] if len(prompts) == 1 else QUEUED % len(prompts) + "\n\n".join(
-                "--- message %d ---\n%s" % (n, p) for n, p in enumerate(prompts, 1))
-            if not st.get("session_id") and st["thread"]:
-                prompt = fresh_prompt(st["thread"], prompt)   # New chat: catch up from index.html and the thread
-            st["denials"] = []
-            st["status"] = "working"
-            st["working_on"], st["started"] = " / ".join(i["text"] for i in items), None
-        self._enqueue(agent, prompt)
 
     def grant(self, agent, rules, always):
         rules = [r for r in rules if r and not always_denied(r)]
@@ -858,7 +814,6 @@ class Agents:
                     with self._changes() as data:
                         if agent in data:
                             end_asks(data[agent])
-            self._deliver(agent)       # what the owner queued meanwhile (only once this run is cleaned up)
             self._start_queued()
 
     def _begin(self, agent):

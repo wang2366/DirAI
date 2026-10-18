@@ -121,7 +121,7 @@
       const box = $("rv-thread"), top = box.scrollTop;
       const opened = [...box.querySelectorAll(".rv-sel")].map(d => d.open);   // keep expanded quotes expanded
       box.innerHTML = st.thread.map(m => m.role === "ask" ? askHtml(m) :
-        `<div class="rv-msg rv-${m.role}"><div class="rv-meta">${m.role}${m.queued ? " (queued: sent when the current run ends)" : ""}${m.dropped ? " (not sent: cancelled)" : ""}${m.scheduled ? " (scheduled, every " + m.scheduled + ")" : ""}${m.model ? " (" + m.model + ")" : ""} · ${m.time}${m.cost != null ? " · $" + m.cost : ""}</div>${m.selection ? selHtml(m.selection) : ""}${esc(m.text)}</div>`
+        `<div class="rv-msg rv-${m.role}"><div class="rv-meta">${m.role}${m.scheduled ? " (scheduled, every " + m.scheduled + ")" : ""}${m.model ? " (" + m.model + ")" : ""} · ${m.time}${m.cost != null ? " · $" + m.cost : ""}</div>${m.selection ? selHtml(m.selection) : ""}${esc(m.text)}</div>`
       ).join("") || '<div class="rv-meta">No comments yet.</div>';
       box.querySelectorAll(".rv-sel").forEach((d, i) => d.open = !!opened[i]);
       shownThread = threadKey;
@@ -145,9 +145,7 @@
         {weekday: "short", hour: "2-digit", minute: "2-digit"})}: ${rep.text.replace(/\s+/g, " ")}`;
       $("rv-repinfo").title = rep.text;
     }
-    // Send stays on while the agent works: the message is queued and goes when the run ends
-    $("rv-text").placeholder = busy ? "Message this agent: queued, sent when the current run ends" +
-      (st.queued_messages ? ` (${st.queued_messages} waiting)` : "") + "..." : "Message this agent...";
+    ["rv-save", "rv-new"].forEach(id => $(id).disabled = busy);
     ["rv-read", "rv-close"].forEach(id => $(id).disabled = busy || watching);
     $("rv-new").disabled = busy || !st.session_id;   // nothing to start over from yet
     $("rv-compact").disabled = busy || !st.session_id;

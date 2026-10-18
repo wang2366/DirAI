@@ -20,9 +20,6 @@ file and its lines (e.g. `run.sh`, lines 12–14), so the agent edits that file.
 section reloads, with what changed highlighted, so you can go round again. Raw HTML in a `.md` is
 shown as text, never run.
 
-Messages sent while the agent is working are queued (marked so in the chat) and sent together, in
-order, when the run ends; **Cancel** drops them too.
-
 If a run leaves SLURM jobs in the queue (ones it submitted, or any of yours running in the agent's
 folder), the agent stays "working" while the server checks the queue (`sacct`) every 10 minutes, which
 costs no tokens. When the jobs have all left the queue, the server sends the agent their `sacct`
