@@ -1,27 +1,31 @@
 #!/usr/bin/env python3
-"""Regenerate <root>/www/index.html with links to every index.html page (agent) under <root>.
+"""Regenerate the agent list, <root>/www/index.html: a link to every agent (a folder holding an
+index.html) under <root>.
 
-Usage: build_index.py [ROOT] [--sizes]   (ROOT defaults to the top of the git repo holding the
-current directory; DirAI build runs it for the tree you are in.)
+Usage: agent_list.py [ROOT] [--sizes | --public]   (ROOT defaults to the top of the git repo
+holding the current directory; DirAI build runs it for the tree you are in.)
+
+--public (DirAI publish): the list for the public gh-pages site, without the Folder size and
+Tokens columns, so nothing is measured, no transcript is read and no cache file is written.
 
 Skipped folders: PRUNE_DIRS anywhere, other trees' www/ data folders, and the tree's dirai.json
 "exclude" list (folder names anywhere, or tree-relative paths with a slash).
 
-Each row shows the size of everything under the page's folder. Sizes are cached in
-www/page_sizes.json together with the page's index.html mtime, and a folder is measured again
-only when its index.html changed (or is new): a normal run uses the cache and, if any page needs
-measuring, starts "build_index.py ROOT --sizes" in the background, which measures just those
-folders, updates the cache and rewrites the page.
+Each row shows the size of everything under the agent's folder. Sizes are cached in
+www/agent_sizes.json together with the agent's index.html mtime, and a folder is measured again
+only when its index.html changed (or is new): a normal run uses the cache and, if any agent needs
+measuring, starts "agent_list.py ROOT --sizes" in the background, which measures just those
+folders, updates the cache and rewrites the list.
 
 Each row also shows the tokens used by the Claude Code sessions run in that folder (or a
-subfolder not holding a page of its own), read from the transcripts in ~/.claude/projects
+subfolder not holding an index.html of its own), read from the transcripts in ~/.claude/projects
 (input + cache writes + cache reads + output, subagents included; breakdown on hover).
-Per-transcript sums are cached in www/page_tokens.json, keyed by file size and mtime.
+Per-transcript sums are cached in www/agent_tokens.json, keyed by file size and mtime.
 
-Each run prints how long each step took (find pages, size cache, measure sizes, tokens,
+Each run prints how long each step took (find agents, size cache, measure sizes, tokens,
 write index.html).
 
-Links are relative (../<path>), so they work both when the page is opened from an
+Links are relative (../<path>), so they work both when the list is opened from an
 rsync'd copy of the HTML files and when ROOT is served over HTTP.
 """
 import datetime
@@ -37,14 +41,15 @@ import time
 import dirai_config
 
 ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
+PUBLIC = "--public" in sys.argv[1:]
 ROOT = os.path.abspath(ARGS[0]) if ARGS else \
     subprocess.run(["git", "rev-parse", "--show-toplevel"], stdout=subprocess.PIPE,
                    universal_newlines=True, check=True).stdout.strip()
-TITLE = os.environ.get("DIRAI_TITLE") or ROOT   # list page heading: the tree's path
+TITLE = os.environ.get("DIRAI_TITLE") or ROOT   # agent list heading: the tree's path
 OUT = os.path.join(ROOT, "www", "index.html")
-SIZES = os.path.join(ROOT, "www", "page_sizes.json")
+SIZES = os.path.join(ROOT, "www", "agent_sizes.json")
 SIZE_LOCK = SIZES + ".lock"
-TOKENS = os.path.join(ROOT, "www", "page_tokens.json")
+TOKENS = os.path.join(ROOT, "www", "agent_tokens.json")
 TRANSCRIPTS = dirai_config.TRANSCRIPTS
 PRUNE_DIRS = {".git", "node_modules", "__pycache__", ".claude", ".venv", "venv", "site-packages",
               ".tox", ".mypy_cache", ".pytest_cache", ".ipynb_checkpoints"}
@@ -54,17 +59,17 @@ PRUNE_PATHS = {os.path.join(ROOT, e.strip("/")) for e in _EXCLUDE if "/" in e.st
 
 
 def keep_dir(dirpath, name):
-    """False for folders the page scan skips."""
+    """False for folders the agent scan skips."""
     full = os.path.join(dirpath, name)
     if name in PRUNE_DIRS or full in PRUNE_PATHS:
         return False
-    # another tree's data folder (its list page, threads, caches)
+    # another tree's data folder (its agent list, threads, caches)
     return not (name == "www" and os.path.isfile(os.path.join(full, "dirai.json")))
 TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
 
 
-def page_title(path):
-    # Only look near the top: big plotly pages carry unrelated <title> tags in SVG/JS.
+def index_title(path):
+    # Only look near the top: big plotly index.html files carry unrelated <title> tags in SVG/JS.
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             head = f.read(4096)
@@ -88,9 +93,9 @@ class Steps:
         print("  %-18s %7.2fs" % ("total", time.time() - self.start), flush=True)
 
 
-def find_pages(stats=None):
-    """Pages, newest first. "dir" is the page folder relative to ROOT ("" for ROOT itself)."""
-    pages = []
+def find_agents(stats=None):
+    """Agents, newest first. "dir" is the agent's folder relative to ROOT ("" for ROOT itself)."""
+    agents = []
     for dirpath, dirnames, filenames in os.walk(ROOT):
         if stats is not None:
             stats["walked"] = stats.get("walked", 0) + 1
@@ -101,10 +106,10 @@ def find_pages(stats=None):
         if full == OUT:
             continue
         rel_dir = os.path.relpath(dirpath, ROOT)
-        pages.append({"dir": "" if rel_dir == "." else rel_dir, "title": page_title(full),
+        agents.append({"dir": "" if rel_dir == "." else rel_dir, "title": index_title(full),
                       "mtime": os.path.getmtime(full)})
-    pages.sort(key=lambda p: p["mtime"], reverse=True)
-    return pages
+    agents.sort(key=lambda p: p["mtime"], reverse=True)
+    return agents
 
 
 def folder_size(path):
@@ -124,18 +129,18 @@ def folder_size(path):
 
 def load_cache():
     try:
-        return dirai_config.load_json(SIZES, {}).get("pages", {})
+        return dirai_config.load_json(SIZES, {}).get("agents", {})
     except AttributeError:
         return {}
 
 
 def save_cache(cache):
-    dirai_config.save_json(SIZES, {"pages": cache}, indent=1)
+    dirai_config.save_json(SIZES, {"agents": cache}, indent=1)
 
 
-def stale(pages, cache):
-    """Pages whose folder size is missing or older than their index.html."""
-    return [p for p in pages if cache.get(p["dir"], {}).get("mtime") != p["mtime"]]
+def stale(agents, cache):
+    """Agents whose folder size is missing or older than their index.html."""
+    return [p for p in agents if cache.get(p["dir"], {}).get("mtime") != p["mtime"]]
 
 
 def measure_in_background():
@@ -179,9 +184,9 @@ def transcript_usage(path):
     return cwd, tok
 
 
-def session_tokens(pages, stats=None):
-    """{page dir: {"tok": [in, cache write, cache read, out], "sessions": n}}. A transcript goes
-    to the deepest page folder holding its cwd; subagent transcripts add tokens, not sessions."""
+def session_tokens(agents, stats=None):
+    """{agent dir: {"tok": [in, cache write, cache read, out], "sessions": n}}. A transcript goes
+    to the deepest agent folder holding its cwd; subagent transcripts add tokens, not sessions."""
     cache = dirai_config.load_json(TOKENS, {})
     new = {}
     for dirpath, dirnames, filenames in os.walk(TRANSCRIPTS):
@@ -211,7 +216,7 @@ def session_tokens(pages, stats=None):
     except OSError:
         pass
     roots = {os.path.abspath(ROOT), os.path.realpath(ROOT)}
-    dirs = {p["dir"] for p in pages}
+    dirs = {p["dir"] for p in agents}
     out = {}
     for c in new.values():
         cwd = c["cwd"]
@@ -245,22 +250,28 @@ def human_size(n):
         n /= 1024.0
 
 
-def render(pages, cache, tokens):
+def render(agents, cache, tokens):
+    """The list's HTML. cache and tokens None (--public): no Folder size and Tokens columns."""
+    public = cache is None
     rows = []
-    for p in pages:
+    for p in agents:
         label = html.escape(p["dir"] + "/" if p["dir"] else "(top)")
         href = html.escape("../" + (p["dir"] + "/" if p["dir"] else "") + "index.html", quote=True)
         title = html.escape(p["title"]) if p["title"] else ""
         when = datetime.datetime.fromtimestamp(p["mtime"]).strftime("%Y-%m-%d %H:%M")
-        c = cache.get(p["dir"])
-        if c and c.get("mtime") == p["mtime"]:
+        c = None if public else cache.get(p["dir"])
+        if public:
+            size = ""
+        elif c and c.get("mtime") == p["mtime"]:
             measured = datetime.datetime.fromtimestamp(c["measured"]).strftime("%Y-%m-%d %H:%M")
             size = '<td class="num" data-v="%d" title="measured %s">%s</td>' % (
                 c["size"], measured, human_size(c["size"]))
         else:
             size = '<td class="num" data-v="-1" title="being measured">&hellip;</td>'
-        t = tokens.get(p["dir"])
-        if t:
+        t = None if public else tokens.get(p["dir"])
+        if public:
+            tok = ""
+        elif t:
             tok = '<td class="num" data-v="%d" title="%d session%s&#10;input %s&#10;cache write %s&#10;cache read %s&#10;output %s">%s</td>' % (
                 sum(t["tok"]), t["sessions"], "" if t["sessions"] == 1 else "s",
                 *(human_count(x) for x in t["tok"]), human_count(sum(t["tok"])))
@@ -270,7 +281,14 @@ def render(pages, cache, tokens):
                     % (label, href, label, '<div class="sub">%s</div>' % title if title else "",
                        p["mtime"], when, size, tok))
     generated = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    return TEMPLATE.format(title=html.escape(TITLE), count=len(pages), generated=generated, rows="\n".join(rows))
+    return TEMPLATE.format(title=html.escape(TITLE), count=len(agents), generated=generated, rows="\n".join(rows),
+                           private_heads="" if public else PRIVATE_HEADS)
+
+
+# the columns a --public list leaves out
+PRIVATE_HEADS = """
+  <th data-col="2" title="everything under the agent's folder; re-measured when its index.html changes">Folder size</th>
+  <th data-col="3" title="tokens of the Claude Code sessions run in this folder (input + cache write + cache read + output); hover a cell for the breakdown">Tokens</th>"""
 
 
 TEMPLATE = """<!doctype html>
@@ -304,12 +322,10 @@ TEMPLATE = """<!doctype html>
 <body>
 <h1>{title}</h1>
 <div class="meta">{count} agents &middot; generated {generated}
-  by <code>www/build_index.py</code> &middot; click a column to sort</div>
+  by DirAI's <code>agent_list.py</code> &middot; click a column to sort</div>
 <input id="q" type="search" placeholder="Filter by folder or title&hellip;" autofocus>
 <table>
-<thead><tr><th data-col="0">Agent</th><th data-col="1">Modified</th>
-  <th data-col="2" title="everything under the agent's folder; re-measured when its index.html changes">Folder size</th>
-  <th data-col="3" title="tokens of the Claude Code sessions run in this folder (input + cache write + cache read + output); hover a cell for the breakdown">Tokens</th></tr></thead>
+<thead><tr><th data-col="0">Agent</th><th data-col="1">Modified</th>{private_heads}</tr></thead>
 <tbody id="rows">
 {rows}
 </tbody>
@@ -350,11 +366,19 @@ if __name__ == "__main__":
     steps = Steps()
     try:
         walk = {}
-        pages = find_pages(walk)
-        steps.done("find pages", "%d folders walked, %d pages" % (walk.get("walked", 0), len(pages)))
+        agents = find_agents(walk)
+        steps.done("find agents", "%d folders walked, %d agents" % (walk.get("walked", 0), len(agents)))
+        if PUBLIC:      # nothing measured, read or cached
+            os.makedirs(os.path.dirname(OUT), exist_ok=True)
+            with open(OUT + ".tmp", "w", encoding="utf-8") as f:
+                f.write(render(agents, None, None))
+            os.replace(OUT + ".tmp", OUT)
+            steps.done("write index.html")
+            print("Wrote %s (%d agents, public)" % (OUT, len(agents)))
+            sys.exit(0)
         cache = load_cache()
-        todo = stale(pages, cache)
-        steps.done("size cache", "%d of %d folders stale" % (len(todo), len(pages)))
+        todo = stale(agents, cache)
+        steps.done("size cache", "%d of %d folders stale" % (len(todo), len(agents)))
         if measuring:
             took = []
             for p in todo:
@@ -362,8 +386,8 @@ if __name__ == "__main__":
                 cache[p["dir"]] = {"mtime": p["mtime"], "measured": time.time(),
                                    "size": folder_size(os.path.join(ROOT, p["dir"]))}
                 took.append((time.time() - t0, p["dir"] or "(top)"))
-            known = {p["dir"] for p in pages}
-            cache = {d: v for d, v in cache.items() if d in known}   # forget removed pages
+            known = {p["dir"] for p in agents}
+            cache = {d: v for d, v in cache.items() if d in known}   # forget removed agents
             save_cache(cache)
             slowest = ", ".join("%s %.1fs" % (d, t) for t, d in sorted(took, reverse=True)[:3])
             steps.done("measure sizes", "%d folders%s" % (len(todo), "; slowest: " + slowest if took else ""))
@@ -373,13 +397,13 @@ if __name__ == "__main__":
         else:
             steps.done("measure sizes", "nothing to measure")
         tstats = {}
-        tokens = session_tokens(pages, tstats)
-        steps.done("tokens", "%d transcripts, %d read, %d cached, %d pages with sessions" % (
+        tokens = session_tokens(agents, tstats)
+        steps.done("tokens", "%d transcripts, %d read, %d cached, %d agents with sessions" % (
             tstats.get("files", 0), tstats.get("read", 0),
             tstats.get("files", 0) - tstats.get("read", 0), len(tokens)))
         os.makedirs(os.path.dirname(OUT), exist_ok=True)
         with open(OUT + ".tmp", "w", encoding="utf-8") as f:
-            f.write(render(pages, cache, tokens))
+            f.write(render(agents, cache, tokens))
         os.replace(OUT + ".tmp", OUT)
         steps.done("write index.html")
         steps.total()
@@ -389,5 +413,5 @@ if __name__ == "__main__":
                 os.remove(SIZE_LOCK)
             except OSError:
                 pass
-    print("Wrote %s (%d agents%s)" % (OUT, len(pages),
+    print("Wrote %s (%d agents%s)" % (OUT, len(agents),
                                       ", measured %d folders" % len(todo) if measuring else ""))

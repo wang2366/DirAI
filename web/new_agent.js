@@ -1,7 +1,7 @@
-// "New agent" button injected by html_server.py (owner only): pick a folder (autocomplete),
-// describe a task; the server creates <folder>/index.html if needed and starts the AI assistant there.
+// "New agent" button injected by server.py (owner only): pick a folder (autocomplete),
+// describe a task; the server creates <folder>/index.html if needed and starts the agent there.
 (function () {
-  const BASE = document.currentScript.dataset.base;   // this page's folder ("" on the list page)
+  const BASE = document.currentScript.dataset.base;   // this agent's folder ("" on the agent list)
   const ROOT = document.currentScript.dataset.root;   // absolute path of the tree being served
   const css = `
   #na-btn{position:fixed;left:120px;bottom:16px;z-index:99999;padding:8px 14px;border-radius:20px;
@@ -34,7 +34,7 @@
     <label for="na-every">Repeat</label>
     <select id="na-every"><option value="off">Once</option><option value="hour">Every hour</option>
       <option value="day">Every day</option><option value="week">Every week</option></select>
-    <div id="na-hint2" style="font-size:12px;color:#666;margin-top:3px">Runs now, then sends the same task again on this schedule (change it later in the page's AI assistant panel).</div>
+    <div id="na-hint2" style="font-size:12px;color:#666;margin-top:3px">Runs now, then sends the same task again on this schedule (change it later in the agent's panel).</div>
     <div id="na-row"><button id="na-cancel">Cancel</button><button id="na-go" class="primary">Create &amp; start</button></div>
   </div></div>`);
 
@@ -67,7 +67,7 @@
     call("new", {dir: $("na-dir").value, task: $("na-task").value, every: $("na-every").value}).then(r => {
       $("na-go").disabled = false;
       if (r.error) return alert(r.error);
-      location.href = r.url;                // the new page, with the assistant working
+      location.href = r.url;                // the new agent, already working
     }, () => { $("na-go").disabled = false; alert("Request failed."); });
   };
 })();

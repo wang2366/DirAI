@@ -52,12 +52,12 @@ say "Linked $BIN/DirAI -> $HOME_DIR/bin/DirAI"
 mkdir -p "$HOME/.config/dirai"
 ln -sfn "$HOME_DIR/AGENT_RULE.md" "$HOME/.config/dirai/AGENT_RULE.md"
 
-CLAUDE=${REVIEW_CLAUDE_CMD:-$HOME/.local/bin/claude}
+CLAUDE=${DIRAI_CLAUDE_CMD:-${REVIEW_CLAUDE_CMD:-$HOME/.local/bin/claude}}
 if [[ ! -x "$CLAUDE" ]]; then
     say ""
     say "Claude Code not found at $CLAUDE. Install it with"
     say "    curl -fsSL https://claude.ai/install.sh | bash"
-    say "or set REVIEW_CLAUDE_CMD to its path."
+    say "or set DIRAI_CLAUDE_CMD to its path."
 fi
 
 case ":$PATH:" in *":$BIN:"*) ;; *)

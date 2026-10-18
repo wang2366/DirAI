@@ -1,19 +1,20 @@
-"""Page reviews for html_server.py: a comment thread per index.html page, each saved
-comment handed to a background `claude -p` session working in that page's folder.
+"""The agents of a tree, for server.py. An agent is a folder holding an index.html, with a chat
+thread; each message the owner sends goes to a background `claude -p` session working in that folder.
 
-Status per page: working (Claude is running) -> unread (new reply) -> read -> closed.
-A new comment reopens a page. When a run hits the Claude usage limit, the page is "queued":
-its message is kept (in reviews.json, so it survives a restart) and sent again, in the same
+Status per agent: working (Claude is running) -> unread (new reply) -> read -> closed.
+A new message reopens an agent. When a run hits the Claude usage limit, the agent is "queued":
+its message is kept (in agents.json, so it survives a restart) and sent again, in the same
 session, shortly after the limit resets; no run starts before then. Runs are also held back
-(same "queued" status) while plan usage is at or above the owner's stop levels (claude_usage.stops():
-100 % of the 5-hour session and of the weekly limit unless set lower with the list page's sliders),
-until that limit resets. State for one served root lives in <root>/www/reviews.json.
+(same "queued" status) while plan usage is at or above the owner's pause levels
+(claude_usage.pause_levels(): 100 % of the 5-hour session and of the weekly limit unless set lower
+with the agent list's sliders), until that limit resets. State for one served root lives in
+<root>/www/agents.json.
 
 Only the owner can use any of this: requests must come from 127.0.0.1 (the SSH tunnel
 lands on this node's loopback) and carry the secret key cookie (see login_key()).
-Everyone else gets 404 for /_review/* and sees pages without the panel.
+Everyone else gets 404 for /_review/* and sees index.html files without the panel.
 
-What runs may do is in review_permissions.py, what they are told in review_prompts.py, and how a
+What runs may do is in agent_permissions.py, what they are told in agent_prompts.py, and how a
 claude process is driven and read in claude_run.py.
 """
 import contextlib
@@ -31,26 +32,28 @@ import time
 import claude_usage
 import dirai_config
 import dirai_card
-import page_status
-from claude_run import (Live, RunCancelled, context_tokens, limit_reset, signal_group, stop_process,
+import slurm
+from claude_run import (LiveRun, RunCancelled, context_tokens, limit_reset, signal_group, stop_process,
                         submitted_jobs, transcript)
 from dirai_config import load_json
-from review_permissions import (ALWAYS_DENY, DEFAULT_ALLOW, always_denied, denial_rules, describe_denial,
+from agent_permissions import (ALWAYS_DENY, DEFAULT_ALLOW, always_denied, denial_rules, describe_denial,
                                 extra_dirs, is_read_rule, mcp_config, path_grants, read_scope,
                                 request_denial)
-from review_prompts import (APPROVAL, CARD_FIX, GIT_PROMPT, LIMIT_RETRY, NEW_CHAT_MARK, SEL_MAX,
-                            STARTER_PAGE, SYSTEM_PROMPT, fresh_prompt, selection_lines, selection_prompt)
+from agent_prompts import (APPROVAL, CARD_FIX, GIT_PROMPT, LIMIT_RETRY, NEW_CHAT_MARK, SEL_MAX,
+                            STARTER_INDEX, SYSTEM_PROMPT, fresh_prompt, selection_lines, selection_prompt)
 
 KEY_FILE = dirai_config.KEY_FILE
 PERMS_FILE = dirai_config.PERMS_FILE
-AGENT_RULE_MD = os.path.join(dirai_config.TOOL_DIR, "AGENT_RULE.md")   # page conventions, appended to every run's instructions
-CLAUDE_CMD = os.environ.get("REVIEW_CLAUDE_CMD", os.path.expanduser("~/.local/bin/claude"))
+AGENT_RULE_MD = os.path.join(dirai_config.TOOL_DIR, "AGENT_RULE.md")   # agent conventions, appended to every run's instructions
+# DIRAI_CLAUDE_CMD (or its old name REVIEW_CLAUDE_CMD): the claude to run, if not the default
+CLAUDE_CMD = (os.environ.get("DIRAI_CLAUDE_CMD") or os.environ.get("REVIEW_CLAUDE_CMD")
+              or os.path.expanduser("~/.local/bin/claude"))
 # Background runs use --restricted: user/project/local settings files are ignored (so rules
-# granted to interactive sessions never leak in) and file tools stay inside the page's read scope
+# granted to interactive sessions never leak in) and file tools stay inside the agent's read scope
 # (read_scope(): its own repo, or its own folder outside any repo) plus the tree's dirai.json
-# "read_dirs", which Claude may read; edits still need an allow rule (only the page folder has
+# "read_dirs", which Claude may read; edits still need an allow rule (only the agent's folder has
 # one). Other folders of the tree need a grant: a path the owner names in a comment (path_grants())
-# or "Allow" on a blocked read, both kept for that page only.
+# or "Allow" on a blocked read, both kept for that agent only.
 TOOLS = "Bash,Read,Edit,Write,Glob,Grep,Skill,TodoWrite,NotebookEdit"
 MAX_RUNNING = 5
 # A resumed session resends its whole context with every request; warn (panel, list badge) when
@@ -58,7 +61,7 @@ MAX_RUNNING = 5
 CONTEXT_WARN = 150000
 CONTEXT_HIGH = 300000
 COMPACT = "/compact"
-# Model per page, picked in the panel (claude --model aliases); Sonnet unless changed, to save tokens.
+# Model per agent, picked in the panel (claude --model aliases); Sonnet unless changed, to save tokens.
 # The gpt-oss models are served by Ollama on this node (Kuang_work_document/ollama/ollama_ctl.sh
 # start); they don't count against the Claude limits, so they also run while the queue is held.
 LOCAL_MODELS = ["gpt-oss-20b-t64", "gpt-oss-120b-t64"]
@@ -69,10 +72,10 @@ OLLAMA_URL = "http://" + os.environ.get("OLLAMA_HOST", "127.0.0.1:11434")
 LOCAL_ENV = {"ANTHROPIC_BASE_URL": OLLAMA_URL, "ANTHROPIC_AUTH_TOKEN": "ollama", "ANTHROPIC_API_KEY": "",
              "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
 RUN_TIMEOUT_S = 4 * 3600   # working time; time spent waiting for the owner's answers doesn't count
-# Permissions, tree-wide (dirai.json "permissions", switched on the list page; read when a run starts):
+# Permissions, tree-wide (dirai.json "permissions", switched on the agent list; read when a run starts):
 # "allowlist": --permission-mode dontAsk: only allowed actions run, the rest are refused and show in
 #   the panel (Allow once / Always allow), which grants them for the next run.
-# "ask": an action that isn't allowed waits for the owner in the page chat (Allow / Always allow /
+# "ask": an action that isn't allowed waits for the owner in the agent's chat (Allow / Always allow /
 #   Deny); the run continues with the answer (--permission-prompt-tool stdio: claude sends its
 #   prompts to us over stream-json). ALWAYS_DENY is refused without asking in both modes.
 PERMISSION_MODES = ["allowlist", "ask"]
@@ -80,25 +83,26 @@ PERMISSION_MODES = ["allowlist", "ask"]
 # doesn't hold a run slot (MAX_RUNNING) for days.
 ASK_WAIT_S = 12 * 3600
 ASK_DENIED = {
-    "deny": "The owner denied this in the page chat. Don't ask for it again in this run; "
+    "deny": "The owner denied this in the agent's chat. Don't ask for it again in this run; "
             "finish and say in your reply what is still needed.",
     "timeout": "No answer from the owner within %d h of waiting, so this was denied. Don't ask again "
                "in this run; finish and say in your reply what is still needed." % (ASK_WAIT_S // 3600),
 }
-# After a run, the page stays "working" while SLURM jobs it submitted, or the page's jobs
-# (page_status.job_dirs: its folder plus the folders in its job_dirs.txt), are in the queue; when they have all left, the assistant is messaged to check the
-# results. html_server.py's housekeeping loop calls check_watches(); at most MAX_AUTO automatic
+# After a run, the agent stays "working" while SLURM jobs it submitted, or the agent's jobs
+# (slurm.job_dirs: its folder plus the folders in its job_dirs.txt), are in the queue (st["job_wait"]);
+# when they have all left, the agent is messaged to check the results. server.py's housekeeping
+# loop calls check_job_waits(); at most MAX_AUTO automatic
 # messages in a row (a comment from the owner resets the count), so a run that keeps resubmitting
 # can't loop.
 MAX_AUTO = 5
-# Repeat: the owner can have a page's message sent again every hour, day or week (st["repeat"]:
-# {"every", "text", "next"}). html_server.py calls check_repeats() every minute; a run that comes
-# due while the page is busy (or waiting on SLURM jobs) goes once the page is free, and the next one
+# Repeat: the owner can have an agent's message sent again every hour, day or week (st["repeat"]:
+# {"every", "text", "next"}). server.py calls check_repeats() every minute; a run that comes
+# due while the agent is busy (or waiting on SLURM jobs) goes once it is free, and the next one
 # keeps the original time of day. A server that was down sends a missed run once, not once per miss.
-# Each scheduled run starts a fresh session (no earlier conversation) that reads the page first.
+# Each scheduled run starts a fresh session (no earlier conversation) that reads index.html first.
 REPEATS = {"hour": 3600, "day": 86400, "week": 7 * 86400}
-# Thread entries older than this are dropped (housekeeping, prune_threads()): the page itself is the
-# record, and an hourly repeat would otherwise grow reviews.json without end. The last KEEP_LAST
+# Thread entries older than this are dropped (housekeeping, prune_threads()): index.html itself is the
+# record, and an hourly repeat would otherwise grow agents.json without end. The last KEEP_LAST
 # entries stay whatever their age (a New chat quotes them).
 THREAD_KEEP_S = 7 * 86400
 KEEP_LAST = 6
@@ -106,7 +110,7 @@ KEEP_LAST = 6
 
 def busy(st):
     """True while a run is going or queued; waiting on SLURM jobs doesn't block a new comment."""
-    return st.get("status") in ("working", "queued") and not st.get("watch")
+    return st.get("status") in ("working", "queued") and not st.get("job_wait")
 
 
 def kilo(n):
@@ -122,7 +126,7 @@ def now():
 
 
 def system_entry(text):
-    """A thread entry from the server (not the owner or the assistant)."""
+    """A thread entry from the server (not the owner or the agent)."""
     return {"role": "system", "time": now(), "text": text}
 
 
@@ -166,79 +170,89 @@ def in_git(path):
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
 
-ALL = object()      # Reviews._edit(): the whole state, not one page
+ALL = object()      # Agents._edit(): the whole state, not one agent
 
 
-class Reviews:
+class Agents:
     def __init__(self, root):
         self.root = root
         self.config = dirai_config.tree_config(root)
-        self.path = os.path.join(root, "www", "reviews.json")
+        self.path = os.path.join(root, "www", "agents.json")
+        self._migrate()
         self.lock = threading.Lock()
         self.running = 0
         self.queue = []
-        self.procs = {}         # page -> its running claude process (for Cancel)
-        self.live = {}          # page -> its run's Live (stdin, prompts waiting for the owner)
-        self.cancelled = set()  # pages whose run the owner cancelled
+        self.procs = {}         # agent -> its running claude process (for Cancel)
+        self.live = {}          # agent -> its run's LiveRun (stdin, prompts waiting for the owner)
+        self.cancelled = set()  # agents whose run the owner cancelled
         self.hold_until = 0     # no run starts before this (usage limit)
         self.hold_reason = ""
         self.timer = None
         self.cards = {}         # index.html path -> (mtime, its summary card's problems)
         with self._edit() as data:
-            for page, st in data.items():           # runs don't survive a restart
+            for agent, st in data.items():           # runs don't survive a restart
+                if "watch" in st:                    # its name before 2026-10
+                    st["job_wait"] = st.pop("watch")
                 end_asks(st)
                 if st.get("status") == "queued" and st.get("pending"):   # queued ones do
-                    self.queue.append((page, st["pending"]))
+                    self.queue.append((agent, st["pending"]))
                     if (st.get("queued_until") or 0) > self.hold_until:
                         self.hold_until, self.hold_reason = st["queued_until"], st.get("queued_reason", "")
-                elif st.get("status") == "working" and not st.get("watch"):   # watches resume
+                elif st.get("status") == "working" and not st.get("job_wait"):   # job waits resume
                     st["status"] = "unread"
                     note(st, "The server restarted while this was running; "
                              "the run was lost. Comment again to retry.")
         if self.queue:
-            self._pump()
+            self._start_queued()
 
     # --- state ------------------------------------------------------------------------
+    def _migrate(self):
+        """Files of a tree served before 2026-10, renamed: reviews.json and page_prev/."""
+        www = os.path.dirname(self.path)
+        for old, new in (("reviews.json", "agents.json"), ("page_prev", "before_run")):
+            if os.path.exists(os.path.join(www, old)) and not os.path.exists(os.path.join(www, new)):
+                os.replace(os.path.join(www, old), os.path.join(www, new))
+
     def _load(self):
         return load_json(self.path, {})
 
     def _save(self, data):
         save_json(self.path, data)
 
-    def prev_path(self, page):
-        """The page's index.html as it was before the latest run that changed it (the panel
+    def before_run_path(self, agent):
+        """The agent's index.html as it was before the latest run that changed it (the panel
         highlights what differs from it)."""
-        name = page.replace("/", "%2F") if page else "%top"
-        return os.path.join(self.root, "www", "page_prev", name + ".html")
+        name = agent.replace("/", "%2F") if agent else "%top"
+        return os.path.join(self.root, "www", "before_run", name + ".html")
 
     @staticmethod
     def _blank():
         return {"status": "read", "thread": [], "session_id": None, "denials": [], "grants": []}
 
-    def _page(self, data, page):
-        return data.setdefault(page, self._blank())
+    def _agent(self, data, agent):
+        return data.setdefault(agent, self._blank())
 
     @contextlib.contextmanager
-    def _edit(self, page=ALL):
-        """Lock the state and yield it for changing: one page's entry (created if missing) or, with
-        no page, all of it ({page: entry}). Saved when the block ends, if anything changed (a block
+    def _edit(self, agent=ALL):
+        """Lock the state and yield it for changing: one agent's entry (created if missing) or, with
+        no agent, all of it ({agent: entry}). Saved when the block ends, if anything changed (a block
         that returns early without changing anything writes nothing); an exception discards it."""
         with self.lock:
-            with self._changes(page) as st:
+            with self._changes(agent) as st:
                 yield st
 
     @contextlib.contextmanager
-    def _changes(self, page=ALL):
+    def _changes(self, agent=ALL):
         """_edit for a caller that already holds the lock."""
         data = self._load()
         before = json.dumps(data, sort_keys=True)
-        if page is ALL:
+        if agent is ALL:
             yield data
         else:
-            new = page not in data
-            yield self._page(data, page)
-            if new and data[page] == self._blank():
-                del data[page]      # only looked at
+            new = agent not in data
+            yield self._agent(data, agent)
+            if new and data[agent] == self._blank():
+                del data[agent]      # only looked at
         if json.dumps(data, sort_keys=True) != before:
             self._save(data)
 
@@ -251,9 +265,9 @@ class Reviews:
                     "card": len(self.card_problems(p))}
                 for p, s in data.items()}
 
-    def card_problems(self, page):
-        """dirai_card.problems() of the page's summary card, cached until index.html changes."""
-        path = os.path.join(self.root, page, "index.html")
+    def card_problems(self, agent):
+        """dirai_card.problems() of the agent's summary card, cached until index.html changes."""
+        path = os.path.join(self.root, agent, "index.html")
         try:
             mtime = os.path.getmtime(path)
         except OSError:
@@ -274,9 +288,9 @@ class Reviews:
         dirai_config.set_tree_option(self.root, "permissions", mode)
         return True
 
-    def state(self, page):
+    def state(self, agent):
         with self.lock:
-            st = self._load().get(page) or {"status": "none", "thread": [], "denials": [], "grants": []}
+            st = self._load().get(agent) or {"status": "none", "thread": [], "denials": [], "grants": []}
             st = dict(st)
             st["always"] = load_json(PERMS_FILE, {"always": []})["always"]
             granted = set(st["always"]) | set(st.get("grants", []))
@@ -287,8 +301,8 @@ class Reviews:
             st["model"], st["models"] = st.get("model") or DEFAULT_MODEL, MODELS
             st["model_labels"] = MODEL_LABELS
             st["permissions"] = self.permissions()
-            st["watching"] = (st.get("watch") or {}).get("jobs", [])
-            st["card"] = self.card_problems(page)
+            st["watching"] = (st.get("job_wait") or {}).get("jobs", [])
+            st["card"] = self.card_problems(agent)
             denials = []
             for d in st.get("denials", []):
                 rules = denial_rules(d)
@@ -298,32 +312,32 @@ class Reviews:
             st["denials"] = denials
             return st
 
-    def working(self, page):
-        """(what, started, until) if Claude is working on page or it is queued, else None.
+    def working(self, agent):
+        """(what, started, until) if Claude is working on the agent or it is queued, else None.
         started is None while waiting; until is when a usage-limit wait ends (or None)."""
         with self.lock:
-            st = self._load().get(page)
+            st = self._load().get(agent)
             if not st or st.get("status") not in ("working", "queued"):
                 return None
             until = st.get("queued_until") if st["status"] == "queued" else None
             return st.get("working_on") or "", st.get("started"), until, st.get("queued_reason") or ""
 
-    def set_model(self, page, model):
-        """The model for this page's next runs (the session continues; only the model changes)."""
+    def set_model(self, agent, model):
+        """The model for this agent's next runs (the session continues; only the model changes)."""
         if model not in MODELS:
             return False
-        with self._edit(page) as st:
+        with self._edit(agent) as st:
             st["model"] = model
         if model in LOCAL_MODELS:
-            self._pump()    # a page queued for the Claude limits can start now
+            self._start_queued()    # an agent queued for the Claude limits can start now
         return True
 
-    def set_repeat(self, page, every, text=""):
-        """Send text to the page's assistant every hour/day/week from now on ("off" stops it)."""
+    def set_repeat(self, agent, every, text=""):
+        """Send text to the agent every hour/day/week from now on ("off" stops it)."""
         text = (text or "").strip()
         if every != "off" and (every not in REPEATS or not text):
             return False
-        with self._edit(page) as st:
+        with self._edit(agent) as st:
             if every == "off":
                 if not st.pop("repeat", None):
                     return False
@@ -335,21 +349,21 @@ class Reviews:
             return True
 
     def check_repeats(self):
-        """Send each page's repeated message that has come due, if the page is free."""
+        """Send each agent's repeated message that has come due, if the agent is free."""
         t = time.time()
         with self.lock:
             due = [(p, dict(st["repeat"])) for p, st in self._load().items()
-                   if st.get("repeat") and st["repeat"]["next"] <= t and not busy(st) and not st.get("watch")]
-        for page, rep in due:
+                   if st.get("repeat") and st["repeat"]["next"] <= t and not busy(st) and not st.get("job_wait")]
+        for agent, rep in due:
             prompt = ("(Scheduled run: the owner set this message to be sent every %s. This is a fresh "
                       "session with no earlier conversation: before acting, read this folder's index.html "
-                      "(its summary card first) for the page's current state, including what earlier runs found. The "
-                      "page is the only memory between runs, so record this run's result on it with the "
+                      "(its summary card first) for the agent's current state, including what earlier runs found. "
+                      "index.html is the only memory between runs, so record this run's result in it with the "
                       "date and time, next to the earlier runs' results rather than over them, so the "
                       "next run can compare.)\n\n%s" % (rep["every"], rep["text"]))
-            if not self.comment(page, rep["text"], prompt=prompt, scheduled=rep["every"]):
+            if not self.comment(agent, rep["text"], prompt=prompt, scheduled=rep["every"]):
                 continue    # became busy meanwhile: try again next pass
-            with self._edit(page) as st:
+            with self._edit(agent) as st:
                 if st.get("repeat"):
                     nxt, step = st["repeat"]["next"], REPEATS[st["repeat"]["every"]]
                     while nxt <= t:
@@ -357,39 +371,39 @@ class Reviews:
                     st["repeat"]["next"] = nxt
 
     def prune_threads(self):
-        """Drop thread entries older than THREAD_KEEP_S, keeping each page's last KEEP_LAST."""
+        """Drop thread entries older than THREAD_KEEP_S, keeping each agent's last KEEP_LAST."""
         cutoff = datetime.datetime.fromtimestamp(time.time() - THREAD_KEEP_S).strftime("%Y-%m-%d %H:%M:%S")
         with self._edit() as data:
             for st in data.values():
                 th = st.get("thread", [])
                 st["thread"] = [m for m in th[:-KEEP_LAST] if m.get("time", "") >= cutoff] + th[-KEEP_LAST:]
 
-    def set_status(self, page, status):
-        with self._edit(page) as st:
+    def set_status(self, agent, status):
+        with self._edit(agent) as st:
             if st["status"] in ("working", "queued"):
                 return False
             st["status"] = status
             return True
 
-    def cancel(self, page):
-        """Stop the page's run, or drop its message from the queue, or stop waiting on its SLURM
+    def cancel(self, agent):
+        """Stop the agent's run, or drop its message from the queue, or stop waiting on its SLURM
         jobs (the jobs themselves keep running). The session is kept, so the next message
         continues it, with whatever model is picked by then."""
-        with self._edit(page) as st:
+        with self._edit(agent) as st:
             if st["status"] not in ("working", "queued"):
                 return False
-            queued = [i for i in self.queue if i[0] == page]
-            if queued or st.get("watch") or st["status"] == "queued":
+            queued = [i for i in self.queue if i[0] == agent]
+            if queued or st.get("job_wait") or st["status"] == "queued":
                 for item in queued:
                     self.queue.remove(item)
-                for k in ("watch", "queued_until", "pending", "queued_reason"):
+                for k in ("job_wait", "queued_until", "pending", "queued_reason"):
                     st.pop(k, None)
                 st["status"] = "unread"
                 note(st, "Cancelled by the owner.")
                 return True
             # running (or about to start): _run sees the flag, stops the process and records it
-            self.cancelled.add(page)
-            p = self.procs.get(page)
+            self.cancelled.add(agent)
+            p = self.procs.get(agent)
         if p:
             stop_process(p)
         return True
@@ -408,127 +422,127 @@ class Reviews:
                 time.sleep(0.2)
 
     # --- running Claude ---------------------------------------------------------------
-    def new_page(self, page, task, every="off"):
-        """Create ROOT/page/ with a starter index.html if it has none, then start an agent there
-        on task (and repeat it every hour/day/week if asked). False if that page's agent is
-        already working."""
-        full = os.path.join(self.root, page)
+    def new_agent(self, agent, task, every="off"):
+        """Create ROOT/agent/ with a starter index.html if it has none, then start the agent there
+        on task (and repeat it every hour/day/week if asked). False if that agent is already
+        working."""
+        full = os.path.join(self.root, agent)
         os.makedirs(full, exist_ok=True)
         index = os.path.join(full, "index.html")
         created = not os.path.exists(index)
         if created:
-            title = html.escape(os.path.basename(page) or page, quote=False)
+            title = html.escape(os.path.basename(agent) or agent, quote=False)
             with open(index, "w", encoding="utf-8") as f:
-                f.write(STARTER_PAGE.format(title=title, task=html.escape(task, quote=False), date=now()[:10]))
+                f.write(STARTER_INDEX.format(title=title, task=html.escape(task, quote=False), date=now()[:10]))
         prompt = task
         if created:
-            prompt = ("This folder and its index.html were just created for this task (the page is a "
-                      "placeholder). Do the task, and turn index.html into the page that reports it.\n\n"
+            prompt = ("This folder and its index.html were just created for this task (index.html is a "
+                      "placeholder). Do the task, and turn index.html into the report of it.\n\n"
                       "Task: " + task)
-        if not self.comment(page, task, prompt):
+        if not self.comment(agent, task, prompt):
             return False
         if every in REPEATS:
-            self.set_repeat(page, every, task)
+            self.set_repeat(agent, every, task)
         return True
 
-    def new_chat(self, page):
+    def new_chat(self, agent):
         """Next message starts a fresh Claude session (the thread stays, with a divider)."""
-        with self._edit(page) as st:
+        with self._edit(agent) as st:
             if busy(st) or not st.get("session_id"):
                 return False
             st["session_id"], st["denials"] = None, []
             note(st, NEW_CHAT_MARK)
             return True
 
-    def compact(self, page):
-        """Run /compact on the page's session (queued like a message)."""
-        with self._edit(page) as st:
+    def compact(self, agent):
+        """Run /compact on the agent's session (queued like a message)."""
+        with self._edit(agent) as st:
             if busy(st) or not st.get("session_id"):
                 return False
-            st.pop("watch", None)   # the run re-checks the queue when it ends
+            st.pop("job_wait", None)   # the run re-checks the queue when it ends
             note(st, "Compact requested (context %s tokens)." % kilo(context_tokens(st["session_id"])))
             st["denials"] = []
             st["status"] = "working"
             st["working_on"], st["started"] = "Compact the conversation", None
-        self._enqueue(page, COMPACT)
+        self._enqueue(agent, COMPACT)
         return True
 
-    def comment(self, page, text, prompt=None, selection=None, scheduled=None):
-        """selection: {"text", "heading"} of page text the owner selected, quoted in the prompt.
+    def comment(self, agent, text, prompt=None, selection=None, scheduled=None):
+        """selection: {"text", "heading"} of index.html text the owner selected, quoted in the prompt.
         scheduled: the repeat period when check_repeats() sends it (shown in the thread); it starts
-        a fresh session, its prompt pointing at the page instead of the thread."""
+        a fresh session, its prompt pointing at index.html instead of the thread."""
         if selection:
             selection = {"text": selection["text"][:SEL_MAX], "heading": selection.get("heading", "")[:200],
-                         "lines": selection_lines(os.path.join(self.root, page, "index.html"), selection["text"])}
+                         "lines": selection_lines(os.path.join(self.root, agent, "index.html"), selection["text"])}
             prompt = prompt or selection_prompt(selection, text)
-        with self._edit(page) as st:
+        with self._edit(agent) as st:
             if busy(st):
                 return False
-            st.pop("watch", None)   # the run re-checks the queue when it ends
+            st.pop("job_wait", None)   # the run re-checks the queue when it ends
             st["auto_runs"] = 0
             if scheduled and st.get("session_id"):
                 st["session_id"] = None
                 note(st, NEW_CHAT_MARK)
             elif not st.get("session_id") and st["thread"] and (prompt is None or selection):
-                prompt = fresh_prompt(st["thread"], prompt or text)   # New chat: catch up from the page and thread
+                prompt = fresh_prompt(st["thread"], prompt or text)   # New chat: catch up from index.html and the thread
             st["thread"].append(dict({"role": "user", "time": now(), "text": text},
                                      **({"selection": selection} if selection else {}),
                                      **({"scheduled": scheduled} if scheduled else {})))
-            page_dir = os.path.join(self.root, page)
-            named = [r for r in path_grants(text, self.root, read_scope(page_dir, self.root))
+            agent_dir = os.path.join(self.root, agent)
+            named = [r for r in path_grants(text, self.root, read_scope(agent_dir, self.root))
                      if r not in st.get("grants", [])]
             if named:
                 st["grants"] = sorted(set(st.get("grants", [])) | set(named))
-                note(st, "Read access for this page (named in your message): " + ", ".join(named))
+                note(st, "Read access for this agent (named in your message): " + ", ".join(named))
             st["denials"] = []
             st["status"] = "working"   # waiting for a free slot counts as working
             st["working_on"], st["started"] = text, None
         prompt = prompt or text
-        self._enqueue(page, prompt)
+        self._enqueue(agent, prompt)
         return True
 
-    def grant(self, page, rules, always):
+    def grant(self, agent, rules, always):
         rules = [r for r in rules if r and not always_denied(r)]
         if not rules:
             return False
-        with self._edit(page) as st:
+        with self._edit(agent) as st:
             if busy(st) or not st.get("session_id"):
                 return False
-            st.pop("watch", None)
+            st.pop("job_wait", None)
             st["auto_runs"] = 0
             self._save_grants(st, rules, always)
             st["denials"] = []
             st["status"] = "working"   # waiting for a free slot counts as working
             st["working_on"], st["started"] = "Retry with granted: " + ", ".join(rules), None
-        self._enqueue(page, "The owner granted these permissions: %s. Retry what was blocked "
-                            "and finish the review." % ", ".join(rules))
+        self._enqueue(agent, "The owner granted these permissions: %s. Retry what was blocked "
+                            "and finish the task." % ", ".join(rules))
         return True
 
     @staticmethod
     def _save_grants(st, rules, always):
-        """Keep rules for this page (once) or for every page (always); caller holds the lock.
-        Folder reads stay with this page even under "Always allow": letting page A read B must
-        not let every page of every tree read B."""
+        """Keep rules for this agent (once) or for every agent (always); caller holds the lock.
+        Folder reads stay with this agent even under "Always allow": letting agent A read B must
+        not let every agent of every tree read B."""
         reads = [r for r in rules if is_read_rule(r)]
         others = [r for r in rules if not is_read_rule(r)]
-        page_rules, global_rules = (reads, others) if always else (rules, [])
+        agent_rules, global_rules = (reads, others) if always else (rules, [])
         if global_rules:
             perms = load_json(PERMS_FILE, {"always": []})
             perms["always"] = sorted(set(perms["always"]) | set(global_rules))
             save_json(PERMS_FILE, perms)
             note(st, "Granted (always): " + ", ".join(global_rules))
-        if page_rules:
-            st["grants"] = sorted(set(st.get("grants", [])) | set(page_rules))
-            note(st, "Granted (this page): " + ", ".join(page_rules))
+        if agent_rules:
+            st["grants"] = sorted(set(st.get("grants", [])) | set(agent_rules))
+            note(st, "Granted (this agent): " + ", ".join(agent_rules))
 
     # --- permission prompts (ask mode) ---------------------------------------------------
-    def _ask(self, page, live, rid, req):
-        """A permission prompt from the run: put it in the page thread for the owner. Answered
+    def _ask(self, agent, live, rid, req):
+        """A permission prompt from the run: put it in the agent's thread for the owner. Answered
         at once when the owner chose Always allow for the same action earlier in this run, or
         when the run has used up its ASK_WAIT_S of waiting."""
         d = request_denial(req)
         rules = denial_rules(d)
-        with self._edit(page) as st:
+        with self._edit(agent) as st:
             choice = ("allow" if rules and all(r in live.granted for r in rules)
                       else "timeout" if live.waiting() >= ASK_WAIT_S else None)
             st["thread"].append({"role": "ask", "time": now(), "id": rid, "text": describe_denial(d),
@@ -540,13 +554,13 @@ class Reviews:
         if choice:
             self._respond(live, rid, req, choice)
 
-    def answer(self, page, rid, choice):
+    def answer(self, agent, rid, choice):
         """The owner's answer to a waiting prompt: allow, always (allow, and keep the rule like
         the Always allow button), deny; the watchdog answers timeout."""
         if choice not in ("allow", "always", "deny", "timeout"):
             return False
-        with self._edit(page) as st:
-            live = self.live.get(page)
+        with self._edit(agent) as st:
+            live = self.live.get(agent)
             req = live.release(rid) if live else None
             if req is None:
                 return False
@@ -573,9 +587,9 @@ class Reviews:
             self._respond(live, other, oreq, "allow")
         return True
 
-    def _withdraw(self, page, live, rid):
+    def _withdraw(self, agent, live, rid):
         """claude took a prompt back (e.g. the turn was interrupted)."""
-        with self._edit(page) as st:
+        with self._edit(agent) as st:
             if live.release(rid) is None:
                 return
             for e in st["thread"]:
@@ -592,7 +606,7 @@ class Reviews:
         live.send({"type": "control_response",
                    "response": {"subtype": "success", "request_id": rid, "response": r}})
 
-    def _watchdog(self, page, live):
+    def _watchdog(self, agent, live):
         """Stop a run after RUN_TIMEOUT_S of working time (waiting for answers doesn't count),
         and deny its prompts once it has waited ASK_WAIT_S in total."""
         start = time.time()
@@ -604,9 +618,9 @@ class Reviews:
                 return
             if live.pending and live.waiting() >= ASK_WAIT_S:
                 for rid in list(live.pending):
-                    self.answer(page, rid, "timeout")
+                    self.answer(agent, rid, "timeout")
 
-    def _drive(self, page, live, check=None):
+    def _drive(self, agent, live, check=None):
         """Read the run's messages until its result (returned; {} if it died first), handing
         permission prompts to the owner. Closing stdin then lets claude exit.
         check(): after a successful result, a follow-up message to send in the same session, or
@@ -615,7 +629,7 @@ class Reviews:
         p, err = live.proc, []
         reader = threading.Thread(target=lambda: err.append(p.stderr.read()), daemon=True)
         reader.start()
-        threading.Thread(target=self._watchdog, args=(page, live), daemon=True).start()
+        threading.Thread(target=self._watchdog, args=(agent, live), daemon=True).start()
         out = {}
         for line in p.stdout:
             try:
@@ -624,9 +638,9 @@ class Reviews:
                 continue
             kind = m.get("type")
             if kind == "control_request" and (m.get("request") or {}).get("subtype") == "can_use_tool":
-                self._ask(page, live, m.get("request_id"), m["request"])
+                self._ask(agent, live, m.get("request_id"), m["request"])
             elif kind == "control_cancel_request":
-                self._withdraw(page, live, m.get("request_id"))
+                self._withdraw(agent, live, m.get("request_id"))
             elif kind == "result":
                 if out:     # the follow-up's result
                     out = dict(m, result=out.get("result"), followup=m.get("result") or "",
@@ -654,14 +668,14 @@ class Reviews:
             return a if b is None else b
         return b if b >= a else a + b
 
-    def _enqueue(self, page, prompt):
+    def _enqueue(self, agent, prompt):
         with self.lock:
-            self.queue.append((page, prompt))
-        self._pump()
+            self.queue.append((agent, prompt))
+        self._start_queued()
 
-    def _pump(self):
+    def _start_queued(self):
         if self.queue and self.hold_until <= time.time():
-            until, reason = claude_usage.hold()     # network, so outside the lock (cached 60 s)
+            until, reason = claude_usage.pause_until()     # network, so outside the lock (cached 60 s)
         else:
             until, reason = 0, ""
         with self.lock:
@@ -669,7 +683,7 @@ class Reviews:
                 self.hold_until, self.hold_reason = until, reason
             wait = self.hold_until - time.time()
             if wait > 0:
-                # local-model pages don't use the Claude limits: start them anyway
+                # local-model agents don't use the Claude limits: start them anyway
                 data = self._load()
                 for item in [i for i in self.queue if self._model(data, i[0]) in LOCAL_MODELS]:
                     if self.running >= MAX_RUNNING:
@@ -677,35 +691,35 @@ class Reviews:
                     self.queue.remove(item)
                     self.running += 1
                     threading.Thread(target=self._run, args=item, daemon=True).start()
-                self._hold_queue()
+                self._queue_on_hold()
                 if self.timer:
                     self.timer.cancel()
-                self.timer = threading.Timer(wait, self._pump)
+                self.timer = threading.Timer(wait, self._start_queued)
                 self.timer.daemon = True
                 self.timer.start()
                 return
             while self.queue and self.running < MAX_RUNNING:
-                page, prompt = self.queue.pop(0)
+                agent, prompt = self.queue.pop(0)
                 self.running += 1
-                threading.Thread(target=self._run, args=(page, prompt), daemon=True).start()
+                threading.Thread(target=self._run, args=(agent, prompt), daemon=True).start()
 
     @staticmethod
-    def _model(data, page):
-        return (data.get(page) or {}).get("model") or DEFAULT_MODEL
+    def _model(data, agent):
+        return (data.get(agent) or {}).get("model") or DEFAULT_MODEL
 
     def recheck_hold(self):
-        """The owner moved a usage stop level: drop a wait that came from the old level (not one
+        """The owner moved a usage pause level: drop a wait that came from the old level (not one
         from Claude actually refusing) and let the queue start again if usage allows."""
         with self.lock:
             if self.hold_until > time.time() and self.hold_reason.startswith("Claude usage at"):
                 self.hold_until, self.hold_reason = 0, ""
-        self._pump()
+        self._start_queued()
 
-    def _hold_queue(self):
+    def _queue_on_hold(self):
         """Mark every queued message as waiting for the usage limit; caller holds the lock."""
         with self._changes() as data:
-            for page, prompt in self.queue:
-                st = self._page(data, page)
+            for agent, prompt in self.queue:
+                st = self._agent(data, agent)
                 if st["status"] != "queued":
                     note(st, "%s. Queued: this message will be sent automatically at %s."
                              % (self.hold_reason or "Claude usage limit", clock(self.hold_until)))
@@ -713,16 +727,16 @@ class Reviews:
                     st["status"], st["queued_until"], st["pending"] = "queued", self.hold_until, prompt
                     st["queued_reason"], st["started"] = self.hold_reason, None
 
-    def _command(self, page_dir, model, grants, session):
-        """The claude command line for a run in page_dir: its permissions, folders, MCP servers
+    def _command(self, agent_dir, model, grants, session):
+        """The claude command line for a run in agent_dir: its permissions, folders, MCP servers
         and instructions."""
-        allow = DEFAULT_ALLOW + self.config["allow"] + ["Edit(/%s/**)" % page_dir] + \
+        allow = DEFAULT_ALLOW + self.config["allow"] + ["Edit(/%s/**)" % agent_dir] + \
             load_json(PERMS_FILE, {"always": []})["always"] + grants
-        scope = read_scope(page_dir, self.root)
+        scope = read_scope(agent_dir, self.root)
         read_dirs = [scope] + self.config["read_dirs"]
-        dirs = read_dirs + extra_dirs(allow, page_dir, read_dirs)
+        dirs = read_dirs + extra_dirs(allow, agent_dir, read_dirs)
         mode = self.permissions()
-        mcp_file = mcp_config(page_dir, self.root)
+        mcp_file = mcp_config(agent_dir, self.root)
         # stream-json both ways in both modes: the prompt goes in on stdin, and in ask mode so
         # do the owner's answers to claude's permission prompts
         cmd = [CLAUDE_CMD, "-p", "--model", model, "--input-format", "stream-json",
@@ -732,10 +746,10 @@ class Reviews:
                "--restricted", "--strict-mcp-config"] + (["--mcp-config", mcp_file] if mcp_file else []) + [
                "--tools", TOOLS, "--add-dir"] + dirs + [
                "--append-system-prompt", SYSTEM_PROMPT.format(root=self.root,
-                   page_file=os.path.join(page_dir, "index.html"), page_dir=page_dir, scope=scope,
-                   git=GIT_PROMPT.format(page_dir=page_dir) if in_git(page_dir) else "",
-                   approval=APPROVAL[mode], always_denied=", ".join(ALWAYS_DENY), pages_md_path=AGENT_RULE_MD,
-                   page_rm=os.path.join(dirai_config.SCRIPTS_DIR, "page_rm.sh"),
+                   index_file=os.path.join(agent_dir, "index.html"), agent_dir=agent_dir, scope=scope,
+                   git=GIT_PROMPT.format(agent_dir=agent_dir) if in_git(agent_dir) else "",
+                   approval=APPROVAL[mode], always_denied=", ".join(ALWAYS_DENY), agent_rule_path=AGENT_RULE_MD,
+                   agent_rm=os.path.join(dirai_config.SCRIPTS_DIR, "agent_rm.sh"),
                    card_py=os.path.join(dirai_config.LIB_DIR, "dirai_card.py"))
                    + "\n\n" + load_text(AGENT_RULE_MD),
                "--allowedTools"] + allow + ["--disallowedTools"] + ALWAYS_DENY
@@ -743,82 +757,82 @@ class Reviews:
             cmd += ["--resume", session]
         return cmd
 
-    def _run(self, page, prompt):
-        """One message to the page's assistant, from its slot in the queue to its reply in the thread."""
+    def _run(self, agent, prompt):
+        """One message to the agent, from its slot in the queue to its reply in the thread."""
         try:
-            session, grants, model = self._begin(page)
+            session, grants, model = self._begin(agent)
             before = context_tokens(session)
             path = transcript(session)
             offset = os.path.getsize(path) if path and os.path.exists(path) else 0
-            page_dir = os.path.join(self.root, page)
-            index, snap = os.path.join(page_dir, "index.html"), self.prev_path(page) + ".run"
+            agent_dir = os.path.join(self.root, agent)
+            index, snap = os.path.join(agent_dir, "index.html"), self.before_run_path(agent) + ".run"
             os.makedirs(os.path.dirname(snap), exist_ok=True)
             try:
                 shutil.copyfile(index, snap)
             except OSError:
                 pass
-            entry, card_note, denials, session = self._attempt(page, prompt, model, grants, session, page_dir, snap)
+            entry, card_note, denials, session = self._attempt(agent, prompt, model, grants, session, agent_dir, snap)
             until = limit_reset(entry["text"]) if entry["role"] == "claude" and model not in LOCAL_MODELS else None
             if prompt == COMPACT and entry["role"] == "claude" and not until:
                 after = context_tokens(session)
                 entry = system_entry("Conversation compacted: %s -> %s tokens." % (
                     kilo(before), kilo(after)) if after != before else "Compact finished: " + entry["text"])
-            if not until:   # the run changed the page: highlight against the copy from before it
+            if not until:   # the run changed index.html: highlight against the copy from before it
                 try:
                     with open(snap, "rb") as a, open(index, "rb") as b:
                         if a.read() != b.read():
-                            os.replace(snap, self.prev_path(page))
+                            os.replace(snap, self.before_run_path(agent))
                 except OSError:
                     pass
             if os.path.exists(snap):
                 os.remove(snap)
             if until:
-                self._retry_after_limit(page, prompt, entry, session, until)
+                self._retry_after_limit(agent, prompt, entry, session, until)
                 return
-            ids = [] if entry["text"] == "Cancelled by the owner." else self._jobs_to_watch(page_dir, session, offset)
-            self._finish(page, entry, card_note, denials, session, ids)
+            ids = [] if entry["text"] == "Cancelled by the owner." else self._jobs_to_wait_for(agent_dir, session, offset)
+            self._finish(agent, entry, card_note, denials, session, ids)
         finally:
             with self.lock:
                 self.running -= 1
-                self.procs.pop(page, None)
-                self.cancelled.discard(page)
-                if self.live.pop(page, None):
+                self.procs.pop(agent, None)
+                self.cancelled.discard(agent)
+                if self.live.pop(agent, None):
                     with self._changes() as data:
-                        if page in data:
-                            end_asks(data[page])
-            self._pump()
+                        if agent in data:
+                            end_asks(data[agent])
+            self._start_queued()
 
-    def _begin(self, page):
-        """Mark the page working as its run starts: (session, page grants, model)."""
-        with self._edit(page) as st:
+    def _begin(self, agent):
+        """Mark the agent working as its run starts: (session, agent grants, model)."""
+        with self._edit(agent) as st:
             st["status"] = "working"
             st["started"] = time.time()
             for k in ("queued_until", "pending", "queued_reason"):
                 st.pop(k, None)
             return st.get("session_id"), list(st.get("grants", [])), st.get("model") or DEFAULT_MODEL
 
-    def _attempt(self, page, prompt, model, grants, session, page_dir, snap):
+    def _attempt(self, agent, prompt, model, grants, session, agent_dir, snap):
         """Run claude on prompt until it replies, is cancelled, times out or fails to start:
         (thread entry, summary-card note or None, permission denials, session)."""
-        index = os.path.join(page_dir, "index.html")
-        cmd = self._command(page_dir, model, grants, session)
+        index = os.path.join(agent_dir, "index.html")
+        cmd = self._command(agent_dir, model, grants, session)
         card_note = None
         try:
-            env = dict(os.environ, REVIEW_PAGE_DIR=page_dir, **(LOCAL_ENV if model in LOCAL_MODELS else {}))
-            p = subprocess.Popen(cmd, cwd=page_dir, env=env, stdin=subprocess.PIPE,
+            env = dict(os.environ, DIRAI_AGENT_DIR=agent_dir, **(LOCAL_ENV if model in LOCAL_MODELS else {}))
+            p = subprocess.Popen(cmd, cwd=agent_dir, env=env, stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                  start_new_session=True)   # its own group, so Cancel stops its commands too
-            live = Live(p)
+            live = LiveRun(p)
             with self.lock:
-                self.procs[page], self.live[page] = p, live
-                if page in self.cancelled:      # cancelled before it started
+                self.procs[agent], self.live[agent] = p, live
+                if agent in self.cancelled:      # cancelled before it started
                     stop_process(p)
             live.send({"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}})
             live.send({"type": "user", "message": {"role": "user", "content": prompt}})
-            out = self._drive(page, live, None if prompt == COMPACT else lambda: self._card_fix(index, snap))
+            out = self._drive(agent, live, None if prompt == COMPACT else lambda: self._card_fix(index, snap))
             with self.lock:
-                self.procs.pop(page, None)
-                if page in self.cancelled:
+                self.procs.pop(agent, None)
+                if agent in self.cancelled:
                     raise RunCancelled()
             if live.timed_out:
                 raise subprocess.TimeoutExpired(cmd, RUN_TIMEOUT_S)
@@ -827,7 +841,7 @@ class Reviews:
             if "followup" in out:
                 left = dirai_card.problems(index, now()[:10])
                 card_note = system_entry("The summary card needed fixing; " + (
-                    "the assistant fixed it." if not left else "it still has problems: " + "; ".join(left) + "."))
+                    "the agent fixed it." if not left else "it still has problems: " + "; ".join(left) + "."))
             if out.get("total_cost_usd") is not None and model not in LOCAL_MODELS:
                 entry["cost"] = round(out["total_cost_usd"], 3)
             return entry, card_note, out.get("permission_denials", []), out.get("session_id") or session
@@ -838,20 +852,20 @@ class Reviews:
         except (ValueError, OSError) as e:
             return system_entry("Run failed: %s" % e), None, [], session
 
-    def _retry_after_limit(self, page, prompt, entry, session, until):
+    def _retry_after_limit(self, agent, prompt, entry, session, until):
         """Claude refused for the usage limit: keep the message and send it again after the reset,
         in the same session, ahead of the rest of the queue."""
         retry = prompt if prompt == COMPACT or prompt.startswith(LIMIT_RETRY) else LIMIT_RETRY + prompt
         with self.lock:
             if until > self.hold_until:
                 self.hold_until, self.hold_reason = until, "Claude usage limit hit (%s)" % entry["text"]
-            self.queue.insert(0, (page, retry))
-            with self._changes(page) as st:
+            self.queue.insert(0, (agent, retry))
+            with self._changes(agent) as st:
                 st["session_id"] = session
 
-    def _finish(self, page, entry, card_note, denials, session, ids):
+    def _finish(self, agent, entry, card_note, denials, session, ids):
         """Put the run's reply in the thread, and wait for the SLURM jobs ids if there are any."""
-        with self._edit(page) as st:
+        with self._edit(agent) as st:
             st["thread"].append(entry)
             if card_note:
                 st["thread"].append(card_note)
@@ -859,86 +873,86 @@ class Reviews:
             st["session_id"] = session
             st["status"] = "unread"
             if ids and st.get("auto_runs", 0) >= MAX_AUTO:
-                note(st, "SLURM jobs %s are still queued, but the assistant has already been "
+                note(st, "SLURM jobs %s are still queued, but the agent has already been "
                          "messaged automatically %d times in a row; not watching them. Comment "
                          "to continue." % (", ".join(ids), MAX_AUTO))
             elif ids:
-                self._start_watch(st, ids)
+                self._start_job_wait(st, ids)
 
     # --- waiting on SLURM jobs ------------------------------------------------------------
     @staticmethod
     def _card_fix(index, snap):
-        """CARD_FIX for a run that changed the page (index vs its copy from before the run, snap)
+        """CARD_FIX for a run that changed index.html (index vs its copy from before the run, snap)
         and left the summary card incomplete, else None."""
         try:
             with open(index, "rb") as a, open(snap, "rb") as b:
                 if a.read() == b.read():
                     return None
         except OSError:
-            pass    # no copy from before: a new page
+            pass    # no copy from before: a new agent
         left = dirai_card.problems(index, now()[:10])
         return CARD_FIX % "; ".join(left) if left else None
 
-    def _jobs_to_watch(self, page_dir, session, offset):
-        """Jobs still queued that this run submitted, plus the owner's jobs in the page folder."""
-        live = page_status.live_ids()
+    def _jobs_to_wait_for(self, agent_dir, session, offset):
+        """Jobs still queued that this run submitted, plus the owner's jobs in the agent's folder."""
+        live = slurm.live_ids()
         if live is None:
             return []
         ids = [i for i in submitted_jobs(session, offset) if i in live]
-        for j in page_status.page_jobs(page_dir, fresh=True):
-            if page_status.base_id(j["id"]) not in ids:
-                ids.append(page_status.base_id(j["id"]))
+        for j in slurm.agent_jobs(agent_dir, fresh=True):
+            if slurm.base_id(j["id"]) not in ids:
+                ids.append(slurm.base_id(j["id"]))
         return ids
 
-    def _start_watch(self, st, ids):
-        """Keep the page "working" until jobs ids leave the queue; caller holds the lock."""
+    def _start_job_wait(self, st, ids):
+        """Keep the agent "working" until jobs ids leave the queue; caller holds the lock."""
         st["status"], st["started"] = "working", time.time()
-        st["watch"] = {"jobs": ids, "since": st["started"]}
+        st["job_wait"] = {"jobs": ids, "since": st["started"]}
         st["working_on"] = self._waiting_text(ids)
-        note(st, "Waiting for SLURM jobs %s. When they have all left the queue, the assistant will be "
-                 "asked to check the results and update the page." % ", ".join(ids))
+        note(st, "Waiting for SLURM jobs %s. When they have all left the queue, the agent will be "
+                 "asked to check the results and update index.html." % ", ".join(ids))
 
     @staticmethod
     def _waiting_text(ids):
         shown = ", ".join(ids[:6]) + (" and %d more" % (len(ids) - 6) if len(ids) > 6 else "")
-        return "Waiting for %d SLURM job%s (%s); the assistant is messaged when they finish" % (
+        return "Waiting for %d SLURM job%s (%s); the agent is messaged when they finish" % (
             len(ids), "" if len(ids) == 1 else "s", shown)
 
-    def check_watches(self):
-        """One pass over the pages waiting on SLURM jobs: message the assistant on each page
+    def check_job_waits(self):
+        """One pass over the agents waiting on SLURM jobs: message each agent
         whose jobs have all left the queue."""
         with self.lock:
-            watched = {p: st["watch"]["jobs"] for p, st in self._load().items() if st.get("watch")}
+            watched = {p: st["job_wait"]["jobs"] for p, st in self._load().items() if st.get("job_wait")}
         if not watched:
             return
-        active = page_status.active_jobs()
+        active = slurm.active_jobs()
         if active is None:
             return
-        live = {page_status.base_id(j["id"]) for j in active}
+        live = {slurm.base_id(j["id"]) for j in active}
         done, waiting = {}, {}
         for p, ids in watched.items():
             mine = [i for i in ids if i in live]
-            for j in page_status.page_jobs(os.path.join(self.root, p), all_jobs=active):
-                if page_status.base_id(j["id"]) not in mine:
-                    mine.append(page_status.base_id(j["id"]))
+            for j in slurm.agent_jobs(os.path.join(self.root, p), all_jobs=active):
+                if slurm.base_id(j["id"]) not in mine:
+                    mine.append(slurm.base_id(j["id"]))
             (waiting if mine else done)[p] = mine or ids
         with self._edit() as data:     # keep the status bar's "Waiting for ..." line current
             for p, mine in waiting.items():
                 st = data.get(p)
-                if st and st.get("watch"):
+                if st and st.get("job_wait"):
                     st["working_on"] = self._waiting_text(mine)
-        for page, ids in done.items():
-            report = page_status.job_report(ids)
-            with self._edit(page) as st:
-                if not st.get("watch"):
+        for agent, ids in done.items():
+            report = slurm.job_report(ids)
+            with self._edit(agent) as st:
+                if not st.get("job_wait"):
                     continue
-                st.pop("watch")
+                st.pop("job_wait")
                 st["auto_runs"] = st.get("auto_runs", 0) + 1
                 note(st, "SLURM jobs finished:\n" + report)
                 st["working_on"], st["started"] = "Check the finished SLURM jobs %s" % ", ".join(ids), None
                 text = ("(Automatic message from the DirAI server, not the owner.) The SLURM jobs you were "
-                        "waiting on have left the queue:\n%s\n\nCheck their output and logs, update the page "
+                        "waiting on have left the queue:\n%s\n\nCheck their output and logs, update index.html "
                         "and its summary card with the results, and reply with a short summary. If you submit new "
                         "jobs, end your reply; you will be messaged again when they finish." % report)
                 prompt = text if st.get("session_id") or not st["thread"] else fresh_prompt(st["thread"], text)
-            self._enqueue(page, prompt)
+            self._enqueue(agent, prompt)

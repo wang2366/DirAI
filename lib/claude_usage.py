@@ -1,4 +1,4 @@
-"""Claude plan usage (the numbers Claude Code's /usage shows), for review.py and the list page.
+"""Claude plan usage (the numbers Claude Code's /usage shows), for agents.py and the agent list.
 
 Reads https://api.anthropic.com/api/oauth/usage with Claude Code's own login token from
 ~/.claude/.credentials.json (Linux), or on macOS, where Claude Code keeps it in the login
@@ -26,11 +26,11 @@ URL = "https://api.anthropic.com/api/oauth/usage"
 CACHE_S = 60                # ask at most once a minute, across all DirAI servers (shared file)
 BACKOFF_S = 300             # after a refused request (e.g. 429), wait this long before asking again
 SHARED = os.path.join(dirai_config.CONFIG_DIR, "usage.json")
-STOPS = os.path.join(dirai_config.CONFIG_DIR, "usage_stop.json")
+PAUSE_FILE = os.path.join(dirai_config.CONFIG_DIR, "usage_stop.json")
 # no new runs at or above this % of the 5-hour session limit / of the weekly limit, unless the
-# owner set other levels (the sliders on the list page, saved in STOPS for all their trees). With
+# owner set other levels (the sliders on the agent list, saved in PAUSE_FILE for all their trees). With
 # weekly auto on (the default) the weekly level follows the day instead: n/7 on day n of the week.
-DEFAULT_STOP = {"session": 100, "weekly": 100}
+DEFAULT_PAUSE = {"session": 100, "weekly": 100}
 RESUME_MARGIN_S = 120
 DAY_S, WEEK_S = 86400, 7 * 86400       # start again this long after the limit resets
 
@@ -84,11 +84,11 @@ def _fetch():
 
 def settings():
     """The owner's levels: {"session": %, "weekly": %, "weekly_auto": bool} (DEFAULT_STOP and
-    weekly_auto on, unless set on the list page)."""
-    out = dict(DEFAULT_STOP, weekly_auto=True)
+    weekly_auto on, unless set on the agent list)."""
+    out = dict(DEFAULT_PAUSE, weekly_auto=True)
     try:
-        saved = dirai_config.load_json(STOPS, {})
-        out.update((k, int(v)) for k, v in saved.items() if k in DEFAULT_STOP and 1 <= int(v) <= 100)
+        saved = dirai_config.load_json(PAUSE_FILE, {})
+        out.update((k, int(v)) for k, v in saved.items() if k in DEFAULT_PAUSE and 1 <= int(v) <= 100)
         if isinstance(saved.get("weekly_auto"), bool):
             out["weekly_auto"] = saved["weekly_auto"]
     except (ValueError, TypeError, AttributeError):
@@ -96,26 +96,26 @@ def settings():
     return out
 
 
-def stops():
+def pause_levels():
     """{"session": %, "weekly": %}: the levels set by hand."""
-    return {k: v for k, v in settings().items() if k in DEFAULT_STOP}
+    return {k: v for k, v in settings().items() if k in DEFAULT_PAUSE}
 
 
 def _save(**changes):
     with _lock:
         cur = settings()
         cur.update(changes)
-        dirai_config.save_json(STOPS, cur)
+        dirai_config.save_json(PAUSE_FILE, cur)
 
 
-def set_stop(name, percent):
+def set_pause_level(name, percent):
     """Save one stop level (1-100); setting the weekly one by hand turns weekly auto off. False if
     name or percent is invalid."""
     try:
         percent = int(percent)
     except (TypeError, ValueError):
         return False
-    if name not in DEFAULT_STOP or not 1 <= percent <= 100:
+    if name not in DEFAULT_PAUSE or not 1 <= percent <= 100:
         return False
     _save(**dict({name: percent}, **({"weekly_auto": False} if name == "weekly" else {})))
     return True
@@ -177,7 +177,7 @@ def usage():
         return dict(new, stop=levels(new))
 
 
-def hold():
+def pause_until():
     """(until, reason) if new runs should wait for a limit to reset, else (0, "")."""
     u = usage()
     until, reason = 0, ""
@@ -189,11 +189,11 @@ def hold():
             # paced: wait for the next day of the week (its level is a seventh higher), not the reset
             t = (auto["until"] if paced else w["resets"]) + RESUME_MARGIN_S
             if t > until:
-                until, reason = t, "Claude usage at %.0f%% of the %s limit (stop at %.0f%%%s)" % (
+                until, reason = t, "Claude usage at %.0f%% of the %s limit (pause at %.0f%%%s)" % (
                     w["percent"], label, stop, ", auto: day %d of 7" % auto["day"] if paced else "")
     return until, reason
 
 
 if __name__ == "__main__":
     print(json.dumps(usage(), indent=1))
-    print(hold())
+    print(pause_until())

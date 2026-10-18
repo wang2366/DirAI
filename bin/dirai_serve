@@ -1,7 +1,7 @@
 #!/bin/bash
-# Long-running page server for ONE tree (a git repo): serves its .html pages and their images
+# Long-running server for ONE tree (a git repo): serves its agents' .html files and their images
 # (only) on the tree's port, open to the network: http://<node>:<port>/www/index.html
-# Builds the tree's www/index.html at start (html_server.py rebuilds it every 10 min, along with
+# Builds the tree's www/index.html at start (server.py rebuilds it every 10 min, along with
 # its other housekeeping) and records itself in <tree>/www/server_host.txt
 # (read by `DirAI status|restart|stop`).
 #
@@ -28,12 +28,12 @@ cleanup() {
 }
 
 start_server() {
-    python3 "$TOOL/lib/build_index.py" "$ROOT"
-    python3 "$TOOL/lib/html_server.py" "$ROOT" "$PORT" 0.0.0.0 &
+    python3 "$TOOL/lib/agent_list.py" "$ROOT"
+    python3 "$TOOL/lib/server.py" "$ROOT" "$PORT" 0.0.0.0 &
     SERVER_PID=$!
 }
 
-# SIGUSR1: restart the Python server in place (picks up html_server.py/review.py changes)
+# SIGUSR1: restart the Python server in place (picks up server.py/agents.py changes)
 reload() {
     echo "$(date '+%F %T') reload"
     kill "$SERVER_PID" 2>/dev/null

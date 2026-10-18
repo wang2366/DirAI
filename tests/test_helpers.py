@@ -8,10 +8,10 @@ from tests import util
 import dirai_card
 import dirai_config
 import claude_run
-import page_status
-import review
-import review_permissions as perms
-import review_prompts as prompts
+import slurm
+import agents
+import agent_permissions as perms
+import agent_prompts as prompts
 
 
 class PermissionRules(unittest.TestCase):
@@ -80,14 +80,14 @@ class Selection(unittest.TestCase):
 
     def test_selection_lines(self):
         root = util.new_tree("sel")
-        page = os.path.join(root, "index.html")
-        util.write(page, "<html><body>\n<h1>T</h1>\n<p>Some long selected\ntext here</p>\n<p>more</p></body></html>")
-        self.assertEqual(prompts.selection_lines(page, "Some long selected text here"), (3, 4))
-        self.assertIsNone(prompts.selection_lines(page, "not on the page"))
+        agent = os.path.join(root, "index.html")
+        util.write(agent, "<html><body>\n<h1>T</h1>\n<p>Some long selected\ntext here</p>\n<p>more</p></body></html>")
+        self.assertEqual(prompts.selection_lines(agent, "Some long selected text here"), (3, 4))
+        self.assertIsNone(prompts.selection_lines(agent, "not in index.html"))
 
     def test_selection_prompt(self):
         self.assertEqual(prompts.selection_prompt({"text": "a\nb", "heading": "H", "lines": (3, 4)}, "msg"),
-                         'The owner selected this text on the page (index.html, near the heading "H", '
+                         'The owner selected this text in index.html (near the heading "H", '
                          "source lines 3-4; read just the lines around them unless you need more):\n"
                          "> a\n> b\n\nTheir message about it:\nmsg")
 
@@ -109,35 +109,35 @@ class Misc(unittest.TestCase):
                                time.time() + claude_run.LIMIT_FALLBACK_S, delta=5)
 
     def test_small_formatters(self):
-        self.assertEqual((review.kilo(None), review.kilo(152345)), ("?", "152K"))
-        self.assertEqual(page_status.seconds("1-02:03:04"), 93784)
-        self.assertIsNone(page_status.seconds("UNLIMITED"))
-        self.assertEqual(page_status.duration(93784), "1-02:03:04")
-        self.assertEqual(page_status.base_id("12_[3-4]"), "12")
+        self.assertEqual((agents.kilo(None), agents.kilo(152345)), ("?", "152K"))
+        self.assertEqual(slurm.seconds("1-02:03:04"), 93784)
+        self.assertIsNone(slurm.seconds("UNLIMITED"))
+        self.assertEqual(slurm.duration(93784), "1-02:03:04")
+        self.assertEqual(slurm.base_id("12_[3-4]"), "12")
 
     def test_busy(self):
-        self.assertTrue(review.busy({"status": "working"}))
-        self.assertTrue(review.busy({"status": "queued", "watch": {}}))
-        self.assertFalse(review.busy({"status": "working", "watch": {"jobs": ["1"]}}))
-        self.assertFalse(review.busy({"status": "unread"}))
+        self.assertTrue(agents.busy({"status": "working"}))
+        self.assertTrue(agents.busy({"status": "queued", "job_wait": {}}))
+        self.assertFalse(agents.busy({"status": "working", "job_wait": {"jobs": ["1"]}}))
+        self.assertFalse(agents.busy({"status": "unread"}))
 
 
 class Card(unittest.TestCase):
-    def test_starter_page(self):
-        page = os.path.join(util.new_tree("card"), "index.html")
-        util.write(page, prompts.STARTER_PAGE.format(title="T", task="do it", date="2026-01-01"))
-        self.assertEqual(dirai_card.problems(page), [])
-        self.assertEqual(dirai_card.problems(page, "2026-02-02"),
-                         ["Updated is 2026-01-01, but the page changed today (2026-02-02)"])
-        self.assertEqual(dirai_card.extract(page)["objective"], "do it")
+    def test_starter_index(self):
+        agent = os.path.join(util.new_tree("card"), "index.html")
+        util.write(agent, prompts.STARTER_INDEX.format(title="T", task="do it", date="2026-01-01"))
+        self.assertEqual(dirai_card.problems(agent), [])
+        self.assertEqual(dirai_card.problems(agent, "2026-02-02"),
+                         ["Updated is 2026-01-01, but index.html changed today (2026-02-02)"])
+        self.assertEqual(dirai_card.extract(agent)["objective"], "do it")
 
     def test_problems(self):
-        page = os.path.join(util.new_tree("card2"), "index.html")
-        util.write(page, "<html></html>")
-        self.assertEqual(dirai_card.problems(page), ["the page has no summary card"])
-        util.write(page, '<!-- dirai:card --><dl><dt>Objective</dt><dd>x</dd><dt>Updated</dt><dd>soon</dd></dl>'
+        agent = os.path.join(util.new_tree("card2"), "index.html")
+        util.write(agent, "<html></html>")
+        self.assertEqual(dirai_card.problems(agent), ["index.html has no summary card"])
+        util.write(agent, '<!-- dirai:card --><dl><dt>Objective</dt><dd>x</dd><dt>Updated</dt><dd>soon</dd></dl>'
                          '<script type="application/json" id="dirai-results">{bad</script><!-- /dirai:card -->')
-        got = dirai_card.problems(page)
+        got = dirai_card.problems(agent)
         self.assertIn("Inputs is missing", got)
         self.assertIn('Updated is "soon", not a YYYY-MM-DD date', got)
         self.assertTrue(any(p.startswith("the dirai-results JSON doesn't parse") for p in got))

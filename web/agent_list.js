@@ -1,4 +1,4 @@
-// Status badges for www/index.html, injected by html_server.py (owner only).
+// Status badges for www/index.html, injected by server.py (owner only).
 (function () {
   const css = `.rv-badge{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:10px;font:600 11px system-ui;color:#fff;vertical-align:middle}
   .rv-working{background:#b26b00}.rv-queued{background:#7b1fa2}.rv-unread{background:#0b63ce}.rv-read{background:#2e7d32}.rv-closed{background:#666}.rv-asking{background:#c62828}
@@ -13,44 +13,44 @@
   const rows = [...document.querySelectorAll("#rows tr")];
   const tbody = document.getElementById("rows");
   // ../a/b/index.html  ->  a/b
-  const pageOf = tr => decodeURI(tr.querySelector("a").getAttribute("href")).replace(/^\.\.\//, "")
+  const agentOf = tr => decodeURI(tr.querySelector("a").getAttribute("href")).replace(/^\.\.\//, "")
     .replace(/\/?index\.html$/, "");
 
   function update() {
     fetch("/_review/all").then(r => r.json()).then(all => {
       const counts = {};
       rows.forEach(tr => {
-        const st = (all[pageOf(tr)] || {}).status;
+        const st = (all[agentOf(tr)] || {}).status;
         tr.dataset.rv = st ? order[st] : 9;
         let b = tr.querySelector(".rv-badge");
         if (!st) { if (b) b.remove(); return; }
         counts[st] = (counts[st] || 0) + 1;
         if (!b) { b = document.createElement("span"); tr.querySelector("a").after(b); }
-        const asking = (all[pageOf(tr)] || {}).asking;   // its run waits for an answer in the page chat
+        const asking = (all[agentOf(tr)] || {}).asking;   // its run waits for an answer in the agent's chat
         b.className = "rv-badge rv-" + (asking ? "asking" : st); b.textContent = asking ? "needs you" : LABEL[st] || st;
-        const every = (all[pageOf(tr)] || {}).repeat;
+        const every = (all[agentOf(tr)] || {}).repeat;
         let r = tr.querySelector(".rv-rep");
         if (every) {
           if (!r) { r = document.createElement("span"); r.className = "rv-rep"; b.after(r); }
           r.textContent = "🔁 " + {hour: "hourly", day: "daily", week: "weekly"}[every];
-          r.title = "The assistant gets this page's repeated message every " + every;
+          r.title = "This agent gets its repeated message every " + every;
         } else if (r) r.remove();
-        // the page's summary card is missing or incomplete (pages an assistant has worked on)
-        const card = (all[pageOf(tr)] || {}).card;
+        // the agent's summary card is missing or incomplete (agents that have run)
+        const card = (all[agentOf(tr)] || {}).card;
         let k = tr.querySelector(".rv-card");
         if (card) {
           if (!k) { k = document.createElement("span"); k.className = "rv-card"; b.after(k); }
           k.textContent = "card ✗";
-          k.title = "This page's summary card is missing or incomplete; open the page to see what";
+          k.title = "This agent's summary card is missing or incomplete; open the agent to see what";
         } else if (k) k.remove();
-        // big session context: suggest Compact (warn/high levels match review.py)
-        const ctx = (all[pageOf(tr)] || {}).context;
+        // big session context: suggest Compact (warn/high levels match agents.py)
+        const ctx = (all[agentOf(tr)] || {}).context;
         let c = tr.querySelector(".rv-ctx");
         if (ctx >= 150000) {
           if (!c) { c = document.createElement("span"); b.after(c); }
           c.className = "rv-ctx " + (ctx >= 300000 ? "high" : "warn");
           c.textContent = Math.round(ctx / 1000) + "K context";
-          c.title = "This page's assistant session resends this many tokens with every message; open it and press Compact";
+          c.title = "This agent's session resends this many tokens with every message; open it and press Compact";
         } else if (c) c.remove();
       });
       // order by status until the owner sorts a column themselves
@@ -58,14 +58,14 @@
         rows.slice().sort((a, b) => a.dataset.rv - b.dataset.rv).forEach(tr => tbody.appendChild(tr));
       let s = document.getElementById("rv-summary");
       if (!s) { s = document.createElement("div"); s.id = "rv-summary"; document.querySelector(".meta").after(s); }
-      s.textContent = "AI assistant: " + (["unread", "working", "queued", "read", "closed"]
+      s.textContent = "Agents: " + (["unread", "working", "queued", "read", "closed"]
         .filter(k => counts[k]).map(k => counts[k] + " " + (LABEL[k] || k)).join(" · ") || "none yet");
     });
   }
   update();
   setInterval(update, 5000);
 
-  // Claude plan usage (owner only), with the % at which new assistant runs are held back
+  // Claude plan usage (owner only), with the % at which new agent runs are held back
   document.head.insertAdjacentHTML("beforeend", `<style>
   #rv-usage{display:flex;flex-wrap:wrap;gap:6px 18px;margin:.4rem 0;font:13px system-ui;align-items:center}
   #rv-usage .u{display:flex;align-items:center;gap:6px}
@@ -109,8 +109,8 @@
             : "Off: the pause level is set by hand. Click to let it follow the day of the week (day n: n/7 of the limit)."}">Auto</button>`;
         return `<span class="u ${cls(w.percent, stop)}" data-name="${name}" data-pct="${w.percent}"><b>${label}</b>
           <span class="bar"><span class="fill" style="width:${Math.min(w.percent, 100)}%"></span>
-          <input type="range" min="1" max="100" step="1" value="${Math.round(stop)}" aria-label="${label} limit: pause new assistant runs at this percent"
-            title="Drag: new assistant runs wait at this level until the ${label.toLowerCase()} limit resets"></span>
+          <input type="range" min="1" max="100" step="1" value="${Math.round(stop)}" aria-label="${label} limit: pause new agent runs at this percent"
+            title="Drag: new agent runs wait at this level until the ${label.toLowerCase()} limit resets"></span>
           ${Math.round(w.percent)}%<span class="dim">${w.resets ? " · resets " + when(w.resets) : ""} · pause at <span class="lvl">${Math.round(stop)}%</span>${
             paced && auto.day ? ` (day ${auto.day} of 7${auto.day < 7 ? ", " + Math.round(100 * (auto.day + 1) / 7) + "% from " + when(auto.until) : ""})` : ""}</span>${autoBtn}</span>`;
       };
@@ -148,7 +148,7 @@
   usage();
   setInterval(usage, 60000);
 
-  // CPU and memory of the machine serving this tree, and DirAI's own share (server + assistant runs)
+  // CPU and memory of the machine serving this tree, and DirAI's own share (server + agent runs)
   const gb = b => (b / 1073741824).toFixed(b >= 10 * 1073741824 ? 0 : 1) + " GB";
   const mb = b => b >= 1073741824 ? gb(b) : Math.round(b / 1048576) + " MB";
   function load() {
@@ -170,25 +170,25 @@
               `<span style="opacity:.65"> of ${l.cpus} CPUs${l.load1 != null ? " · load " + l.load1 : ""}</span>`,
               "Whole machine, all users") +
         meter("Memory", memPct, `${gb(l.mem_used)} / ${gb(l.mem_total)}`, "Whole machine, all users") +
-        `<span style="opacity:.65" title="This server and everything it started (assistant runs, list rebuilds); CPU in % of one CPU">DirAI: ${Math.round(l.dirai.cpu_percent)}% CPU · ${mb(l.dirai.rss)} · ${l.dirai.procs} processes</span>`;
+        `<span style="opacity:.65" title="This server and everything it started (agent runs, list rebuilds); CPU in % of one CPU">DirAI: ${Math.round(l.dirai.cpu_percent)}% CPU · ${mb(l.dirai.rss)} · ${l.dirai.procs} processes</span>`;
     }).catch(() => {});
   }
   load();
   setInterval(load, 10000);
 
-  // Tree-wide permission mode for the assistant's next runs (www/dirai.json "permissions")
-  const MODES = {allowlist: ["Allow list", "Only allowed actions run; the rest are refused and listed in the page chat, to allow for the next run"],
-                 ask: ["Ask in chat", "An action that isn't allowed waits for your Allow / Deny in the page chat, and the run carries on"]};
+  // Tree-wide permission mode for the agents' next runs (www/dirai.json "permissions")
+  const MODES = {allowlist: ["Allow list", "Only allowed actions run; the rest are refused and listed in the agent's chat, to allow for the next run"],
+                 ask: ["Ask in chat", "An action that isn't allowed waits for your Allow / Deny in the agent's chat, and the run carries on"]};
   function perms() {
     fetch("/_review/permissions").then(r => r.json()).then(p => {
       let el = document.getElementById("rv-perm");
       if (!el) { el = document.createElement("div"); el.id = "rv-perm";
                  (document.getElementById("rv-load") || document.getElementById("rv-usage") || document.querySelector(".meta")).after(el); }
       el.style.cssText = "display:flex;flex-wrap:wrap;gap:6px 10px;margin:.4rem 0;font:13px system-ui;align-items:center";
-      el.innerHTML = "<b>Assistant permissions</b>" + p.modes.map(m =>
+      el.innerHTML = "<b>Agent permissions</b>" + p.modes.map(m =>
         `<button data-mode="${m}" title="${MODES[m][1]}" style="padding:2px 10px;border-radius:12px;cursor:pointer;font:13px system-ui;` +
         (m === p.mode ? "background:#0b63ce;color:#fff;border:1px solid #0b63ce" : "background:transparent;color:inherit;border:1px solid #999") +
-        `">${MODES[m][0]}</button>`).join("") + '<span style="opacity:.65">applies from each page\'s next run</span>';
+        `">${MODES[m][0]}</button>`).join("") + '<span style="opacity:.65">applies from each agent\'s next run</span>';
       el.querySelectorAll("button").forEach(b => b.onclick = () => fetch("/_review/permissions", {method: "POST",
         headers: {"Content-Type": "application/json", "X-Review": "1"}, body: JSON.stringify({mode: b.dataset.mode})}).then(perms));
     }).catch(() => {});

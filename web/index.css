@@ -1,5 +1,5 @@
-/* Shared style for DirAI pages. html_server.py links it as the first thing in <head> of every page
-   that has no <style> of its own, so pages carry no CSS. Classes for agents (see AGENT_RULE.md):
+/* Shared style for agents' index.html files. server.py links it as the first thing in <head> of every
+   index.html that has no <style> of its own, so they carry no CSS. Classes for agents (see AGENT_RULE.md):
    .note / .note.warn callouts, .tbl around a wide table, figure + figcaption, .lede, .muted,
    nav.toc (contents box), .flow (a row of step boxes), and the summary card (#dirai-card). */
 :root {

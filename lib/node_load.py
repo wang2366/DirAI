@@ -1,9 +1,9 @@
-"""CPU and memory of the machine serving a tree, for the list page header (owner only).
+"""CPU and memory of the machine serving a tree, for the agent list header (owner only).
 
 load() returns the whole machine's CPU busy % and memory in use, plus what this server's process
-group uses: html_server.py and everything it starts (assistant runs, list rebuilds), since
+group uses: server.py and everything it starts (agent runs, list rebuilds), since
 dirai_serve runs in its own session. No extra packages: Linux reads /proc, macOS asks
-sysctl, vm_stat and ps. Readings are cached for CACHE_S, so several open list pages cost one.
+sysctl, vm_stat and ps. Readings are cached for CACHE_S, so several open agent lists cost one.
 """
 import os
 import platform

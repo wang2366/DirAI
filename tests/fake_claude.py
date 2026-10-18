@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Stand-in for `claude -p` in the server tests: speaks just enough stream-json.
 
-First message: breaks the page's summary card, asks for a permission and withdraws it, then
+First message: breaks the summary card in index.html, asks for a permission and withdraws it, then
 replies with one denial. Any later message (the card fix): repairs the card. Writes its argv to
-argv.json in the page folder.
+argv.json in the agent's folder.
 """
 import json
 import sys

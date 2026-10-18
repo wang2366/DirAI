@@ -30,22 +30,25 @@ fi
 
 # Start from an empty tree so files deleted/renamed on main disappear here too.
 git -C "$WT" rm -rq --ignore-unmatch -- . >/dev/null
-mapfile -t pages < <(git ls-tree -r --name-only origin/main | grep -iE '\.html?$' | grep -v '^www/index\.html$')
-[[ ${#pages[@]} -gt 0 ]] && git archive origin/main -- "${pages[@]}" | tar -x -C "$WT"
+mapfile -t files < <(git ls-tree -r --name-only origin/main | grep -iE '\.html?$' | grep -v '^www/index\.html$')
+[[ ${#files[@]} -gt 0 ]] && git archive origin/main -- "${files[@]}" | tar -x -C "$WT"
 
 : > "$WT/.nojekyll"
-# the list page at www/index.html, headed by the tree's path like its own (not the worktree's)
+# the agent list at www/index.html, headed by the tree's path like its own (not the worktree's);
+# --public: without the folder sizes and token counts, and without writing their caches
 TITLE=$REPO
-DIRAI_TITLE=$TITLE python3 "$TOOL/lib/build_index.py" "$WT" >/dev/null
+DIRAI_TITLE=$TITLE python3 "$TOOL/lib/agent_list.py" "$WT" --public >/dev/null
 cat > "$WT/index.html" <<EOF
 <!doctype html>
 <meta charset="utf-8">
 <meta http-equiv="refresh" content="0; url=www/">
 <title>$TITLE</title>
-<a href="www/">$TITLE pages</a>
+<a href="www/">$TITLE agents</a>
 EOF
 
-git -C "$WT" add -A
+# only what is meant to be public: the HTML files, the agent list, the redirect and .nojekyll
+# (never git add -A: anything else written into the worktree would be published too)
+git -C "$WT" add -- ${files[@]+"${files[@]}"} www/index.html index.html .nojekyll
 echo "Files on $BRANCH:"
 git -C "$WT" diff --cached --name-status HEAD 2>/dev/null || git -C "$WT" ls-files | sed 's/^/A\t/'
 if (( DRY_RUN )); then
@@ -54,9 +57,9 @@ if (( DRY_RUN )); then
 fi
 
 if git -C "$WT" rev-parse -q --verify HEAD >/dev/null && git -C "$WT" diff --cached --quiet HEAD -- . ':!www/index.html'; then
-    echo "No page changes; nothing to publish."
+    echo "No changes to the HTML files; nothing to publish."
     exit 0
 fi
-git -C "$WT" commit -q -m "Publish HTML pages from main $(git rev-parse --short origin/main)"
+git -C "$WT" commit -q -m "Publish HTML files from main $(git rev-parse --short origin/main)"
 git -C "$WT" push -q origin "HEAD:refs/heads/$BRANCH"
 echo "Pushed $BRANCH of $(git remote get-url origin). Pages appear once GitHub Pages serves that branch."

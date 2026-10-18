@@ -1,4 +1,4 @@
-"""html_server.py end to end: a real server on a temp tree, with tests/fake_claude.py as claude."""
+"""server.py end to end: a real server on a temp tree, with tests/fake_claude.py as claude."""
 import json
 import os
 import socket
@@ -30,10 +30,10 @@ class Server(unittest.TestCase):
                    "<html><head><title>P one</title></head><body><p>hello</p></body></html>")
         util.write(os.path.join(root, "p1", "x.png"), "png")
         util.write(os.path.join(root, "p1", "x.txt"), "secret")
-        subprocess.run([sys.executable, os.path.join(util.LIB, "build_index.py"), root],
+        subprocess.run([sys.executable, os.path.join(util.LIB, "agent_list.py"), root],
                        stdout=subprocess.DEVNULL, check=True)
         cls.log = open(os.path.join(util.TMP, "server.log"), "w")
-        cls.proc = subprocess.Popen([sys.executable, os.path.join(util.LIB, "html_server.py"),
+        cls.proc = subprocess.Popen([sys.executable, os.path.join(util.LIB, "server.py"),
                                      root, str(cls.port), "127.0.0.1"], stdout=cls.log, stderr=cls.log)
         for _ in range(100):
             try:
@@ -76,19 +76,19 @@ class Server(unittest.TestCase):
     def post(self, action, body):
         return json.loads(self.get_raw("/_review/" + action, True, json.dumps(body).encode())[2])
 
-    def wait_status(self, page, status, timeout=15):
+    def wait_status(self, agent, status, timeout=15):
         end = time.time() + timeout
         while time.time() < end:
-            st = self.api("state", page=page)
+            st = self.api("state", agent=agent)
             if st["status"] == status:
                 return st
             time.sleep(0.2)
-        self.fail("%s never became %s: %s" % (page, status, st["status"]))
+        self.fail("%s never became %s: %s" % (agent, status, st["status"]))
 
     # --- every visitor ------------------------------------------------------------------
-    def test_anonymous_page(self):
+    def test_anonymous_index(self):
         body = self.get("/p1/")
-        self.assertTrue(body.startswith('<html><head><link rel="stylesheet" href="/_dirai/page.css"><title>'))
+        self.assertTrue(body.startswith('<html><head><link rel="stylesheet" href="/_dirai/index.css"><title>'))
         self.assertIn("&#8962; Home</a></body>", body)
         self.assertNotIn("/_review/", body)
 
@@ -103,8 +103,8 @@ class Server(unittest.TestCase):
         self.assertEqual(code, 301)
         self.assertTrue(headers["Location"].endswith("/p1/"))
 
-    def test_page_css(self):
-        code, headers, _ = self.get_raw("/_dirai/page.css")
+    def test_index_css(self):
+        code, headers, _ = self.get_raw("/_dirai/index.css")
         self.assertEqual((code, headers["Content-Type"], headers["Cache-Control"]),
                          (200, "text/css; charset=utf-8", "no-cache"))
 
@@ -119,12 +119,12 @@ class Server(unittest.TestCase):
         self.assertIn("review_key=" + self.key, headers["Set-Cookie"])
 
     # --- owner --------------------------------------------------------------------------
-    def test_owner_page_and_list(self):
-        self.assertIn('<script src="/_review/panel.js" data-page="p1"></script>'
-                      '<script src="/_review/newagent.js" data-base="p1" data-root="%s"></script>' % self.root,
+    def test_owner_index_and_agent_list(self):
+        self.assertIn('<script src="/_review/panel.js" data-agent="p1"></script>'
+                      '<script src="/_review/new_agent.js" data-base="p1" data-root="%s"></script>' % self.root,
                       self.get("/p1/", owner=True))
         lst = self.get("/www/index.html", owner=True)
-        self.assertIn('<script src="/_review/list.js"></script>', lst)
+        self.assertIn('<script src="/_review/agent_list.js"></script>', lst)
         self.assertIn('data-base="" data-root="%s"' % self.root, lst)
 
     def test_ui_scripts(self):
@@ -142,11 +142,11 @@ class Server(unittest.TestCase):
                          {"ok": True, "stop": {"session": 50, "weekly": 100}})
         self.assertIn("error", self.post("usage_stop", {"name": "session", "percent": 500}))
         self.assertIn("error", self.post("permissions", {"mode": "yolo"}))
-        self.assertEqual(self.get_raw("/_review/state?page=nope", owner=True)[0], 404)
+        self.assertEqual(self.get_raw("/_review/state?agent=nope", owner=True)[0], 404)
 
     def test_comment_run(self):
-        """A comment runs claude, which edits the page, asks and withdraws, and fixes the card."""
-        self.assertEqual(self.post("comment", {"page": "p1", "text": "please look",
+        """A message runs claude, which edits index.html, asks and withdraws, and fixes the card."""
+        self.assertEqual(self.post("comment", {"agent": "p1", "text": "please look",
                                                "selection": {"text": "hello", "heading": ""}}), {"ok": True})
         st = self.wait_status("p1", "unread")
         th = st["thread"]
@@ -155,38 +155,77 @@ class Server(unittest.TestCase):
         self.assertEqual((th[1]["answer"], th[1]["rules"]), ("withdrawn", ["Bash(ls)", "Bash(rm -rf /x)"]))
         self.assertEqual((th[2]["text"], th[2]["cost"], th[2]["model"]), ("did it", 0.7, "sonnet"))
         self.assertEqual(th[3]["text"], "The summary card needed fixing; it still has problems: "
-                                        "the page has no summary card.")
+                                        "index.html has no summary card.")
         self.assertEqual(st["session_id"], "sess1")
         self.assertEqual(st["denials"], [{"text": "Read: /etc/hosts", "rules": ["Read(//etc/**)"],
                                           "blocked": False, "granted": False}])
-        # the page as it was before the run, for the panel's highlights
-        self.assertEqual(self.get("/_review/prev?page=p1", owner=True),
+        # index.html as it was before the run, for the panel's highlights
+        self.assertEqual(self.get("/_review/prev?agent=p1", owner=True),
                          "<html><head><title>P one</title></head><body><p>hello</p></body></html>")
-        # follow-ups on an idle page with a session
-        self.assertEqual(self.post("model", {"page": "p1", "model": "opus"}), {"ok": True})
+        # follow-ups on an idle agent with a session
+        self.assertEqual(self.post("model", {"agent": "p1", "model": "opus"}), {"ok": True})
+        # "page": what panel scripts loaded before 2026-10 send
         self.assertEqual(self.post("status", {"page": "p1", "status": "closed"}), {"ok": True})
-        self.assertIn("error", self.post("cancel", {"page": "p1"}))
-        self.assertIn("error", self.post("grant", {"page": "p1", "rules": ["Bash(sudo x)"], "always": False}))
-        self.assertEqual(self.post("newchat", {"page": "p1"}), {"ok": True})
-        self.assertIsNone(self.api("state", page="p1")["session_id"])
+        self.assertEqual(self.api("state", page="p1")["model"], "opus")
+        self.assertIn("error", self.post("cancel", {"agent": "p1"}))
+        self.assertIn("error", self.post("grant", {"agent": "p1", "rules": ["Bash(sudo x)"], "always": False}))
+        self.assertEqual(self.post("newchat", {"agent": "p1"}), {"ok": True})
+        self.assertIsNone(self.api("state", agent="p1")["session_id"])
 
     def test_new_agent(self):
         r = self.post("new", {"dir": "n/new1", "task": "make <a> thing", "every": "week"})
         self.assertEqual(r, {"ok": True, "url": "/n/new1/"})
         self.wait_status("n/new1", "unread")
-        page = os.path.join(self.root, "n", "new1")
-        with open(os.path.join(page, "argv.json")) as f:
+        agent = os.path.join(self.root, "n", "new1")
+        with open(os.path.join(agent, "argv.json")) as f:
             argv = json.load(f)
         self.assertEqual(argv[:12],
                          ["-p", "--model", "sonnet", "--input-format", "stream-json", "--output-format",
                           "stream-json", "--verbose", "--permission-mode", "dontAsk", "--restricted",
                           "--strict-mcp-config"])
-        self.assertEqual(argv[argv.index("--add-dir") + 1], page)
-        self.assertIn("Edit(/%s/**)" % page, argv)
+        self.assertEqual(argv[argv.index("--add-dir") + 1], agent)
+        self.assertIn("Edit(/%s/**)" % agent, argv)
         self.assertIn("Bash(sudo:*)", argv[argv.index("--disallowedTools"):])
-        with open(os.path.join(page, "index.html")) as f:
+        with open(os.path.join(agent, "index.html")) as f:
             self.assertIn("make &lt;a&gt; thing", f.read())
         self.assertEqual(self.api("all")["n/new1"]["repeat"], "week")
+        # the agent list is rebuilt for the new agent (in the background)
+        for _ in range(50):
+            with open(os.path.join(self.root, "www", "index.html")) as f:
+                if 'href="../n/new1/index.html"' in f.read():
+                    break
+            time.sleep(0.1)
+        else:
+            self.fail("the agent list was not rebuilt with n/new1")
+
+
+class AgentList(unittest.TestCase):
+    def setUp(self):
+        self.root = util.new_tree("agent-list-" + self.id().rsplit(".", 1)[1])   # own folder: the
+        # background --sizes run of one test may still be writing into its tree
+        util.write(os.path.join(self.root, "a", "index.html"), "<html><head><title>A</title></head></html>")
+        util.write(os.path.join(self.root, "b", "c", "index.html"), "<html></html>")
+
+    def build(self, *args):
+        subprocess.run([sys.executable, os.path.join(util.LIB, "agent_list.py"), self.root] + list(args),
+                       stdout=subprocess.DEVNULL, check=True)
+        with open(os.path.join(self.root, "www", "index.html")) as f:
+            return f.read()
+
+    def test_private(self):
+        out = self.build()
+        self.assertIn('href="../a/index.html"', out)
+        self.assertIn('href="../b/c/index.html"', out)
+        self.assertIn(">Tokens</th>", out)
+        self.assertTrue(os.path.exists(os.path.join(self.root, "www", "agent_tokens.json")))
+
+    def test_public_writes_no_caches(self):
+        """DirAI publish: no folder sizes or token counts, and no cache files beside the list."""
+        out = self.build("--public")
+        self.assertIn('href="../a/index.html"', out)
+        self.assertNotIn("Tokens", out)
+        self.assertNotIn("Folder size", out)
+        self.assertEqual(os.listdir(os.path.join(self.root, "www")), ["index.html"])
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
