@@ -68,7 +68,7 @@
   document.body.insertAdjacentHTML("beforeend", `
   <button id="rv-btn">Chat</button><button id="rv-ask">Ask the agent about this</button>
   <div id="rv-panel">
-    <div id="rv-head"><b>Chat</b><span id="rv-ctx" title="tokens in this session's context, resent with every message"></span><select id="rv-model" title="Model for this agent's next messages (Sonnet uses fewer of your Claude limits than Opus; the local gpt-oss models use none, but are slower)"></select><span id="rv-status" class="rv-pill rv-none">none</span>
+    <div id="rv-head"><b>Chat</b><span id="rv-ctx" title="tokens in this session's context, resent with every message"></span><select id="rv-model" title="Model for this agent's next messages (Sonnet uses fewer of your Claude limits than Opus; the local gpt-oss and GenAI Studio models use none, but are weaker)"></select><span id="rv-status" class="rv-pill rv-none">none</span>
       <button id="rv-x" style="border:0;background:none;font-size:18px;cursor:pointer">&times;</button></div>
     <div id="rv-thread"></div>
     <div id="rv-denials"><b>Claude was blocked from:</b><ul id="rv-dlist"></ul>
@@ -133,8 +133,8 @@
     const watching = (st.watching || []).length > 0;
     const busy = (s === "working" || s === "queued") && !watching;
     const sel = $("rv-model");
-    if (sel.options.length !== st.models.length)
-      sel.innerHTML = st.models.map(m => `<option value="${m}">${(st.model_labels || {})[m] || m[0].toUpperCase() + m.slice(1)}</option>`).join("");
+    if (sel.dataset.models !== st.models.join())
+      sel.dataset.models = st.models.join(), sel.innerHTML = st.models.map(m => `<option value="${m}">${(st.model_labels || {})[m] || m[0].toUpperCase() + m.slice(1)}</option>`).join("");
     if (document.activeElement !== sel) sel.value = st.model;
     sel.disabled = busy;   // takes effect from the next message
     const rep = st.repeat;

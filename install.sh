@@ -60,6 +60,22 @@ if [[ ! -x "$CLAUDE" ]]; then
     say "or set DIRAI_CLAUDE_CMD to its path."
 fi
 
+# optional models that don't use the Claude limits; an agent's panel offers the ones it finds
+GENAI_KEY=${DIRAI_GENAI_KEY_FILE:-$HOME/.config/purdue_llm/api_key}
+say ""
+say "Models besides Claude's (optional; an agent's panel offers only the ones found):"
+if [[ -s "$GENAI_KEY" ]]; then
+    say "  Purdue GenAI Studio: key found ($GENAI_KEY)"
+else
+    say "  Purdue GenAI Studio: no key. Make one at https://genai.rcac.purdue.edu (Settings > Account >"
+    say "    API Keys) and save it in $GENAI_KEY (chmod 600)"
+fi
+if curl -sf -m 2 "http://${OLLAMA_HOST:-127.0.0.1:11434}/api/tags" >/dev/null 2>&1; then
+    say "  Ollama: running at ${OLLAMA_HOST:-127.0.0.1:11434} (checked again where the server runs)"
+else
+    say "  Ollama: not running here (only needed for the local gpt-oss models)"
+fi
+
 case ":$PATH:" in *":$BIN:"*) ;; *)
     say ""
     say "$BIN is not on your PATH. Add this to ~/.bashrc (or your shell's rc file):"

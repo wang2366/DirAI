@@ -3,8 +3,11 @@ Runs are held back (hold_until in the future) so nothing starts unless a test wa
 import datetime
 import json
 import os
+import http.server
+import threading
 import time
 import unittest
+from unittest import mock
 
 from tests import util
 
@@ -147,6 +150,67 @@ class AgentsTest(unittest.TestCase):
         self.assertEqual(self.rv.state("p")["model"], "opus")
         self.rv.comment("p", "x")
         self.assertFalse(self.rv.set_status("p", "read"))   # queued
+
+    def test_available_models(self):
+        claude = ["sonnet", "opus", "fable", "haiku"]
+        agents._available[1] = None
+        self.assertEqual(agents.available_models(), claude)      # no key, no Ollama
+        self.assertFalse(self.rv.set_model("p", "gemma4:26b-a4b"))
+
+        class Ollama(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                data = json.dumps({"models": [{"name": "gpt-oss-20b-t64:latest"}, {"name": "other"}]}).encode()
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+        ollama = http.server.HTTPServer(("127.0.0.1", 0), Ollama)
+        threading.Thread(target=ollama.serve_forever, daemon=True).start()
+        self.addCleanup(ollama.server_close)
+        self.addCleanup(ollama.shutdown)
+        util.write(agents.GENAI_KEY_FILE, "k\n")
+        with mock.patch.object(agents, "OLLAMA_URL", "http://127.0.0.1:%d" % ollama.server_address[1]):
+            self.assertEqual(agents.available_models(), claude)  # cached
+            agents._available[1] = None
+            self.assertEqual(agents.available_models(), claude + ["gpt-oss-20b-t64"] + list(agents.GENAI_MODELS))
+            self.assertTrue(self.rv.set_model("p", "gemma4:26b-a4b"))
+        os.remove(agents.GENAI_KEY_FILE)
+        agents._available[1] = None
+        self.assertEqual(self.rv.state("p")["models"], claude + ["gemma4:26b-a4b"])  # its own, though gone
+        agents._available[1] = None
+
+    @mock.patch.object(agents, "available_models", lambda: agents.MODELS)
+    def test_one_genai_agent_at_a_time(self):
+        started = []
+        self.rv._run = lambda agent, prompt: started.append(agent)
+        for a in ("q", "r"):
+            util.write(os.path.join(self.root, a, "index.html"), "<html></html>")
+        for a, model in (("p", "gpt-oss:120b"), ("q", "qwen3.8:27b"), ("r", "gpt-oss-20b-t64")):
+            self.rv.set_model(a, model)
+            self.rv.comment(a, "go")
+        # held for the Claude limits, yet p and r start; q waits for p, not for the limit
+        self.assertEqual((started, self.rv.queue, self.rv.genai_agent), (["p", "r"], [("q", "go")], "p"))
+        self.assertEqual(self.data()["q"]["status"], "working")
+        self.rv._genai_done("p")            # p's run ended
+        self.rv._start_queued()
+        self.assertEqual((started, self.rv.genai_agent), (["p", "r", "q"], "q"))
+        self.rv._genai_done("q")
+
+    @mock.patch.object(agents, "available_models", lambda: agents.MODELS)
+    def test_genai_agent_waits_for_another_trees(self):
+        started = []
+        self.rv._run = lambda agent, prompt: started.append(agent)
+        self.rv.set_model("p", "gemma4:26b-a4b")
+        with mock.patch.object(agents.genai_relay, "claim", lambda: None):   # another server has it
+            self.rv.comment("p", "go")
+        self.assertEqual((started, self.rv.queue), ([], [("p", "go")]))
+        self.assertTrue(self.rv.genai_timer.is_alive())
+        self.rv.genai_timer.cancel()
+        self.rv._start_queued()             # the recheck, once it's free
+        self.assertEqual((started, self.rv.genai_agent), (["p"], "p"))
+        self.rv._genai_done("p")
 
     def test_prune_threads(self):
         old = (datetime.datetime.now() - datetime.timedelta(days=8)).strftime("%Y-%m-%d %H:%M:%S")

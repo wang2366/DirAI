@@ -58,6 +58,23 @@ line works on every machine. After moving the checkout, update the PATH link and
 
 Needs Python 3.6+, `git`, `curl`, and Claude Code (`~/.local/bin/claude`, or set `DIRAI_CLAUDE_CMD`).
 
+Every agent runs through Claude Code, whatever its model. Besides Claude's own models, an agent's
+panel can offer models that don't count against your Claude limits, but only the ones this machine
+has (`install.sh` says which it found):
+
+- **gpt-oss on Ollama** (gpt-oss 20b, 120b): when an Ollama server on the node (`OLLAMA_HOST`,
+  default `127.0.0.1:11434`) has them.
+- **Purdue RCAC's [GenAI Studio](https://genai.rcac.purdue.edu)** (gpt-oss 120b, qwen3.8 27b,
+  gemma4 26b): when there is an API key. Make one on its site (Settings > Account > API Keys) and put it in
+  `~/.config/purdue_llm/api_key` (`chmod 600`). One of your agents at a time runs on GenAI Studio,
+  across all your trees (another waits for it, as "working"). Its requests go through a relay in
+  the server, on the node's loopback, which keeps to GenAI Studio's 20 requests a minute, counted
+  across all your DirAI servers (a request over it waits for the next minute), and adds the key,
+  so agents never see it. Settings: `DIRAI_GENAI_KEY_FILE`, `DIRAI_GENAI_URL`, `DIRAI_GENAI_RPM`.
+
+  Only those three of GenAI Studio's models finished a Claude Code task when tried (2026-10-18).
+  To try them again, or new ones: `scripts/genai_models_check.py [MODEL ...]` (a few minutes for all).
+
 ### Updating from a version before 2026-10
 
 The checkout was reorganized (`bin/`, `lib/`, `web/`, `scripts/`) and "page" became "agent". After
@@ -104,7 +121,7 @@ By hand: connect through an SSH tunnel to the node, then visit
 
 | Where | What |
 |---|---|
-| this repo | the tool: `bin/` the `DirAI` command and `dirai_serve`; `lib/` the Python (`server.py`, the agent list `agent_list.py`, the agents `agents.py` with `agent_permissions.py`, `agent_prompts.py`, `claude_run.py`, SLURM jobs `slurm.py`); `web/` `index.css` and the panel scripts; `scripts/` `agent_rm.sh`; `AGENT_RULE.md` rules for agents |
+| this repo | the tool: `bin/` the `DirAI` command and `dirai_serve`; `lib/` the Python (`server.py`, the agent list `agent_list.py`, the agents `agents.py` with `agent_permissions.py`, `agent_prompts.py`, `claude_run.py`, SLURM jobs `slurm.py`, the GenAI Studio relay `genai_relay.py`); `web/` `index.css` and the panel scripts; `scripts/` `agent_rm.sh` and `genai_models_check.py`; `AGENT_RULE.md` rules for agents |
 | `<repo>/www/` | per tree, generated and gitignored: the agent list, threads and agent state (`agents.json`), `before_run/`, caches, `server_host.txt`, logs, and `dirai.json` settings |
 | `~/.config/dirai/` | per user: owner key, "Always allow" grants, shared Claude usage reading, the list of trees, and `AGENT_RULE.md` (a link to this checkout's rules for agents) |
 

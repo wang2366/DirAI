@@ -13,6 +13,9 @@ atexit.register(shutil.rmtree, TMP, ignore_errors=True)
 os.environ["DIRAI_CONFIG_DIR"] = os.path.join(TMP, "config")
 os.environ["CLAUDE_CONFIG_DIR"] = os.path.join(TMP, "claude")
 os.environ["REVIEW_CLAUDE_CMD"] = os.path.join(TOOL, "tests", "fake_claude.py")
+# no GenAI Studio key and no Ollama unless a test sets them up (not the real ones of whoever runs the tests)
+os.environ["DIRAI_GENAI_KEY_FILE"] = os.path.join(TMP, "genai_key")
+os.environ["OLLAMA_HOST"] = "127.0.0.1:1"
 os.makedirs(os.path.join(TMP, "claude", "projects"), exist_ok=True)
 if LIB not in sys.path:
     sys.path.insert(0, LIB)

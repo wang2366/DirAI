@@ -28,11 +28,13 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.request
 
 import agent_files
 import claude_usage
 import dirai_config
 import dirai_card
+import genai_relay
 import slurm
 from claude_run import (LiveRun, RunCancelled, context_tokens, limit_reset, signal_group, stop_process,
                         submitted_jobs, transcript)
@@ -65,13 +67,32 @@ COMPACT = "/compact"
 # Model per agent, picked in the panel (claude --model aliases); Sonnet unless changed, to save tokens.
 # The gpt-oss models are served by Ollama on this node (Kuang_work_document/ollama/ollama_ctl.sh
 # start); they don't count against the Claude limits, so they also run while the queue is held.
+# Purdue RCAC's GenAI Studio (genai.rcac.purdue.edu) serves more models over the same Anthropic-style
+# API, with the key made on its site (Settings > Account > API Keys) in GENAI_KEY_FILE. They don't
+# count against the Claude limits either. One agent of the user's at a time runs on them, across
+# all trees (genai_relay.claim(); one waiting for another tree's is rechecked every GENAI_RECHECK_S),
+# and its requests go through genai_relay, which keeps to GenAI Studio's rate limit. They run with --effort medium:
+# Claude Code's default "high" is refused by some of them (qwen3.8). Tried 2026-10-18, only these
+# finish a Claude Code task: the Ollama-served ones there answer with tool calls written out as text
+# (qwen3, qwq, deepseek-r1, qwen3-coder, devstral, llama3.x, mistral, gemma3 ...), and llama4's 16k
+# context is less than Claude Code's own prompt. GENAI_MODELS: model -> its context window, which
+# Claude Code (assuming 200k for a model it doesn't know) needs to compact in time.
 LOCAL_MODELS = ["gpt-oss-20b-t64", "gpt-oss-120b-t64"]
-MODELS = ["sonnet", "opus", "fable", "haiku"] + LOCAL_MODELS
-MODEL_LABELS = {"gpt-oss-20b-t64": "gpt-oss 20b (local)", "gpt-oss-120b-t64": "gpt-oss 120b (local)"}
+GENAI_MODELS = {"gpt-oss:120b": 131072, "qwen3.8:27b": 65536, "gemma4:26b-a4b": 65536}
+NON_CLAUDE = LOCAL_MODELS + list(GENAI_MODELS)
+MODELS = ["sonnet", "opus", "fable", "haiku"] + LOCAL_MODELS + list(GENAI_MODELS)
+MODEL_LABELS = {"gpt-oss-20b-t64": "gpt-oss 20b (local)", "gpt-oss-120b-t64": "gpt-oss 120b (local)",
+                "gpt-oss:120b": "gpt-oss 120b (GenAI Studio)", "qwen3.8:27b": "qwen3.8 27b (GenAI Studio)",
+                "gemma4:26b-a4b": "gemma4 26b (GenAI Studio)"}
 DEFAULT_MODEL = "sonnet"
 OLLAMA_URL = "http://" + os.environ.get("OLLAMA_HOST", "127.0.0.1:11434")
 LOCAL_ENV = {"ANTHROPIC_BASE_URL": OLLAMA_URL, "ANTHROPIC_AUTH_TOKEN": "ollama", "ANTHROPIC_API_KEY": "",
              "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
+GENAI_URL = os.environ.get("DIRAI_GENAI_URL", "https://genai.rcac.purdue.edu/api")
+GENAI_KEY_FILE = os.environ.get("DIRAI_GENAI_KEY_FILE", os.path.expanduser("~/.config/purdue_llm/api_key"))
+# The panel offers only the models this machine has (see available_models()), checked this often
+MODEL_CHECK_S = 60
+GENAI_RECHECK_S = 30
 RUN_TIMEOUT_S = 4 * 3600   # working time; time spent waiting for the owner's answers doesn't count
 # Permissions, tree-wide (dirai.json "permissions", switched on the agent list; read when a run starts):
 # "allowlist": --permission-mode dontAsk: only allowed actions run, the rest are refused and show in
@@ -154,6 +175,43 @@ def load_text(path):
         return ""
 
 
+def model_env(model):
+    """Environment that points claude at the server for a non-Claude model ({} for Claude's own).
+    OSError if the GenAI Studio key file is missing, so the run fails saying so."""
+    if model in LOCAL_MODELS:
+        return LOCAL_ENV
+    if model in GENAI_MODELS:
+        key = load_text(GENAI_KEY_FILE).strip()
+        if not key:
+            raise OSError("no GenAI Studio API key in %s (make one at genai.rcac.purdue.edu, "
+                          "Settings > Account > API Keys)" % GENAI_KEY_FILE)
+        relay = genai_relay.shared(GENAI_URL, lambda: load_text(GENAI_KEY_FILE).strip())
+        return dict(LOCAL_ENV, ANTHROPIC_BASE_URL=relay.url, ANTHROPIC_AUTH_TOKEN=relay.token,
+                    CLAUDE_CODE_MAX_CONTEXT_TOKENS=str(GENAI_MODELS[model]))
+    return {}
+
+
+_available = [0, None]     # [checked at, models]
+_available_lock = threading.Lock()
+
+
+def available_models():
+    """The models an agent can run on here: Claude's (DirAI needs Claude Code anyway), the local
+    ones Ollama has at OLLAMA_URL (none if it isn't running), and GenAI Studio's if there is a key.
+    Cached for MODEL_CHECK_S."""
+    with _available_lock:
+        if _available[1] is None or time.time() - _available[0] > MODEL_CHECK_S:
+            try:
+                with urllib.request.urlopen(OLLAMA_URL + "/api/tags", timeout=2) as r:
+                    names = {m["name"] for m in json.loads(r.read().decode()).get("models", [])}
+            except (OSError, ValueError, KeyError, TypeError):
+                names = set()
+            local = [m for m in LOCAL_MODELS if m in names or m + ":latest" in names]
+            genai = list(GENAI_MODELS) if load_text(GENAI_KEY_FILE).strip() else []
+            _available[:] = [time.time(), [m for m in MODELS if m not in NON_CLAUDE] + local + genai]
+        return _available[1]
+
+
 def end_asks(st):
     """The run is over: its unanswered prompts can't be answered any more."""
     for e in st.get("thread", []):
@@ -183,6 +241,9 @@ class Agents:
         self.lock = threading.Lock()
         self.running = 0
         self.queue = []
+        self.genai_agent = None  # the agent running on a GenAI Studio model (one at a time)
+        self.genai_claim = None  # its genai_relay.claim(), so other trees' servers wait for it
+        self.genai_timer = None
         self.procs = {}         # agent -> its running claude process (for Cancel)
         self.live = {}          # agent -> its run's LiveRun (stdin, prompts waiting for the owner)
         self.cancelled = set()  # agents whose run the owner cancelled
@@ -290,6 +351,7 @@ class Agents:
         return True
 
     def state(self, agent):
+        available = available_models()     # may ask Ollama, so outside the lock
         with self.lock:
             st = self._load().get(agent) or {"status": "none", "thread": [], "denials": [], "grants": []}
             st = dict(st)
@@ -299,7 +361,9 @@ class Agents:
             # e.g. ".." in a path), so another grant can't help
             st["context"] = context_tokens(st.get("session_id"))
             st["context_warn"], st["context_high"] = CONTEXT_WARN, CONTEXT_HIGH
-            st["model"], st["models"] = st.get("model") or DEFAULT_MODEL, MODELS
+            st["model"] = st.get("model") or DEFAULT_MODEL
+            # the agent's own model stays in the list even if it's gone (Ollama stopped)
+            st["models"] = [m for m in MODELS if m in available or m == st["model"]]
             st["model_labels"] = MODEL_LABELS
             st["permissions"] = self.permissions()
             st["watching"] = (st.get("job_wait") or {}).get("jobs", [])
@@ -325,11 +389,11 @@ class Agents:
 
     def set_model(self, agent, model):
         """The model for this agent's next runs (the session continues; only the model changes)."""
-        if model not in MODELS:
+        if model not in available_models():
             return False
         with self._edit(agent) as st:
             st["model"] = model
-        if model in LOCAL_MODELS:
+        if model in NON_CLAUDE:
             self._start_queued()    # an agent queued for the Claude limits can start now
         return True
 
@@ -696,26 +760,46 @@ class Agents:
             if until > self.hold_until:
                 self.hold_until, self.hold_reason = until, reason
             wait = self.hold_until - time.time()
+            data = self._load()
+            for item in list(self.queue):
+                if self.running >= MAX_RUNNING:
+                    break
+                model = self._model(data, item[0])
+                if wait > 0 and model not in NON_CLAUDE:
+                    continue    # local and GenAI Studio agents don't use the Claude limits: they start anyway
+                if model in GENAI_MODELS:
+                    if self.genai_agent:
+                        continue    # one at a time: it starts when the running one ends
+                    self.genai_claim = genai_relay.claim()
+                    if not self.genai_claim:     # another tree's agent is on GenAI Studio
+                        self._recheck_genai()
+                        continue
+                    self.genai_agent = item[0]
+                self.queue.remove(item)
+                self.running += 1
+                threading.Thread(target=self._run, args=item, daemon=True).start()
             if wait > 0:
-                # local-model agents don't use the Claude limits: start them anyway
-                data = self._load()
-                for item in [i for i in self.queue if self._model(data, i[0]) in LOCAL_MODELS]:
-                    if self.running >= MAX_RUNNING:
-                        break
-                    self.queue.remove(item)
-                    self.running += 1
-                    threading.Thread(target=self._run, args=item, daemon=True).start()
                 self._queue_on_hold()
                 if self.timer:
                     self.timer.cancel()
                 self.timer = threading.Timer(wait, self._start_queued)
                 self.timer.daemon = True
                 self.timer.start()
-                return
-            while self.queue and self.running < MAX_RUNNING:
-                agent, prompt = self.queue.pop(0)
-                self.running += 1
-                threading.Thread(target=self._run, args=(agent, prompt), daemon=True).start()
+
+    def _recheck_genai(self):
+        """Try the queue again in GENAI_RECHECK_S (another process holds the GenAI claim, and its
+        run ending doesn't tell us); caller holds the lock."""
+        if not (self.genai_timer and self.genai_timer.is_alive()):
+            self.genai_timer = threading.Timer(GENAI_RECHECK_S, self._start_queued)
+            self.genai_timer.daemon = True
+            self.genai_timer.start()
+
+    def _genai_done(self, agent):
+        """agent's run ended: free the GenAI Studio slot if it had it; caller holds the lock."""
+        if self.genai_agent == agent:
+            self.genai_agent = None
+            self.genai_claim.close()
+            self.genai_claim = None
 
     @staticmethod
     def _model(data, agent):
@@ -730,9 +814,12 @@ class Agents:
         self._start_queued()
 
     def _queue_on_hold(self):
-        """Mark every queued message as waiting for the usage limit; caller holds the lock."""
+        """Mark every queued message as waiting for the usage limit; caller holds the lock.
+        (A GenAI Studio one still queued waits for the GenAI agent running, not for the limit.)"""
         with self._changes() as data:
             for agent, prompt in self.queue:
+                if self._model(data, agent) in NON_CLAUDE:
+                    continue
                 st = self._agent(data, agent)
                 if st["status"] != "queued":
                     note(st, "%s. Queued: this message will be sent automatically at %s."
@@ -767,6 +854,8 @@ class Agents:
                    card_py=os.path.join(dirai_config.LIB_DIR, "dirai_card.py"))
                    + "\n\n" + load_text(AGENT_RULE_MD),
                "--allowedTools"] + allow + ["--disallowedTools"] + ALWAYS_DENY
+        if model in GENAI_MODELS:
+            cmd += ["--effort", "medium"]
         if session:
             cmd += ["--resume", session]
         return cmd
@@ -786,7 +875,7 @@ class Agents:
             except OSError:
                 pass
             entry, card_note, denials, session = self._attempt(agent, prompt, model, grants, session, agent_dir, snap)
-            until = limit_reset(entry["text"]) if entry["role"] == "claude" and model not in LOCAL_MODELS else None
+            until = limit_reset(entry["text"]) if entry["role"] == "claude" and model not in NON_CLAUDE else None
             if prompt == COMPACT and entry["role"] == "claude" and not until:
                 after = context_tokens(session)
                 entry = system_entry("Conversation compacted: %s -> %s tokens." % (
@@ -808,6 +897,7 @@ class Agents:
         finally:
             with self.lock:
                 self.running -= 1
+                self._genai_done(agent)
                 self.procs.pop(agent, None)
                 self.cancelled.discard(agent)
                 if self.live.pop(agent, None):
@@ -832,7 +922,7 @@ class Agents:
         cmd = self._command(agent_dir, model, grants, session)
         card_note = None
         try:
-            env = dict(os.environ, DIRAI_AGENT_DIR=agent_dir, **(LOCAL_ENV if model in LOCAL_MODELS else {}))
+            env = dict(os.environ, DIRAI_AGENT_DIR=agent_dir, **model_env(model))
             p = subprocess.Popen(cmd, cwd=agent_dir, env=env, stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                  start_new_session=True)   # its own group, so Cancel stops its commands too
@@ -856,7 +946,7 @@ class Agents:
                 left = dirai_card.problems(index, now()[:10])
                 card_note = system_entry("The summary card needed fixing; " + (
                     "the agent fixed it." if not left else "it still has problems: " + "; ".join(left) + "."))
-            if out.get("total_cost_usd") is not None and model not in LOCAL_MODELS:
+            if out.get("total_cost_usd") is not None and model not in NON_CLAUDE:
                 entry["cost"] = round(out["total_cost_usd"], 3)
             return entry, card_note, out.get("permission_denials", []), out.get("session_id") or session
         except RunCancelled:
