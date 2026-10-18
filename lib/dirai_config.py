@@ -1,16 +1,17 @@
 """Where DirAI keeps things.
 
-- The tool itself: this folder (one checkout, anywhere; e.g. ~/DirAI).
-- Per tree (a git repo being served): <tree>/www/ holds the list page and state
-  (index.html, reviews.json, page_sizes.json, page_tokens.json, server_host.txt, logs: all
+- The tool itself: one checkout, anywhere (e.g. ~/DirAI): bin/ (commands), lib/ (this Python),
+  web/ (the browser side: index.css, the panel scripts), scripts/ (agent_rm.sh).
+- Per tree (a git repo being served): <tree>/www/ holds the agent list and state
+  (index.html, agents.json, agent_sizes.json, agent_tokens.json, before_run/, server_host.txt, logs: all
   generated) and dirai.json, the tree's settings. dirai.json is local too (gitignored): two clones
   of one repo (e.g. home and scratch) need different ports, and it holds machine paths.
       {"port": 8765,                    # this tree's server port
-       "read_dirs": ["/scratch/..."],   # extra folders page agents may read (the tree is always in)
-       "allow": ["Bash(~/x/run.sh:*)"], # extra allow rules for page agents
+       "read_dirs": ["/scratch/..."],   # extra folders agents may read (the tree is always in)
+       "allow": ["Bash(~/x/run.sh:*)"], # extra allow rules for agents
        "slurm": ["-A", "grp", "-p", "cpu"],  # extra sbatch options for `DirAI start --job`
-       "exclude": ["data", "proj/build"],    # folders the page list skips (names anywhere, or paths)
-       "permissions": "allowlist"}           # or "ask" (set on the list page): see review.py
+       "exclude": ["data", "proj/build"],    # folders the agent list skips (names anywhere, or paths)
+       "permissions": "allowlist"}           # or "ask" (set on the agent list): see agents.py
 - Per user, never in a repo: ~/.config/dirai/ with the owner key (key), the "Always allow"
   grants (permissions.json), the list of trees DirAI has started (trees), and AGENT_RULE.md, a link to
   this checkout's AGENT_RULE.md that trees' CLAUDE.md import (`DirAI init|start` keep it current).
@@ -18,7 +19,10 @@
 import json
 import os
 
-TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
+LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+TOOL_DIR = os.path.dirname(LIB_DIR)                     # the checkout
+WEB_DIR = os.path.join(TOOL_DIR, "web")
+SCRIPTS_DIR = os.path.join(TOOL_DIR, "scripts")
 CONFIG_DIR = os.path.expanduser(os.environ.get("DIRAI_CONFIG_DIR", "~/.config/dirai"))
 CLAUDE_DIR = os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude"))   # Claude Code's own
 TRANSCRIPTS = os.path.join(CLAUDE_DIR, "projects")     # its session transcripts (*.jsonl)

@@ -1,5 +1,5 @@
-"""What a page's assistant may do (review.py): the allow and deny lists every run gets, the read
-scope of a page, the read grants a comment implies, and turning a refused action into the allow
+"""What an agent may do (agents.py): the allow and deny lists every run gets, the read
+scope of an agent, the read grants a message implies, and turning a refused action into the allow
 rule that grants exactly it (for the panel's Allow / Always allow).
 """
 import hashlib
@@ -21,8 +21,8 @@ DEFAULT_ALLOW = [
     "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)",
     "Bash(git add:*)", "Bash(git commit:*)", "Bash(git push:*)", "Bash(git fetch:*)",
     "Bash(git ls-files:*)", "Bash(git rev-parse:*)", "Bash(git remote -v)", "Bash(git branch --show-current)",
-    # deleting: only via page_rm.sh, which refuses anything outside the page folder
-    "Bash(%s/page_rm.sh:*)" % os.path.dirname(os.path.abspath(__file__)),
+    # deleting: only via agent_rm.sh, which refuses anything outside the agent's folder
+    "Bash(%s/agent_rm.sh:*)" % dirai_config.SCRIPTS_DIR,
     # shell plumbing Claude chains into its commands (every part of a && chain must match)
     "Bash(cd:*)", "Bash(echo:*)", "Bash(printf:*)", "Bash(set:*)", "Bash(export:*)", "Bash(test:*)",
     "Bash([:*)", "Bash(true)", "Bash(false)", "Bash(sleep:*)", "Bash(for:*)", "Bash(while:*)",
@@ -42,15 +42,15 @@ ALWAYS_DENY = [
 ]
 
 
-def mcp_config(page_dir, root):
-    """An --mcp-config file with the owner's MCP servers for a run in page_dir, or None.
+def mcp_config(agent_dir, root):
+    """An --mcp-config file with the owner's MCP servers for a run in agent_dir, or None.
     --restricted ignores ~/.claude.json, so the servers Claude Code would load in that folder are
     passed explicitly: user scope, local scope of the folder or any folder above it, and the
     .mcp.json files there. Their tools are not pre-allowed: each needs a grant or the owner's answer.
     claude.ai connectors can't be passed this way."""
     cfg = load_json(os.path.expanduser("~/.claude.json"), {})
     servers = dict(cfg.get("mcpServers", {}))
-    ups, d = [], page_dir
+    ups, d = [], agent_dir
     while d not in ups:
         ups.append(d)
         d = os.path.dirname(d)
@@ -141,16 +141,16 @@ def always_denied(rule):
     return False
 
 
-def read_scope(page_dir, root):
-    """What a page's assistant may read by default: the nearest git repo at or above the page, not
-    above the tree (a page sees its own repo, the tree's top page sees the whole tree), else the
-    page folder itself (and everything below it)."""
-    d = page_dir
+def read_scope(agent_dir, root):
+    """What an agent may read by default: the nearest git repo at or above its folder, not
+    above the tree (an agent sees its own repo, the tree's top agent sees the whole tree), else its
+    folder itself (and everything below it)."""
+    d = agent_dir
     while True:
         if os.path.exists(os.path.join(d, ".git")):   # a folder, or a file in submodules/worktrees
             return d
         if d == root or not d.startswith(root + os.sep):
-            return page_dir
+            return agent_dir
         d = os.path.dirname(d)
 
 
@@ -160,7 +160,7 @@ PATH_TOKEN_RE = re.compile(r"""(?:~/|/)[\w.+-]+(?:/[\w.+-]*)*|[\w.+-]+(?:/[\w.+-
 
 def path_grants(text, root, scope):
     """Read rules for the tree folders the owner names in a comment (the request is the approval):
-    absolute, ~/ or tree-relative paths that exist inside the tree and outside the page's scope.
+    absolute, ~/ or tree-relative paths that exist inside the tree and outside the agent's scope.
     A named file grants its folder."""
     rules = []
     for tok in PATH_TOKEN_RE.findall(text):
@@ -184,7 +184,7 @@ def is_read_rule(rule):
     return rule.startswith("Read(//")
 
 
-def extra_dirs(allow, page_dir, read_dirs):
+def extra_dirs(allow, agent_dir, read_dirs):
     """Working directories a run needs beyond read_dirs: restricted mode only lets tools touch
     working directories, so granted edits, and granted commands naming absolute paths, bring
     their folders along."""
@@ -195,7 +195,7 @@ def extra_dirs(allow, page_dir, read_dirs):
             for tok in re.findall(r"""(?<![\w.])/[^\s'"|;&<>()]+""", r[5:-1]):
                 extra.add(tok if os.path.isdir(tok) else os.path.dirname(tok))
     return sorted(d for d in extra if d and d != "/" and os.path.isdir(d)
-                  and not any(d == r or d.startswith(r + "/") for r in read_dirs + [page_dir]))
+                  and not any(d == r or d.startswith(r + "/") for r in read_dirs + [agent_dir]))
 
 
 def describe_denial(d):

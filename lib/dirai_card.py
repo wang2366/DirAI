@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""The summary card at the top of a page (AGENT_RULE.md): six fields between two markers, plus
-optional JSON results, so a page can be read without reading the rest of it.
+"""The summary card at the top of an agent's index.html (AGENT_RULE.md): six fields between two
+markers, plus optional JSON results, so what an agent found can be read without the rest of it.
 
-Usage: dirai_card.py FOLDER_OR_PAGE...   prints each page's card as short text
+Usage: dirai_card.py FOLDER_OR_INDEX...   prints each index.html's card as short text
 
     <!-- dirai:card -->
     <details id="dirai-card" open>
@@ -15,8 +15,8 @@ Usage: dirai_card.py FOLDER_OR_PAGE...   prints each page's card as short text
     </details>
     <!-- /dirai:card -->
 
-review.py checks the card after every run that changed the page (problems()) and asks the
-assistant to fix it once if needed.
+agents.py checks the card after every run that changed index.html (problems()) and asks the
+agent to fix it once if needed.
 """
 import html
 import json
@@ -37,9 +37,9 @@ def text(fragment):
     return " ".join(html.unescape(re.sub(r"<[^>]+>", "", fragment)).split())
 
 
-def parse(page):
-    """(fields {name: text}, results JSON text or None) of the page's card, or None if it has none."""
-    m = BLOCK_RE.search(page)
+def parse(source):
+    """(fields {name: text}, results JSON text or None) of the card in index.html source, or None if it has none."""
+    m = BLOCK_RE.search(source)
     if not m:
         return None
     block = m.group(1)
@@ -72,14 +72,14 @@ def extract(path):
 
 
 def problems(path, today=None):
-    """What's wrong with the page's card (empty list: nothing). today ("YYYY-MM-DD"): also require
-    Updated to be that date, for a page a run has just changed."""
+    """What's wrong with the card in index.html at path (empty list: nothing). today ("YYYY-MM-DD"):
+    also require Updated to be that date, for an index.html a run has just changed."""
     try:
         card = parse(read(path))
     except OSError as e:
-        return ["can't read the page: %s" % e]
+        return ["can't read index.html: %s" % e]
     if card is None:
-        return ["the page has no summary card"]
+        return ["index.html has no summary card"]
     fields, results = card
     out = ["%s is missing" % k if k not in fields else "%s is empty (write \"none\" if nothing applies)" % k
            for k in FIELDS if not fields.get(k)]
@@ -87,7 +87,7 @@ def problems(path, today=None):
     if updated and not DATE_RE.match(updated):
         out.append("Updated is \"%s\", not a YYYY-MM-DD date" % updated)
     elif updated and today and updated != today:
-        out.append("Updated is %s, but the page changed today (%s)" % (updated, today))
+        out.append("Updated is %s, but index.html changed today (%s)" % (updated, today))
     if results is not None:
         try:
             json.loads(results)

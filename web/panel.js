@@ -1,9 +1,9 @@
-// Review panel injected by html_server.py into index.html pages (owner only).
+// The agent's panel, which server.py adds to every index.html it serves (owner only).
 (function () {
-  const PAGE = document.currentScript.dataset.page;
+  const AGENT = document.currentScript.dataset.agent;
   const api = (path, body) => fetch("/_review/" + path, body === undefined ? {} : {
     method: "POST", headers: {"Content-Type": "application/json", "X-Review": "1"},
-    body: JSON.stringify(Object.assign({page: PAGE}, body)),
+    body: JSON.stringify(Object.assign({agent: AGENT}, body)),
   }).then(r => r.json());
 
   const css = `
@@ -66,17 +66,17 @@
   body.rv-nohl .rv-changed{background:none!important;box-shadow:none}`;
   document.head.insertAdjacentHTML("beforeend", "<style>" + css + "</style>");
   document.body.insertAdjacentHTML("beforeend", `
-  <button id="rv-btn">AI assistant</button><button id="rv-ask">Ask AI about this</button>
+  <button id="rv-btn">Agent</button><button id="rv-ask">Ask the agent about this</button>
   <div id="rv-panel">
-    <div id="rv-head"><b>AI assistant</b><span id="rv-ctx" title="tokens in this session's context, resent with every message"></span><select id="rv-model" title="Model for this page's next messages (Sonnet uses fewer of your Claude limits than Opus; the local gpt-oss models use none, but are slower)"></select><span id="rv-status" class="rv-pill rv-none">none</span>
+    <div id="rv-head"><b>Agent</b><span id="rv-ctx" title="tokens in this session's context, resent with every message"></span><select id="rv-model" title="Model for this agent's next messages (Sonnet uses fewer of your Claude limits than Opus; the local gpt-oss models use none, but are slower)"></select><span id="rv-status" class="rv-pill rv-none">none</span>
       <button id="rv-x" style="border:0;background:none;font-size:18px;cursor:pointer">&times;</button></div>
     <div id="rv-thread"></div>
     <div id="rv-denials"><b>Claude was blocked from:</b><ul id="rv-dlist"></ul>
-      <div class="rv-row"><button id="rv-once">Allow once (this page)</button><button id="rv-always" title="Folder reads stay with this page; other rules apply to every page">Always allow</button></div></div>
-    <div id="rv-foot"><div id="rv-stale">DirAI was updated. Send or clear your message and the page reloads, or reload it now.</div><div id="rv-ctxnote"></div><div id="rv-cardnote"></div><div id="rv-chip"></div><textarea id="rv-text" placeholder="Message the AI assistant about this page..."></textarea>
+      <div class="rv-row"><button id="rv-once">Allow once (this agent)</button><button id="rv-always" title="Folder reads stay with this agent; other rules apply to every agent">Always allow</button></div></div>
+    <div id="rv-foot"><div id="rv-stale">DirAI was updated. Send or clear your message and this tab reloads, or reload it now.</div><div id="rv-ctxnote"></div><div id="rv-cardnote"></div><div id="rv-chip"></div><textarea id="rv-text" placeholder="Message this agent..."></textarea>
       <div class="rv-row"><button id="rv-save" class="primary">Send</button>
-        <button id="rv-read">Mark read</button><button id="rv-new" title="Your next message starts a fresh session (the assistant re-reads the page and the last few messages)">New chat</button><button id="rv-compact" title="Summarize the conversation so far (Claude Code /compact); the session continues with a much smaller context">Compact</button><button id="rv-close">TaskDone</button><button id="rv-cancel" style="display:none" title="Stop this run (or take the message out of the queue). The session is kept: change the model if you like, then send another message to continue.">Cancel</button><button id="rv-hl" style="display:none" title="Parts of the page the assistant added or changed in its latest run that edited the page">Hide changes</button>
-        <select id="rv-every" title="Send a message to this page's assistant again on a schedule (it waits if the assistant is busy)"><option value="off">Repeat: off</option><option value="hour">Every hour</option><option value="day">Every day</option><option value="week">Every week</option></select></div>
+        <button id="rv-read">Mark read</button><button id="rv-new" title="Your next message starts a fresh session (the agent re-reads its index.html and the last few messages)">New chat</button><button id="rv-compact" title="Summarize the conversation so far (Claude Code /compact); the session continues with a much smaller context">Compact</button><button id="rv-close">TaskDone</button><button id="rv-cancel" style="display:none" title="Stop this run (or take the message out of the queue). The session is kept: change the model if you like, then send another message to continue.">Cancel</button><button id="rv-hl" style="display:none" title="Parts of index.html the agent added or changed in its latest run that edited it">Hide changes</button>
+        <select id="rv-every" title="Send a message to this agent again on a schedule (it waits if the agent is busy)"><option value="off">Repeat: off</option><option value="hour">Every hour</option><option value="day">Every day</option><option value="week">Every week</option></select></div>
       <div id="rv-repedit"><div id="rv-replabel"></div><textarea id="rv-reptext"></textarea>
         <div class="rv-row"><button id="rv-repsave" class="primary">Save schedule</button><button id="rv-repcancel">Cancel</button></div></div>
       <div id="rv-repinfo"></div></div>
@@ -109,7 +109,7 @@
     const asking = !!st.asking;   // a run waits for the owner's answer in the thread
     $("rv-status").textContent = asking ? "needs you" : LABEL[s] || s;
     $("rv-status").className = "rv-pill rv-" + (asking ? "asking" : s);
-    $("rv-btn").textContent = "AI assistant" + (asking ? " ❗" : s === "unread" ? " •" : s === "working" || s === "queued" ? " …" : "");
+    $("rv-btn").textContent = "Agent" + (asking ? " ❗" : s === "unread" ? " •" : s === "working" || s === "queued" ? " …" : "");
     if (asking && !render.asking) scrollToEnd = true;   // bring a new prompt into view
     render.asking = asking;
     const threadKey = JSON.stringify(st.thread);
@@ -152,16 +152,16 @@
     $("rv-ctxnote").style.display = level && !busy ? "block" : "none";
     if (level) $("rv-ctxnote").textContent = `This conversation is ${Math.round(ctx / 1000)}K tokens, and every message resends all of it, ` +
       `which uses up your Claude limits faster${level === "high" ? " (a lot faster at this size)" : ""}. ` +
-      "Compact summarizes it and keeps the session; New chat starts over from the page and the last few messages.";
-    const card = st.card || [];   // the page's summary card (dirai_card.py), checked by the server
+      "Compact summarizes it and keeps the session; New chat starts over from index.html and the last few messages.";
+    const card = st.card || [];   // the summary card in index.html (dirai_card.py), checked by the server
     $("rv-cardnote").style.display = card.length && !busy ? "block" : "none";
-    $("rv-cardnote").textContent = "Summary card: " + card.join("; ") + ". Ask the assistant to fix it.";
+    $("rv-cardnote").textContent = "Summary card: " + card.join("; ") + ". Ask the agent to fix it.";
     const grantable = st.denials.filter(d => !d.blocked && !d.granted);
     // one line per denial; click to see the full command
     const denialKey = JSON.stringify(st.denials);   // same idea: don't collapse opened entries
     if (denialKey !== render.shownDenials) render.shownDenials = denialKey, $("rv-dlist").innerHTML = st.denials.map(d =>
       `<li><details><summary>${d.blocked ? '<i style="color:#a00">always blocked, run it yourself:</i> '
-        : d.granted ? '<i style="color:#a00">already allowed, refused by a built-in safety check (shell constructs like $( ), loops or ..); ask the assistant to do it with a script:</i> '
+        : d.granted ? '<i style="color:#a00">already allowed, refused by a built-in safety check (shell constructs like $( ), loops or ..); ask the agent to do it with a script:</i> '
         : ""}${esc(d.text.slice(0, 120))}</summary>` +
       `<pre>${esc(d.text)}</pre></details></li>`).join("");
     $("rv-once").style.display = $("rv-always").style.display = grantable.length ? "" : "none";
@@ -178,7 +178,7 @@
       `<details><summary>${esc(m.text.slice(0, 200))}</summary><pre>${esc(m.detail || m.text)}</pre></details>` +
       (m.answer ? `<div class="rv-said">${SAID[m.answer] || esc(m.answer)}</div>`
         : `<div class="rv-row" data-ask="${esc(m.id)}"><button data-choice="allow" class="primary">Allow</button>` +
-          `<button data-choice="always" title="Allow it, and keep the rule like the Always allow button (folder reads: this page only)">Always allow</button>` +
+          `<button data-choice="always" title="Allow it, and keep the rule like the Always allow button (folder reads: this agent only)">Always allow</button>` +
           `<button data-choice="deny" class="deny">Deny</button></div>`) + `</div>`;
   }
   $("rv-thread").addEventListener("click", e => {
@@ -187,7 +187,7 @@
     row.querySelectorAll("button").forEach(x => x.disabled = true);
     post("answer", {id: row.dataset.ask, choice: b.dataset.choice});
   });
-  const refresh = () => api("state?page=" + encodeURIComponent(PAGE)).then(render);
+  const refresh = () => api("state?agent=" + encodeURIComponent(AGENT)).then(render);
   const post = (path, body) => api(path, body).then(r => { if (r.error) alert(r.error); refresh(); });
 
   $("rv-btn").onclick = () => {
@@ -232,12 +232,12 @@
   $("rv-new").onclick = () => { scrollToEnd = true; post("newchat", {}); };
   $("rv-close").onclick = () => post("status", {status: "closed"});
   $("rv-compact").onclick = () => { scrollToEnd = true; post("compact", {}); };
-  $("rv-cancel").onclick = () => { if (confirm("Stop the assistant on this page?")) { scrollToEnd = true; post("cancel", {}); } };
+  $("rv-cancel").onclick = () => { if (confirm("Stop this agent?")) { scrollToEnd = true; post("cancel", {}); } };
   const grant = always => post("grant", {rules: state.denials.filter(d => !d.blocked && !d.granted).flatMap(d => d.rules), always});
-  // Highlight the blocks that differ from the page as it was before the assistant's latest edit:
+  // Highlight the blocks that differ from index.html as it was before the agent's latest edit:
   // a leaf block (paragraph, list item, cell, heading, image...) whose content isn't in the old copy.
   const BLOCKS = "p,li,h1,h2,h3,h4,h5,h6,pre,blockquote,figcaption,caption,td,th,dt,dd,summary,img,svg,video,iframe,div";
-  const SKIP = "#page-status,[id^=rv-],[id^=na-],script,style";
+  const SKIP = "#dirai-status,[id^=rv-],[id^=na-],script,style";
   const sig = el => el.tagName + "|" + (/^(IMG|VIDEO|IFRAME)$/.test(el.tagName) ? el.getAttribute("src")
     : el.tagName === "SVG" || el.tagName === "svg" ? el.outerHTML.length + ":" + el.textContent.slice(0, 200)
     : el.textContent.replace(/\s+/g, " ").trim());
@@ -245,7 +245,7 @@
     !el.closest(SKIP) && !(el.parentElement && el.parentElement.closest("svg")) &&
     !el.querySelector(BLOCKS) && (el.textContent.trim() || /^(IMG|VIDEO|IFRAME|svg|SVG)$/.test(el.tagName)));
   function highlight() {
-    fetch("/_review/prev?page=" + encodeURIComponent(PAGE)).then(r => r.ok ? r.text() : null).then(old => {
+    fetch("/_review/prev?agent=" + encodeURIComponent(AGENT)).then(r => r.ok ? r.text() : null).then(old => {
       if (old === null) return;
       const seen = {};
       leaves(new DOMParser().parseFromString(old, "text/html").body).forEach(el => { const k = sig(el); seen[k] = (seen[k] || 0) + 1; });
@@ -259,7 +259,7 @@
   };
   highlight();
 
-  // Page text the owner selects goes with their next message (quoted, with the nearest heading;
+  // Text the owner selects in index.html goes with their next message (quoted, with the nearest heading;
   // the server adds the source lines). Selecting while the panel is open attaches it right away;
   // otherwise the "Ask AI about this" button next to the selection does. Text only.
   const SEL_MAX = 4000;
@@ -281,7 +281,7 @@
       `<div class="rv-quote">${esc(sel.text)}</div></details><button id="rv-unsel" title="Don't send the selection">&times;</button>`;
     $("rv-unsel").onclick = () => pin(null);
   }
-  function pageSelection() {   // {text, heading} of a selection in the page itself, else null
+  function indexSelection() {   // {text, heading} of a selection in index.html itself, else null
     const s = window.getSelection();
     if (!s || s.isCollapsed || !s.rangeCount) return null;
     const r = s.getRangeAt(0), node = n => n.nodeType === 1 ? n : n.parentElement;
@@ -298,7 +298,7 @@
     return {text, heading, cut, rect: r.getBoundingClientRect()};
   }
   function onSelect() {
-    const sel = pageSelection(), ask = $("rv-ask");
+    const sel = indexSelection(), ask = $("rv-ask");
     if (!sel) return ask.style.display = "none";
     if ($("rv-panel").classList.contains("open")) { ask.style.display = "none"; return pin(sel); }
     ask.style.left = Math.min(sel.rect.right + scrollX, scrollX + innerWidth - 150) + "px";
@@ -308,7 +308,7 @@
   }
   document.addEventListener("mouseup", () => setTimeout(onSelect));   // after the click clears or sets it
   document.addEventListener("keyup", e => { if (e.shiftKey) onSelect(); });
-  $("rv-ask").onmousedown = e => e.preventDefault();   // keep the page selection
+  $("rv-ask").onmousedown = e => e.preventDefault();   // keep the selection in index.html
   $("rv-ask").onclick = () => {
     pin($("rv-ask").sel); $("rv-ask").style.display = "none";
     if (!$("rv-panel").classList.contains("open")) $("rv-btn").click();

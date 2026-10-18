@@ -1,6 +1,6 @@
-"""Status bar html_server.py puts at the top of every page: what the assistant is working on and
-the owner's SLURM jobs whose working directory is inside that folder (open items are in the page's
-summary card).
+"""The owner's SLURM jobs (from sacct), which agents.py waits on, and the status bar server.py puts
+at the top of every agent's index.html: what the agent is working on and the jobs whose working
+directory is inside its folder (open items are in its summary card).
 """
 import html
 import os
@@ -70,13 +70,13 @@ def jobs(fresh=False):
         return list(_cache["jobs"])
 
 
-def job_dirs(page_dir):
-    """Folders whose jobs belong to the page: the page folder, plus the absolute paths listed in
+def job_dirs(agent_dir):
+    """Folders whose jobs belong to the agent: its folder, plus the absolute paths listed in
     its job_dirs.txt (one per line, # comments) for work it runs elsewhere, e.g. a test sweep
     in another checkout."""
-    dirs = [os.path.realpath(page_dir)]
+    dirs = [os.path.realpath(agent_dir)]
     try:
-        with open(os.path.join(page_dir, "job_dirs.txt"), encoding="utf-8", errors="replace") as f:
+        with open(os.path.join(agent_dir, "job_dirs.txt"), encoding="utf-8", errors="replace") as f:
             for line in f:
                 line = line.split("#", 1)[0].strip()
                 if line.startswith("/"):
@@ -86,16 +86,16 @@ def job_dirs(page_dir):
     return dirs
 
 
-def page_jobs(page_dir, fresh=False, all_jobs=None):
-    """The page's jobs (see job_dirs); sub is the working directory relative to the page
+def agent_jobs(agent_dir, fresh=False, all_jobs=None):
+    """The agent's jobs (see job_dirs); sub is the working directory relative to its
     folder, or absolute when it is elsewhere."""
-    page_dir = os.path.realpath(page_dir)
-    dirs = job_dirs(page_dir)
+    agent_dir = os.path.realpath(agent_dir)
+    dirs = job_dirs(agent_dir)
     out = []
     for j in jobs(fresh) if all_jobs is None else all_jobs:
         wd = os.path.realpath(j["workdir"])
         if any(within(wd, d) for d in dirs):
-            out.append(dict(j, sub=os.path.relpath(wd, page_dir) if within(wd, page_dir) else wd))
+            out.append(dict(j, sub=os.path.relpath(wd, agent_dir) if within(wd, agent_dir) else wd))
     return out
 
 
@@ -139,12 +139,12 @@ def working_html(work):
         when, html.escape(what))
 
 
-def bar(page_dir, work=None):
-    """HTML for the status bar of the page in page_dir (work = Reviews.working(page) or None): what
-    the assistant is working on and the SLURM jobs, each only when there is one; "" when there is
-    neither (the page's summary card says what is open)."""
+def status_bar(agent_dir, work=None):
+    """HTML for the status bar of the agent in agent_dir (work = Agents.working(agent) or None): what
+    the agent is working on and its SLURM jobs, each only when there is one; "" when there is
+    neither (its summary card says what is open)."""
     parts = [working_html(work)] if work else []
-    js = page_jobs(page_dir)
+    js = agent_jobs(agent_dir)
     if js:
         parts.append("<div><b>Jobs in the queue:</b><ul style=\"margin:2px 0 0;padding-left:22px\">%s</ul></div>" % "".join(
             "<li><code>%s</code> %s &middot; %s %s%s &middot; %s%s</li>" % (
@@ -156,6 +156,6 @@ def bar(page_dir, work=None):
             for j in js))
     if not parts:
         return ""
-    return ('<div id="page-status" style="margin:0 0 12px;padding:8px 14px;border-bottom:1px solid '
+    return ('<div id="dirai-status" style="margin:0 0 12px;padding:8px 14px;border-bottom:1px solid '
             'rgba(128,128,128,.4);background:rgba(128,128,128,.08);font:13px/1.45 system-ui;color:inherit">'
             '%s</div>' % "".join(parts))

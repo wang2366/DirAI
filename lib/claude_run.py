@@ -1,4 +1,4 @@
-"""A `claude -p` run as review.py drives it: Live (its stream-json stdin and the permission
+"""A `claude -p` run as agents.py drives it: LiveRun (its stream-json stdin and the permission
 prompts waiting for the owner), stopping it with the commands it started, and reading what it
 left behind (its transcript: context size, SLURM jobs it submitted; a usage-limit reply).
 """
@@ -135,9 +135,9 @@ def stop_process(p):
     t.start()
 
 
-class Live:
+class LiveRun:
     """A running claude driven over stream-json: its stdin, and (ask mode) its permission prompts
-    waiting for the owner. Reviews.lock guards pending, granted and the waiting clock."""
+    waiting for the owner. Agents.lock guards pending, granted and the waiting clock."""
     def __init__(self, proc):
         self.proc, self.lock = proc, threading.Lock()
         self.pending = {}       # request_id -> its can_use_tool request
