@@ -1,9 +1,9 @@
 #!/bin/bash
-# Install or update DirAI:
-#   curl -fsSL https://raw.githubusercontent.com/wang2366/DirAI/main/install.sh | bash
-# or, from a checkout you already have:  ./install.sh
-# Clones (or pulls) DirAI into $DIRAI_HOME (default ~/.local/share/dirai) and links the DirAI
-# command into $DIRAI_BIN (default ~/.local/bin). Run it again to update.
+# Install or update DirAI, from a checkout you already have (the repo is private, so clone it with
+# your SSH key first):  ./install.sh
+# Run from elsewhere (e.g. piped into bash), it clones (or pulls) DirAI into $DIRAI_HOME (default
+# ~/.local/share/dirai); either way it links the DirAI command into $DIRAI_BIN (default ~/.local/bin).
+# Run it again to update.
 #   DIRAI_REPO   where to clone from (default https://github.com/wang2366/DirAI.git; an
 #                git@github.com:... URL uses your SSH key, e.g. while the repo is private)
 #   DIRAI_REF    branch to install (default main)

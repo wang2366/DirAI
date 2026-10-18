@@ -6,12 +6,13 @@ Usage: server.py ROOT PORT [BIND_ADDR]    (BIND_ADDR defaults to 0.0.0.0)
 A folder URL serves that folder's index.html (no directory listings). Paths that
 resolve outside ROOT (e.g. through symlinks) are refused.
 
-The owner (connecting through the SSH tunnel, with the review_key cookie) also gets the agent's
+The owner (connecting through the SSH tunnel, with the owner cookie, see COOKIE) also gets the agent's
 panel on every index.html and the /_review/* API; see agents.py.
 
 An index.html with no <style> of its own gets the shared index.css (/_dirai/index.css), linked
 first in <head>.
 """
+import hashlib
 import html as htmllib
 import http.server
 import io
@@ -57,6 +58,10 @@ HOME_BUTTON = ('<a href="/www/index.html" title="All agents" style="position:fix
                'z-index:99999;padding:8px 14px;border-radius:20px;border:1px solid #888;background:#1d1d1f;'
                'color:#fff;font:600 14px system-ui;text-decoration:none">&#8962; Home</a>')
 KEY = agents.login_key()
+# The owner cookie's name carries a fingerprint of this machine's key: browsers keep cookies per host
+# name, not per port, so trees on two machines tunnelled to 127.0.0.1 would otherwise overwrite each
+# other's login. "review_key", its name before 2026-10, is still accepted.
+COOKIE = "review_key_" + hashlib.sha256(KEY.encode()).hexdigest()[:10]
 NEWAGENT_TAG = ('<script src="/_review/new_agent.js" data-base="%s" data-root="'
                 + htmllib.escape(ROOT) + '"></script>')
 INDEX_CSS = os.path.join(WEB_DIR, "index.css")
@@ -131,7 +136,7 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
         if self.client_address[0] != "127.0.0.1":
             return False
         c = cookies.SimpleCookie(self.headers.get("Cookie", ""))
-        return "review_key" in c and c["review_key"].value == KEY
+        return any(name in c and c[name].value == KEY for name in (COOKIE, "review_key"))
 
     def send_body(self, body, ctype, cache="no-store", code=200):
         self.send_headers(len(body), ctype, cache, code)
@@ -228,7 +233,7 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
         action = url.path[len("/_review/"):]
         if action == "login" and self.client_address[0] == "127.0.0.1" and q.get("key", [""])[0] == KEY:
             self.send_response(302)
-            self.send_header("Set-Cookie", "review_key=%s; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict" % KEY)
+            self.send_header("Set-Cookie", "%s=%s; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict" % (COOKIE, KEY))
             self.send_header("Location", "/www/index.html")
             self.end_headers()
             return

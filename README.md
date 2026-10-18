@@ -29,23 +29,17 @@ least its last 6).
 
 ## Setup (once per machine)
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/wang2366/DirAI/main/install.sh | bash
-```
-
-This clones DirAI into `~/.local/share/dirai`, links `~/.local/bin/DirAI` to it, and says what is
-missing (Claude Code, `~/.local/bin` on your PATH). Run it again to update. Settings:
-`DIRAI_HOME` (where to clone), `DIRAI_BIN` (where to link the command), `DIRAI_REF` (branch), and
-`DIRAI_REPO` (clone URL).
-
-While the repo is private, curl can't fetch the script (GitHub answers 404 without a login), so
-collaborators clone it with their SSH key and run the script there, which links that checkout:
+The repo is private, so clone it with your SSH key (you need access to it on GitHub), then run its
+install script:
 
 ```bash
 git clone git@github.com:wang2366/DirAI.git ~/.local/share/dirai && ~/.local/share/dirai/install.sh
 ```
 
-To update that checkout later: `git -C ~/.local/share/dirai pull`.
+The script links `~/.local/bin/DirAI` to that checkout and says what is missing (Claude Code,
+`~/.local/bin` on your PATH). Setting: `DIRAI_BIN` (where to link the command).
+
+To update later: `git -C ~/.local/share/dirai pull`.
 
 The checkout can live anywhere. `DirAI init` and `DirAI start` keep `~/.config/dirai/AGENT_RULE.md`
 linked to it, and a tree's `CLAUDE.md` imports the agent rules from there, so the committed import
@@ -73,6 +67,7 @@ cd <your folder>      # a repo: anywhere inside it; another folder: its top
 DirAI init            # www/dirai.json (port); in a repo also .gitignore lines and the CLAUDE.md import
 DirAI start           # on this machine; or: DirAI start NODE | --job (its own sbatch job)
 DirAI status | restart | stop | build | list
+DirAI connect         # a shell function for your laptop that opens this tree there
 ```
 
 Later commands work from anywhere below the tree: DirAI uses the nearest folder above you holding
@@ -84,7 +79,16 @@ agents get git instructions only when their folder is inside a repo. `init` refu
 Each tree (each clone, even of the same repo) runs its own server on its own port, so trees start
 and stop independently. `DirAI list` shows them all.
 
-Opening an agent as the owner: connect through an SSH tunnel to the node, then visit
+Opening the agents from your laptop: run `DirAI connect` in the tree (on the machine it runs on). It
+prints a shell function for your laptop's `~/.zshrc` or `~/.bashrc`, named after the tree (e.g.
+`dirai-my_assistant`); running it opens an SSH tunnel to the server and the agent list in your
+browser, logged in as the owner. Tell it once how you ssh to that machine, e.g.
+`DirAI connect kuang@100.90.173.94 -p 26` (remembered as `"ssh"` in `dirai.json`); without it, DirAI
+guesses. The function looks up the server's node and port each time it runs, so it keeps working after a
+restart or a `--job` on another node, and it fetches the owner key over ssh, so the key isn't stored on
+the laptop. Browser: your default, or `DIRAI_BROWSER` (e.g. `export DIRAI_BROWSER="Google Chrome"`).
+
+By hand: connect through an SSH tunnel to the node, then visit
 `/_review/login?key=<~/.config/dirai/key>` once to set the owner cookie.
 
 ## Where things live
@@ -101,11 +105,12 @@ Opening an agent as the owner: connect through an SSH tunnel to the node, then v
 {"port": 8765,
  "read_dirs": ["/data/shared"],              "allow": ["Bash(~/tools/run.sh:*)"],
  "slurm": ["-A", "mygroup", "-p", "cpu"],   "exclude": ["data", "projA/build"],
- "permissions": "allowlist"}
+ "permissions": "allowlist",
+ "ssh": "me@100.90.173.94 -p 26"}
 ```
 
 `read_dirs`: extra folders agents may read (the repo itself always). `allow`: extra
-Claude Code permission rules for them. `slurm`: extra `sbatch` options for `DirAI start --job`. `permissions`: `"allowlist"` (default) or `"ask"`, see below; the agent list's **Agent permissions** switch sets it. `exclude`: folders the agent list skips (a name skips it anywhere, a path with a slash skips that one folder; virtualenvs, `node_modules` and caches are always skipped).
+Claude Code permission rules for them. `slurm`: extra `sbatch` options for `DirAI start --job`. `permissions`: `"allowlist"` (default) or `"ask"`, see below; the agent list's **Agent permissions** switch sets it. `ssh`: how your laptop reaches this machine, for `DirAI connect`. `exclude`: folders the agent list skips (a name skips it anywhere, a path with a slash skips that one folder; virtualenvs, `node_modules` and caches are always skipped).
 
 ## Agent safety
 
