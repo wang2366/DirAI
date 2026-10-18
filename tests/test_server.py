@@ -185,6 +185,29 @@ class Server(unittest.TestCase):
         self.assertEqual(self.post("newchat", {"agent": "p1"}), {"ok": True})
         self.assertIsNone(self.api("state", agent="p1")["session_id"])
 
+    def test_folder_files_shown_to_the_owner(self):
+        util.write(os.path.join(self.root, "m1", "index.html"), "<html><body><p>m</p></body></html>")
+        util.write(os.path.join(self.root, "m1", "run.sh"), "echo one\necho two\n")
+        tag = '<script src="/_review/files.js" data-agent="m1"></script>'
+        self.assertIn(tag, self.get("/m1/", owner=True))
+        self.assertNotIn("files.js", self.get("/m1/"))                    # visitors: no folder
+        self.assertEqual(self.get_raw("/m1/run.sh")[0], 404)              # never served as a file
+        self.assertEqual(self.get_raw("/_review/files?agent=m1")[0], 404) # API: owner only
+        self.assertEqual(self.get_raw("/_review/files.js", owner=True)[0], 200)
+        d = self.api("files", agent="m1")
+        self.assertEqual([(f["name"], f["text"]) for f in d["files"]], [("run.sh", "echo one\necho two\n")])
+
+    def test_file_selection_message(self):
+        util.write(os.path.join(self.root, "m2", "index.html"), "<html><body><p>m</p></body></html>")
+        util.write(os.path.join(self.root, "m2", "run.sh"), "echo one\necho two\n")
+        self.assertIn("error", self.post("comment", {"agent": "m2", "text": "x", "selection": {
+            "text": "one", "file": "../p1/index.html", "lines": [1, 1]}}))
+        self.assertEqual(self.post("comment", {"agent": "m2", "text": "say three", "selection": {
+            "text": "echo two", "file": "run.sh", "lines": [2, 2]}}), {"ok": True})
+        st = self.wait_status("m2", "unread")
+        self.assertEqual(st["thread"][0]["selection"],
+                         {"text": "echo two", "heading": "", "file": "run.sh", "lines": [2, 2]})
+
     def test_new_agent(self):
         r = self.post("new", {"dir": "n/new1", "task": "make <a> thing", "every": "week"})
         self.assertEqual(r, {"ok": True, "url": "/n/new1/"})

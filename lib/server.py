@@ -32,6 +32,7 @@ import claude_usage
 import dirai_config
 import node_load
 import slurm
+import agent_files
 import agents
 
 ROOT = os.path.realpath(sys.argv[1])
@@ -39,7 +40,7 @@ PORT = int(sys.argv[2])
 BIND = sys.argv[3] if len(sys.argv) > 3 else "0.0.0.0"
 ALLOWED_EXT = (".html", ".htm", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp")
 WEB_DIR = dirai_config.WEB_DIR
-UI_SCRIPTS = ("panel.js", "agent_list.js", "new_agent.js")    # /_review/<name>, from web/<name>
+UI_SCRIPTS = ("panel.js", "agent_list.js", "new_agent.js", "files.js")    # /_review/<name>, from web/<name>
 
 
 def ui_version():
@@ -201,8 +202,11 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
         if action == "comment":
             text = (body.get("text") or "").strip()
             sel = body.get("selection")
-            sel = ({"text": str(sel.get("text") or "").strip(), "heading": str(sel.get("heading") or "")}
-                   if isinstance(sel, dict) else None)
+            if isinstance(sel, dict):   # in index.html, or in a file of its folder ("file", "lines": files.js)
+                sel = dict({"text": str(sel.get("text") or "").strip(), "heading": str(sel.get("heading") or "")},
+                           **({"file": sel["file"], "lines": sel.get("lines")} if sel.get("file") else {}))
+            else:
+                sel = None
             ok = bool(text) and AGENTS.comment(agent, text, selection=sel if sel and sel["text"] else None)
         elif action == "status" and body.get("status") in ("read", "unread", "closed"):
             ok = AGENTS.set_status(agent, body["status"])
@@ -247,6 +251,11 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
             return self.send_json(node_load.load())
         if action == "permissions":
             return self.send_json({"mode": AGENTS.permissions(), "modes": agents.PERMISSION_MODES})
+        if action == "files":     # the agent's folder, shown at the end of its index.html (files.js)
+            agent = self.agent_key(agent_param(q))
+            if agent is None:
+                return self.send_error(404)
+            return self.send_json(agent_files.folder_files(os.path.join(ROOT, agent)))
         if action == "dirs":      # folder autocomplete for New agent
             return self.send_json(list_dirs(q.get("prefix", [""])[0]))
         if action == "state":
@@ -311,6 +320,7 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
             tag = HOME_BUTTON
             if owner:
                 attr = htmllib.escape(agent)
+                tag += '<script src="/_review/files.js" data-agent="%s"></script>' % attr   # its folder, at the end
                 tag += '<script src="/_review/panel.js" data-agent="%s"></script>' % attr
                 tag += NEWAGENT_TAG % attr
         tag = tag.encode()

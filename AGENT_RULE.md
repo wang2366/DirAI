@@ -43,6 +43,10 @@ at this file; the agents' own runs get them directly).
   agent's jobs) counts the jobs whose working directory is in the agent's folder. When the agent's
   work runs jobs in other folders, e.g. a test sweep in another checkout, put those folders in
   the agent folder's `job_dirs.txt`, one absolute path per line.
+- **The text files in your folder are shown to the owner** at the end of your `index.html`, raw, with
+  line numbers, one collapsed section per file (scripts, notes, configs; not images, binaries or files
+  over 1 MB). The owner can select lines there and ask you to change them; the message names the file
+  and its line numbers.
 - Reference images and other files by relative path inside the tree; the server only serves
   `.html` and image files (`.png .jpg .jpeg .gif .svg .webp`).
 - Don't add your own "Home"/back-to-list link: the server adds a Home button to every `index.html`.

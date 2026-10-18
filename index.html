@@ -131,6 +131,10 @@ bar; the summary card's Open field says what is unfinished.</p>
 passage (and its heading) attached, so you can say "this number looks wrong".</td></tr>
 <tr><td>Model picker</td><td>Model for this agent's next messages. Sonnet (default) uses less of your Claude limit
 than Opus; the local gpt-oss models (via Ollama) use none but are slower.</td></tr>
+<tr><td>Files in this folder</td><td>At the end of <code>index.html</code>: every text file in the agent's folder,
+raw with line numbers, collapsed (then the names of other files and of subfolders). Select lines in one and click
+<b>Ask the agent about this</b>: the message names the file and lines, the agent edits them, and the section
+reloads with the changed lines highlighted when the run ends.</td></tr>
 <tr><td><b>Hide changes</b></td><td>Parts of <code>index.html</code> the latest run added or changed are highlighted; this toggles that.</td></tr>
 <tr><td><b>Mark read</b> / <b>TaskDone</b></td><td>Clear the unread badge / close the thread. A new message reopens it.</td></tr>
 <tr><td><b>Compact</b></td><td>Summarize the conversation (Claude Code <code>/compact</code>) when the context gets large;

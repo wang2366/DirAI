@@ -29,6 +29,7 @@ import subprocess
 import threading
 import time
 
+import agent_files
 import claude_usage
 import dirai_config
 import dirai_card
@@ -468,12 +469,22 @@ class Agents:
         return True
 
     def comment(self, agent, text, prompt=None, selection=None, scheduled=None):
-        """selection: {"text", "heading"} of index.html text the owner selected, quoted in the prompt.
+        """selection: {"text", "heading"} of index.html text the owner selected, quoted in the prompt,
+        or {"text", "heading", "file", "lines"} of text in a file of the agent's folder (shown raw at the
+        end of index.html, with its line numbers). False if file isn't one of those.
         scheduled: the repeat period when check_repeats() sends it (shown in the thread); it starts
         a fresh session, its prompt pointing at index.html instead of the thread."""
         if selection:
-            selection = {"text": selection["text"][:SEL_MAX], "heading": selection.get("heading", "")[:200],
-                         "lines": selection_lines(os.path.join(self.root, agent, "index.html"), selection["text"])}
+            md = selection.get("file")
+            if md:
+                path = agent_files.file_path(os.path.join(self.root, agent), md)
+                if path is None:
+                    return False
+                lines = agent_files.selected_lines(path, selection.get("lines"))
+            else:
+                lines = selection_lines(os.path.join(self.root, agent, "index.html"), selection["text"])
+            selection = dict({"text": selection["text"][:SEL_MAX], "heading": selection.get("heading", "")[:200],
+                              "lines": lines}, **({"file": md} if md else {}))
             prompt = prompt or selection_prompt(selection, text)
         with self._edit(agent) as st:
             if busy(st):

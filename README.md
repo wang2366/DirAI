@@ -11,6 +11,13 @@ that folder, which edits `index.html`, reruns scripts or submits jobs, then repl
 The parts of `index.html` its latest edit added or changed are highlighted (compared with a copy
 saved before the run, in `www/before_run/`).
 
+The owner also sees the agent's folder at the end of its `index.html`: every text file in it raw,
+with line numbers, one collapsed section per file, then the names of the files not shown (images,
+binaries, files over 1 MB; hidden files are left out) and of the subfolders (not expanded). Select
+lines in a file and ask the agent about them: the message names the file and its lines (e.g.
+`run.sh`, lines 12–14), so the agent edits that file. When the run ends the section reloads, with the
+changed lines highlighted, so you can go round again.
+
 If a run leaves SLURM jobs in the queue (ones it submitted, or any of yours running in the agent's
 folder), the agent stays "working" while the server checks the queue (`sacct`) every 10 minutes, which
 costs no tokens. When the jobs have all left the queue, the server sends the agent their `sacct`
