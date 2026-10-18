@@ -127,3 +127,14 @@ the list page lower; it resumes after the reset. The weekly level follows the da
 its **Auto** button is on (the default): n/7 of the limit on day n of the 7-day window, so a paused
 run resumes when the next day starts; dragging its marker sets it by hand (Auto off) and it resumes
 after the weekly reset. The levels apply to all your trees.
+
+## Tests
+
+```bash
+python3 -m unittest discover -s tests -t .     # from the DirAI checkout; no extra packages
+```
+
+`tests/test_helpers.py` covers the pure helpers (permission rules, selections, summary cards,
+config), `tests/test_reviews.py` the comment queue and its state in `reviews.json`, and
+`tests/test_server.py` runs `html_server.py` on a temporary tree with `tests/fake_claude.py`
+standing in for `claude`. Nothing touches `~/.config/dirai` or `~/.claude`.
