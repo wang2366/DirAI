@@ -34,8 +34,16 @@ curl -fsSL https://raw.githubusercontent.com/wang2366/DirAI/main/install.sh | ba
 This clones DirAI into `~/.local/share/dirai`, links `~/.local/bin/DirAI` to it, and says what is
 missing (Claude Code, `~/.local/bin` on your PATH). Run it again to update. Settings:
 `DIRAI_HOME` (where to clone), `DIRAI_BIN` (where to link the command), `DIRAI_REF` (branch), and
-`DIRAI_REPO` (clone URL; while the repo is private, curl can't fetch the script, so clone it with
-your SSH key and run `./install.sh` in the checkout, which links that checkout instead of cloning).
+`DIRAI_REPO` (clone URL).
+
+While the repo is private, curl can't fetch the script (GitHub answers 404 without a login), so
+collaborators clone it with their SSH key and run the script there, which links that checkout:
+
+```bash
+git clone git@github.com:wang2366/DirAI.git ~/.local/share/dirai && ~/.local/share/dirai/install.sh
+```
+
+To update that checkout later: `git -C ~/.local/share/dirai pull`.
 
 The checkout can live anywhere. `DirAI init` and `DirAI start` keep `~/.config/dirai/AGENT_RULE.md`
 linked to it, and a tree's `CLAUDE.md` imports the page rules from there, so the committed import
