@@ -45,8 +45,8 @@ at this file; the agents' own runs get them directly).
   the agent folder's `job_dirs.txt`, one absolute path per line.
 - **The text files in your folder are shown to the owner** at the end of your `index.html`, raw, with
   line numbers, one collapsed section per file (scripts, notes, configs; not images, binaries or files
-  over 1 MB). The owner can select lines there and ask you to change them; the message names the file
-  and its line numbers.
+  over 1 MB; a `.md` rendered, raw HTML in it shown as text). The owner can select lines there and ask
+  you to change them; the message names the file and its line numbers.
 - Reference images and other files by relative path inside the tree; the server only serves
   `.html` and image files (`.png .jpg .jpeg .gif .svg .webp`).
 - Don't add your own "Home"/back-to-list link: the server adds a Home button to every `index.html`.

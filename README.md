@@ -12,11 +12,16 @@ The parts of `index.html` its latest edit added or changed are highlighted (comp
 saved before the run, in `www/before_run/`).
 
 The owner also sees the agent's folder at the end of its `index.html`: every text file in it raw,
-with line numbers, one collapsed section per file, then the names of the files not shown (images,
-binaries, files over 1 MB; hidden files are left out) and of the subfolders (not expanded). Select
-lines in a file and ask the agent about them: the message names the file and its lines (e.g.
-`run.sh`, lines 12–14), so the agent edits that file. When the run ends the section reloads, with the
-changed lines highlighted, so you can go round again.
+with line numbers, one collapsed section per file (a `.md` rendered, with a **Raw** switch; rendering
+uses [marked](https://marked.js.org) from jsdelivr, and raw text if that can't be reached), then the
+names of the files not shown (images, binaries, files over 1 MB; hidden files are left out) and of the
+subfolders (not expanded). Select lines in a file and ask the agent about them: the message names the
+file and its lines (e.g. `run.sh`, lines 12–14), so the agent edits that file. When the run ends the
+section reloads, with what changed highlighted, so you can go round again. Raw HTML in a `.md` is
+shown as text, never run.
+
+Messages sent while the agent is working are queued (marked so in the chat) and sent together, in
+order, when the run ends; **Cancel** drops them too.
 
 If a run leaves SLURM jobs in the queue (ones it submitted, or any of yours running in the agent's
 folder), the agent stays "working" while the server checks the queue (`sacct`) every 10 minutes, which

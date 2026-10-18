@@ -204,7 +204,8 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
             sel = body.get("selection")
             if isinstance(sel, dict):   # in index.html, or in a file of its folder ("file", "lines": files.js)
                 sel = dict({"text": str(sel.get("text") or "").strip(), "heading": str(sel.get("heading") or "")},
-                           **({"file": sel["file"], "lines": sel.get("lines")} if sel.get("file") else {}))
+                           **({"file": sel["file"], "lines": sel.get("lines"), "rendered": bool(sel.get("rendered"))}
+                              if sel.get("file") else {}))
             else:
                 sel = None
             ok = bool(text) and AGENTS.comment(agent, text, selection=sel if sel and sel["text"] else None)

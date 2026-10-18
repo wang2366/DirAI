@@ -66,9 +66,9 @@
   body.rv-nohl .rv-changed{background:none!important;box-shadow:none}`;
   document.head.insertAdjacentHTML("beforeend", "<style>" + css + "</style>");
   document.body.insertAdjacentHTML("beforeend", `
-  <button id="rv-btn">Agent</button><button id="rv-ask">Ask the agent about this</button>
+  <button id="rv-btn">Chat</button><button id="rv-ask">Ask the agent about this</button>
   <div id="rv-panel">
-    <div id="rv-head"><b>Agent</b><span id="rv-ctx" title="tokens in this session's context, resent with every message"></span><select id="rv-model" title="Model for this agent's next messages (Sonnet uses fewer of your Claude limits than Opus; the local gpt-oss models use none, but are slower)"></select><span id="rv-status" class="rv-pill rv-none">none</span>
+    <div id="rv-head"><b>Chat</b><span id="rv-ctx" title="tokens in this session's context, resent with every message"></span><select id="rv-model" title="Model for this agent's next messages (Sonnet uses fewer of your Claude limits than Opus; the local gpt-oss models use none, but are slower)"></select><span id="rv-status" class="rv-pill rv-none">none</span>
       <button id="rv-x" style="border:0;background:none;font-size:18px;cursor:pointer">&times;</button></div>
     <div id="rv-thread"></div>
     <div id="rv-denials"><b>Claude was blocked from:</b><ul id="rv-dlist"></ul>
@@ -109,7 +109,7 @@
     const asking = !!st.asking;   // a run waits for the owner's answer in the thread
     $("rv-status").textContent = asking ? "needs you" : LABEL[s] || s;
     $("rv-status").className = "rv-pill rv-" + (asking ? "asking" : s);
-    $("rv-btn").textContent = "Agent" + (asking ? " ❗" : s === "unread" ? " •" : s === "working" || s === "queued" ? " …" : "");
+    $("rv-btn").textContent = "Chat" + (asking ? " ❗" : s === "unread" ? " •" : s === "working" || s === "queued" ? " …" : "");
     if (asking && !render.asking) scrollToEnd = true;   // bring a new prompt into view
     // a run ended (a new reply, also before any SLURM jobs it left are done): files.js reloads the folder
     const last = (st.thread.filter(m => m.role === "claude").pop() || {}).time || "";
@@ -121,7 +121,7 @@
       const box = $("rv-thread"), top = box.scrollTop;
       const opened = [...box.querySelectorAll(".rv-sel")].map(d => d.open);   // keep expanded quotes expanded
       box.innerHTML = st.thread.map(m => m.role === "ask" ? askHtml(m) :
-        `<div class="rv-msg rv-${m.role}"><div class="rv-meta">${m.role}${m.scheduled ? " (scheduled, every " + m.scheduled + ")" : ""}${m.model ? " (" + m.model + ")" : ""} · ${m.time}${m.cost != null ? " · $" + m.cost : ""}</div>${m.selection ? selHtml(m.selection) : ""}${esc(m.text)}</div>`
+        `<div class="rv-msg rv-${m.role}"><div class="rv-meta">${m.role}${m.queued ? " (queued: sent when the current run ends)" : ""}${m.dropped ? " (not sent: cancelled)" : ""}${m.scheduled ? " (scheduled, every " + m.scheduled + ")" : ""}${m.model ? " (" + m.model + ")" : ""} · ${m.time}${m.cost != null ? " · $" + m.cost : ""}</div>${m.selection ? selHtml(m.selection) : ""}${esc(m.text)}</div>`
       ).join("") || '<div class="rv-meta">No comments yet.</div>';
       box.querySelectorAll(".rv-sel").forEach((d, i) => d.open = !!opened[i]);
       shownThread = threadKey;
@@ -145,7 +145,9 @@
         {weekday: "short", hour: "2-digit", minute: "2-digit"})}: ${rep.text.replace(/\s+/g, " ")}`;
       $("rv-repinfo").title = rep.text;
     }
-    ["rv-save", "rv-new"].forEach(id => $(id).disabled = busy);
+    // Send stays on while the agent works: the message is queued and goes when the run ends
+    $("rv-text").placeholder = busy ? "Message this agent: queued, sent when the current run ends" +
+      (st.queued_messages ? ` (${st.queued_messages} waiting)` : "") + "..." : "Message this agent...";
     ["rv-read", "rv-close"].forEach(id => $(id).disabled = busy || watching);
     $("rv-new").disabled = busy || !st.session_id;   // nothing to start over from yet
     $("rv-compact").disabled = busy || !st.session_id;
@@ -286,8 +288,8 @@
       `<div class="rv-quote">${esc(sel.text)}</div></details><button id="rv-unsel" title="Don't send the selection">&times;</button>`;
     $("rv-unsel").onclick = () => pin(null);
   }
-  // {text, heading} of a selection in index.html, or {text, file, lines} of one in a file of the
-  // folder shown at its end (files.js: every line carries its number); else null
+  // {text, heading} of a selection in index.html, or {text, file, lines, rendered} of one in a file of
+  // the folder shown at its end (files.js: every line, or rendered .md block, carries its numbers); else null
   function indexSelection() {
     const s = window.getSelection();
     if (!s || s.isCollapsed || !s.rangeCount) return null;
@@ -310,8 +312,9 @@
     const file = el => el && el.closest("details[data-file]").dataset.file;
     if (first || last) {
       if (!first || !last || file(first) !== file(last)) return null;   // half in a file, or across two
-      return {text, heading: "", file: file(first), lines: [+first.dataset.line, +last.dataset.line], cut,
-              rect: r.getBoundingClientRect()};
+      // a rendered .md block spans lines (data-line-end); the server narrows them to the selected text
+      return {text, heading: "", file: file(first), lines: [+first.dataset.line, +(last.dataset.lineEnd || last.dataset.line)],
+              rendered: !!first.dataset.rendered, cut, rect: r.getBoundingClientRect()};
     }
     return {text, heading, cut, rect: r.getBoundingClientRect()};
   }

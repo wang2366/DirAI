@@ -208,6 +208,14 @@ class Server(unittest.TestCase):
         self.assertEqual(st["thread"][0]["selection"],
                          {"text": "echo two", "heading": "", "file": "run.sh", "lines": [2, 2]})
 
+    def test_rendered_md_selection(self):
+        util.write(os.path.join(self.root, "m3", "index.html"), "<html><body><p>m</p></body></html>")
+        util.write(os.path.join(self.root, "m3", "notes.md"), "# Notes\n\n- one\n- two item\n")
+        self.assertEqual(self.post("comment", {"agent": "m3", "text": "fix", "selection": {
+            "text": "two item", "file": "notes.md", "lines": [3, 4], "rendered": True}}), {"ok": True})
+        st = self.wait_status("m3", "unread")
+        self.assertEqual(st["thread"][0]["selection"]["lines"], [4, 4])   # the list block, narrowed
+
     def test_new_agent(self):
         r = self.post("new", {"dir": "n/new1", "task": "make <a> thing", "every": "week"})
         self.assertEqual(r, {"ok": True, "url": "/n/new1/"})

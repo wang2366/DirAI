@@ -95,6 +95,10 @@ STARTER_INDEX = """<!doctype html>
 NEW_CHAT_MARK = "New chat: the next message starts a fresh session."
 
 
+# messages the owner sent while the agent was busy, delivered together when its run ends
+QUEUED = "The owner sent these %d messages while you were busy with the previous one; handle them in order."
+
+
 # sent once, in the same session, when a run changed index.html and left its summary card incomplete
 CARD_FIX = ("Before you finish: the summary card in your index.html (the <!-- dirai:card --> block, see "
             "the agent conventions) needs fixing: %s. Fix only the card, then reply in one line.")

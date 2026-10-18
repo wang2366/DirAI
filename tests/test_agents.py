@@ -39,8 +39,77 @@ class AgentsTest(unittest.TestCase):
         st = self.data()["p"]
         self.assertEqual((st["status"], st["pending"], st["queued_reason"]), ("queued", "do it", "test hold"))
         self.assertTrue(self.texts()[1].startswith("test hold. Queued: this message will be sent automatically at"))
-        self.assertFalse(self.rv.comment("p", "again"))     # busy
+        self.assertTrue(self.rv.comment("p", "again"))      # busy: queued behind it
+        self.assertEqual(self.data()["p"]["inbox"], [{"text": "again", "prompt": None}])
         self.assertEqual(self.rv.working("p")[0], "do it")
+
+    def test_messages_queue_while_busy(self):
+        self.rv.comment("p", "first")
+        self.assertTrue(self.rv.comment("p", "second"))
+        self.assertTrue(self.rv.comment("p", "third", selection={"text": "p", "heading": ""}))
+        st = self.data()["p"]
+        self.assertEqual([(m["text"], m.get("queued")) for m in st["thread"] if m["role"] == "user"],
+                         [("first", None), ("second", True), ("third", True)])
+        self.assertEqual(self.rv.state("p")["queued_messages"], 2)
+        self.assertNotIn("inbox", self.rv.state("p"))
+        self.rv._deliver("p")                                # still busy: nothing goes yet
+        self.assertEqual(len(self.data()["p"]["inbox"]), 2)
+        # the first run ends
+        self.rv.queue.clear()
+        with self.rv._edit("p") as st:
+            st["status"], st["session_id"] = "unread", "s1"
+        self.rv._deliver("p")
+        st = self.data()["p"]
+        self.assertNotIn("inbox", st)
+        self.assertEqual(st["status"], "queued")             # held by the test's usage hold
+        self.assertFalse(any(m.get("queued") for m in st["thread"]))
+        prompt = st["pending"]
+        self.assertTrue(prompt.startswith("The owner sent these 2 messages while you were busy"), prompt)
+        self.assertIn("--- message 1 ---\nsecond", prompt)
+        self.assertIn("--- message 2 ---\nThe owner selected this text in index.html", prompt)
+        self.assertEqual(st["working_on"], "second / third")
+
+    def test_one_queued_message_goes_as_it_is(self):
+        self.rv.comment("p", "first")
+        self.rv.comment("p", "second")
+        self.rv.queue.clear()
+        with self.rv._edit("p") as st:
+            st["status"], st["session_id"] = "unread", "s1"
+        self.rv._deliver("p")
+        self.assertEqual(self.data()["p"]["pending"], "second")
+
+    def test_cancel_drops_queued_messages(self):
+        self.rv.comment("p", "first")
+        self.rv.comment("p", "second")
+        self.assertTrue(self.rv.cancel("p"))
+        st = self.data()["p"]
+        self.assertNotIn("inbox", st)
+        self.assertIn("Cancelled: 1 queued message not sent.", self.texts())
+        self.assertTrue([m for m in st["thread"] if m["text"] == "second"][0]["dropped"])
+
+    def test_queued_messages_survive_a_restart(self):
+        self.rv.comment("p", "first")
+        self.rv.comment("p", "second")
+        data = self.data()
+        data["p"].update(status="working", pending=None)     # a run that the restart loses
+        with open(os.path.join(self.root, "www", "agents.json"), "w") as f:
+            json.dump(data, f)
+        rv2 = agents.Agents(self.root)
+        rv2.hold_until = time.time() + 3600
+        try:
+            st = self.data()["p"]
+            self.assertNotIn("inbox", st)
+            self.assertEqual(st["working_on"], "second")
+        finally:
+            for r in (rv2,):
+                if r.timer:
+                    r.timer.cancel()
+
+    def test_new_agent_and_schedules_dont_queue(self):
+        self.rv.comment("p", "first")
+        self.assertFalse(self.rv.new_agent("p", "task"))
+        self.assertFalse(self.rv.comment("p", "tick", prompt="tick", scheduled="hour"))
+        self.assertNotIn("inbox", self.data()["p"])
 
     def test_cancel_queued(self):
         self.rv.comment("p", "do it")
