@@ -16,6 +16,7 @@ Everyone else gets 404 for /_review/* and sees pages without the panel.
 What runs may do is in review_permissions.py, what they are told in review_prompts.py, and how a
 claude process is driven and read in claude_run.py.
 """
+import contextlib
 import datetime
 import html
 import json
@@ -166,6 +167,9 @@ def in_git(path):
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
 
+ALL = object()      # Reviews._edit(): the whole state, not one page
+
+
 class Reviews:
     def __init__(self, root):
         self.root = root
@@ -181,8 +185,7 @@ class Reviews:
         self.hold_reason = ""
         self.timer = None
         self.cards = {}         # index.html path -> (mtime, its summary card's problems)
-        with self.lock:
-            data = load_json(self.path, {})
+        with self._edit() as data:
             for page, st in data.items():           # runs don't survive a restart
                 end_asks(st)
                 if st.get("status") == "queued" and st.get("pending"):   # queued ones do
@@ -193,7 +196,6 @@ class Reviews:
                     st["status"] = "unread"
                     note(st, "The server restarted while this was running; "
                              "the run was lost. Comment again to retry.")
-            self._save(data)
         if self.queue:
             self._pump()
 
@@ -210,9 +212,36 @@ class Reviews:
         name = page.replace("/", "%2F") if page else "%top"
         return os.path.join(self.root, "www", "page_prev", name + ".html")
 
+    @staticmethod
+    def _blank():
+        return {"status": "read", "thread": [], "session_id": None, "denials": [], "grants": []}
+
     def _page(self, data, page):
-        return data.setdefault(page, {"status": "read", "thread": [], "session_id": None,
-                                      "denials": [], "grants": []})
+        return data.setdefault(page, self._blank())
+
+    @contextlib.contextmanager
+    def _edit(self, page=ALL):
+        """Lock the state and yield it for changing: one page's entry (created if missing) or, with
+        no page, all of it ({page: entry}). Saved when the block ends, if anything changed (a block
+        that returns early without changing anything writes nothing); an exception discards it."""
+        with self.lock:
+            with self._changes(page) as st:
+                yield st
+
+    @contextlib.contextmanager
+    def _changes(self, page=ALL):
+        """_edit for a caller that already holds the lock."""
+        data = self._load()
+        before = json.dumps(data, sort_keys=True)
+        if page is ALL:
+            yield data
+        else:
+            new = page not in data
+            yield self._page(data, page)
+            if new and data[page] == self._blank():
+                del data[page]      # only looked at
+        if json.dumps(data, sort_keys=True) != before:
+            self._save(data)
 
     def all_status(self):
         with self.lock:
@@ -284,10 +313,8 @@ class Reviews:
         """The model for this page's next runs (the session continues; only the model changes)."""
         if model not in MODELS:
             return False
-        with self.lock:
-            data = self._load()
-            self._page(data, page)["model"] = model
-            self._save(data)
+        with self._edit(page) as st:
+            st["model"] = model
         if model in LOCAL_MODELS:
             self._pump()    # a page queued for the Claude limits can start now
         return True
@@ -297,9 +324,7 @@ class Reviews:
         text = (text or "").strip()
         if every != "off" and (every not in REPEATS or not text):
             return False
-        with self.lock:
-            data = self._load()
-            st = self._page(data, page)
+        with self._edit(page) as st:
             if every == "off":
                 if not st.pop("repeat", None):
                     return False
@@ -308,7 +333,6 @@ class Reviews:
                 st["repeat"] = {"every": every, "text": text, "next": time.time() + REPEATS[every]}
                 note(st, "Repeats every %s, next at %s:\n%s" % (every,
                          clock(st["repeat"]["next"]), text))
-            self._save(data)
             return True
 
     def check_repeats(self):
@@ -326,47 +350,33 @@ class Reviews:
                       "next run can compare.)\n\n%s" % (rep["every"], rep["text"]))
             if not self.comment(page, rep["text"], prompt=prompt, scheduled=rep["every"]):
                 continue    # became busy meanwhile: try again next pass
-            with self.lock:
-                data = self._load()
-                st = data.get(page) or {}
+            with self._edit(page) as st:
                 if st.get("repeat"):
                     nxt, step = st["repeat"]["next"], REPEATS[st["repeat"]["every"]]
                     while nxt <= t:
                         nxt += step
                     st["repeat"]["next"] = nxt
-                    self._save(data)
 
     def prune_threads(self):
         """Drop thread entries older than THREAD_KEEP_S, keeping each page's last KEEP_LAST."""
         cutoff = datetime.datetime.fromtimestamp(time.time() - THREAD_KEEP_S).strftime("%Y-%m-%d %H:%M:%S")
-        with self.lock:
-            data = self._load()
-            changed = False
+        with self._edit() as data:
             for st in data.values():
                 th = st.get("thread", [])
-                kept = [m for m in th[:-KEEP_LAST] if m.get("time", "") >= cutoff] + th[-KEEP_LAST:]
-                if len(kept) < len(th):
-                    st["thread"], changed = kept, True
-            if changed:
-                self._save(data)
+                st["thread"] = [m for m in th[:-KEEP_LAST] if m.get("time", "") >= cutoff] + th[-KEEP_LAST:]
 
     def set_status(self, page, status):
-        with self.lock:
-            data = self._load()
-            st = self._page(data, page)
+        with self._edit(page) as st:
             if st["status"] in ("working", "queued"):
                 return False
             st["status"] = status
-            self._save(data)
             return True
 
     def cancel(self, page):
         """Stop the page's run, or drop its message from the queue, or stop waiting on its SLURM
         jobs (the jobs themselves keep running). The session is kept, so the next message
         continues it, with whatever model is picked by then."""
-        with self.lock:
-            data = self._load()
-            st = self._page(data, page)
+        with self._edit(page) as st:
             if st["status"] not in ("working", "queued"):
                 return False
             queued = [i for i in self.queue if i[0] == page]
@@ -377,7 +387,6 @@ class Reviews:
                     st.pop(k, None)
                 st["status"] = "unread"
                 note(st, "Cancelled by the owner.")
-                self._save(data)
                 return True
             # running (or about to start): _run sees the flag, stops the process and records it
             self.cancelled.add(page)
@@ -425,21 +434,16 @@ class Reviews:
 
     def new_chat(self, page):
         """Next message starts a fresh Claude session (the thread stays, with a divider)."""
-        with self.lock:
-            data = self._load()
-            st = self._page(data, page)
+        with self._edit(page) as st:
             if busy(st) or not st.get("session_id"):
                 return False
             st["session_id"], st["denials"] = None, []
             note(st, NEW_CHAT_MARK)
-            self._save(data)
             return True
 
     def compact(self, page):
         """Run /compact on the page's session (queued like a message)."""
-        with self.lock:
-            data = self._load()
-            st = self._page(data, page)
+        with self._edit(page) as st:
             if busy(st) or not st.get("session_id"):
                 return False
             st.pop("watch", None)   # the run re-checks the queue when it ends
@@ -447,7 +451,6 @@ class Reviews:
             st["denials"] = []
             st["status"] = "working"
             st["working_on"], st["started"] = "Compact the conversation", None
-            self._save(data)
         self._enqueue(page, COMPACT)
         return True
 
@@ -459,9 +462,7 @@ class Reviews:
             selection = {"text": selection["text"][:SEL_MAX], "heading": selection.get("heading", "")[:200],
                          "lines": selection_lines(os.path.join(self.root, page, "index.html"), selection["text"])}
             prompt = prompt or selection_prompt(selection, text)
-        with self.lock:
-            data = self._load()
-            st = self._page(data, page)
+        with self._edit(page) as st:
             if busy(st):
                 return False
             st.pop("watch", None)   # the run re-checks the queue when it ends
@@ -483,7 +484,6 @@ class Reviews:
             st["denials"] = []
             st["status"] = "working"   # waiting for a free slot counts as working
             st["working_on"], st["started"] = text, None
-            self._save(data)
         prompt = prompt or text
         self._enqueue(page, prompt)
         return True
@@ -492,9 +492,7 @@ class Reviews:
         rules = [r for r in rules if r and not always_denied(r)]
         if not rules:
             return False
-        with self.lock:
-            data = self._load()
-            st = self._page(data, page)
+        with self._edit(page) as st:
             if busy(st) or not st.get("session_id"):
                 return False
             st.pop("watch", None)
@@ -503,7 +501,6 @@ class Reviews:
             st["denials"] = []
             st["status"] = "working"   # waiting for a free slot counts as working
             st["working_on"], st["started"] = "Retry with granted: " + ", ".join(rules), None
-            self._save(data)
         self._enqueue(page, "The owner granted these permissions: %s. Retry what was blocked "
                             "and finish the review." % ", ".join(rules))
         return True
@@ -532,18 +529,15 @@ class Reviews:
         when the run has used up its ASK_WAIT_S of waiting."""
         d = request_denial(req)
         rules = denial_rules(d)
-        with self.lock:
+        with self._edit(page) as st:
             choice = ("allow" if rules and all(r in live.granted for r in rules)
                       else "timeout" if live.waiting() >= ASK_WAIT_S else None)
-            data = self._load()
-            st = self._page(data, page)
             st["thread"].append({"role": "ask", "time": now(), "id": rid, "text": describe_denial(d),
                                  "detail": json.dumps(d["tool_input"], indent=1)[:4000],
                                  "rules": rules, "answer": choice})
             if not choice:
                 live.hold(rid, req)
                 st["asking"] = True
-            self._save(data)
         if choice:
             self._respond(live, rid, req, choice)
 
@@ -552,13 +546,11 @@ class Reviews:
         the Always allow button), deny; the watchdog answers timeout."""
         if choice not in ("allow", "always", "deny", "timeout"):
             return False
-        with self.lock:
+        with self._edit(page) as st:
             live = self.live.get(page)
             req = live.release(rid) if live else None
             if req is None:
                 return False
-            data = self._load()
-            st = self._page(data, page)
             rules = []
             for e in st["thread"]:
                 if e.get("role") == "ask" and e.get("id") == rid and not e.get("answer"):
@@ -577,7 +569,6 @@ class Reviews:
                     if e.get("role") == "ask" and e.get("id") in dict(also) and not e.get("answer"):
                         e["answer"] = "allow"
             st["asking"] = bool(live.pending)
-            self._save(data)
         self._respond(live, rid, req, choice)
         for other, oreq in also:
             self._respond(live, other, oreq, "allow")
@@ -585,16 +576,13 @@ class Reviews:
 
     def _withdraw(self, page, live, rid):
         """claude took a prompt back (e.g. the turn was interrupted)."""
-        with self.lock:
+        with self._edit(page) as st:
             if live.release(rid) is None:
                 return
-            data = self._load()
-            st = self._page(data, page)
             for e in st["thread"]:
                 if e.get("role") == "ask" and e.get("id") == rid and not e.get("answer"):
                     e["answer"] = "withdrawn"
             st["asking"] = bool(live.pending)
-            self._save(data)
 
     @staticmethod
     def _respond(live, rid, req, choice):
@@ -716,16 +704,15 @@ class Reviews:
 
     def _hold_queue(self):
         """Mark every queued message as waiting for the usage limit; caller holds the lock."""
-        data = self._load()
-        for page, prompt in self.queue:
-            st = self._page(data, page)
-            if st["status"] != "queued":
-                note(st, "%s. Queued: this message will be sent automatically at %s."
-                         % (self.hold_reason or "Claude usage limit", clock(self.hold_until)))
-            if st["status"] != "queued" or st.get("queued_until") != self.hold_until:
-                st["status"], st["queued_until"], st["pending"] = "queued", self.hold_until, prompt
-                st["queued_reason"], st["started"] = self.hold_reason, None
-        self._save(data)
+        with self._changes() as data:
+            for page, prompt in self.queue:
+                st = self._page(data, page)
+                if st["status"] != "queued":
+                    note(st, "%s. Queued: this message will be sent automatically at %s."
+                             % (self.hold_reason or "Claude usage limit", clock(self.hold_until)))
+                if st["status"] != "queued" or st.get("queued_until") != self.hold_until:
+                    st["status"], st["queued_until"], st["pending"] = "queued", self.hold_until, prompt
+                    st["queued_reason"], st["started"] = self.hold_reason, None
 
     def _command(self, page_dir, model, grants, session):
         """The claude command line for a run in page_dir: its permissions, folders, MCP servers
@@ -760,16 +747,13 @@ class Reviews:
     def _run(self, page, prompt):
         card_note = None
         try:
-            with self.lock:
-                data = self._load()
-                st = self._page(data, page)
+            with self._edit(page) as st:
                 st["status"] = "working"
                 st["started"] = time.time()
                 for k in ("queued_until", "pending", "queued_reason"):
                     st.pop(k, None)
                 session, grants = st.get("session_id"), list(st.get("grants", []))
                 model = st.get("model") or DEFAULT_MODEL
-                self._save(data)
             before = context_tokens(session)
             path = transcript(session)
             offset = os.path.getsize(path) if path and os.path.exists(path) else 0
@@ -837,15 +821,11 @@ class Reviews:
                     if until > self.hold_until:
                         self.hold_until, self.hold_reason = until, "Claude usage limit hit (%s)" % entry["text"]
                     self.queue.insert(0, (page, retry))
-                    data = self._load()
-                    st = self._page(data, page)
-                    st["session_id"] = session
-                    self._save(data)
+                    with self._changes(page) as st:
+                        st["session_id"] = session
                 return
             ids = [] if entry["text"] == "Cancelled by the owner." else self._jobs_to_watch(page_dir, session, offset)
-            with self.lock:
-                data = self._load()
-                st = self._page(data, page)
+            with self._edit(page) as st:
                 st["thread"].append(entry)
                 if card_note:
                     st["thread"].append(card_note)
@@ -858,17 +838,15 @@ class Reviews:
                              "to continue." % (", ".join(ids), MAX_AUTO))
                 elif ids:
                     self._start_watch(st, ids)
-                self._save(data)
         finally:
             with self.lock:
                 self.running -= 1
                 self.procs.pop(page, None)
                 self.cancelled.discard(page)
                 if self.live.pop(page, None):
-                    data = self._load()
-                    if page in data:
-                        end_asks(data[page])
-                        self._save(data)
+                    with self._changes() as data:
+                        if page in data:
+                            end_asks(data[page])
             self._pump()
 
     # --- waiting on SLURM jobs ------------------------------------------------------------
@@ -928,19 +906,15 @@ class Reviews:
                 if page_status.base_id(j["id"]) not in mine:
                     mine.append(page_status.base_id(j["id"]))
             (waiting if mine else done)[p] = mine or ids
-        with self.lock:     # keep the status bar's "Waiting for ..." line current
-            data = self._load()
+        with self._edit() as data:     # keep the status bar's "Waiting for ..." line current
             for p, mine in waiting.items():
                 st = data.get(p)
                 if st and st.get("watch"):
                     st["working_on"] = self._waiting_text(mine)
-            self._save(data)
         for page, ids in done.items():
             report = page_status.job_report(ids)
-            with self.lock:
-                data = self._load()
-                st = data.get(page)
-                if not st or not st.get("watch"):
+            with self._edit(page) as st:
+                if not st.get("watch"):
                     continue
                 st.pop("watch")
                 st["auto_runs"] = st.get("auto_runs", 0) + 1
@@ -951,5 +925,4 @@ class Reviews:
                         "and its summary card with the results, and reply with a short summary. If you submit new "
                         "jobs, end your reply; you will be messaged again when they finish." % report)
                 prompt = text if st.get("session_id") or not st["thread"] else fresh_prompt(st["thread"], text)
-                self._save(data)
             self._enqueue(page, prompt)

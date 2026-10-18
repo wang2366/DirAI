@@ -24,8 +24,12 @@ class ReviewsTest(unittest.TestCase):
             self.rv.timer.cancel()
 
     def data(self):
-        with open(os.path.join(self.root, "www", "reviews.json")) as f:
-            return json.load(f)
+        """reviews.json as saved ({} when nothing has been saved yet)."""
+        try:
+            with open(os.path.join(self.root, "www", "reviews.json")) as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
 
     def texts(self, page="p"):
         return [m["text"] for m in self.data()[page]["thread"]]
@@ -148,6 +152,45 @@ class ReviewsTest(unittest.TestCase):
         self.assertFalse(self.rv.set_permissions("yolo"))
         self.assertTrue(self.rv.set_permissions("ask"))
         self.assertEqual(self.rv.permissions(), "ask")
+
+    def test_refusal_writes_nothing(self):
+        self.assertFalse(self.rv.new_chat("ghost"))
+        self.assertFalse(self.rv.set_repeat("ghost", "off"))
+        self.assertNotIn("ghost", self.data())
+
+    def test_exception_discards_changes(self):
+        with self.assertRaises(KeyError):
+            with self.rv._edit("p") as st:
+                st["status"] = "closed"
+                raise KeyError("boom")
+        self.assertNotEqual(self.data().get("p", {}).get("status"), "closed")
+
+    def test_check_watches(self):
+        self.rv.comment("p", "submit")
+        self.rv.cancel("p")
+        with self.rv._edit("p") as st:
+            self.rv._start_watch(st, ["11", "12"])
+        queue = [{"id": "12", "workdir": "/elsewhere"}]
+        stubs = {"active_jobs": lambda: list(queue), "page_jobs": lambda d, all_jobs=None, fresh=False: [],
+                 "job_report": lambda ids: "report for " + ",".join(ids)}
+        saved = {k: getattr(review.page_status, k) for k in stubs}
+        try:
+            for k, f in stubs.items():
+                setattr(review.page_status, k, f)
+            self.rv.check_watches()                      # 12 still queued: keep waiting
+            st = self.data()["p"]
+            self.assertEqual(st["watch"]["jobs"], ["11", "12"])
+            self.assertTrue(st["working_on"].startswith("Waiting for 1 SLURM job (12)"))
+            queue.clear()
+            self.rv.check_watches()                      # all gone: message the assistant
+            st = self.data()["p"]
+        finally:
+            for k, f in saved.items():
+                setattr(review.page_status, k, f)
+        self.assertNotIn("watch", st)
+        self.assertEqual(st["auto_runs"], 1)
+        self.assertIn("SLURM jobs finished:\nreport for 11,12", self.texts())
+        self.assertIn("The SLURM jobs you were waiting on have left the queue:\nreport for 11,12", st["pending"])
 
     def test_command(self):
         page_dir = os.path.join(self.root, "p")
