@@ -9,8 +9,8 @@
 <main>
 
 <h1>DirAI tutorial</h1>
-<p class="lede">Serve a folder of agents in your browser: every folder with an <code>index.html</code> is one,
-a Claude Code agent that edits its <code>index.html</code>, reruns its scripts and submits SLURM jobs for you.</p>
+<p class="lede">Every folder with an <code>index.html</code> becomes an agent: a Claude Code assistant that
+maintains that page, reruns its scripts and submits SLURM jobs, all from your browser.</p>
 
 <!-- dirai:card -->
 <details id="dirai-card" open>
@@ -46,19 +46,17 @@ a Claude Code agent that edits its <code>index.html</code>, reruns its scripts a
 </nav>
 
 <h2 id="idea">1. The idea</h2>
-<p>Every folder holding an <code>index.html</code> is an <b>agent</b>: its <code>index.html</code> is the
-agent's report, its results and write-up in HTML (plans: <code>&lt;folder&gt;/plan_*.html</code>). DirAI
-serves the folder they live in (the <b>tree</b>) and lists every agent on one agent list. When you open an
-agent's <code>index.html</code> as its owner, a chat panel appears. Each message you send there starts a
-background <code>claude -p</code> run inside that agent's folder.</p>
+<p>Each folder with an <code>index.html</code> is an <b>agent</b>. That page is its report: results and
+write-up in HTML (plans go in <code>&lt;folder&gt;/plan_*.html</code>). DirAI serves the folder they share
+(the <b>tree</b>) and lists every agent in one place. As the owner, opening an agent's page shows a chat
+panel; each message starts a background <code>claude -p</code> run in that agent's folder.</p>
 <div class="flow">
   <div><b>1. Message</b><span>"Rerun the fit with 2× the events and update the plot."</span></div>
   <div><b>2. Claude works</b><span>In the agent's folder: edits index.html, runs scripts, submits jobs.</span></div>
-  <div><b>3. Reply + highlights</b><span>Answer in the thread; changed parts of index.html are highlighted.</span></div>
-  <div><b>4. Jobs finish</b><span>DirAI watches the SLURM queue and wakes the agent to update index.html.</span></div>
+  <div><b>3. Reply + highlights</b><span>Answer in the thread; changed parts of index.html are highlighted. Later, when SLURM jobs finish, DirAI wakes the agent to update index.html.</span></div>
 </div>
-<p>A tree can be a git repo, or any folder, such as <code>~/work</code> holding several repos.
-Each tree runs its own small server on its own port.</p>
+<p>A tree can be a git repo or any folder, such as <code>~/work</code> holding several repos. Each tree runs
+its own server on its own port.</p>
 
 <h2 id="install">2. Install (once per machine)</h2>
 <p>You need Python 3.6+, <code>git</code>, <code>curl</code> and Claude Code
@@ -66,36 +64,32 @@ Each tree runs its own small server on its own port.</p>
 Clone DirAI anywhere and put its command on your <code>PATH</code>:</p>
 <pre><code>git clone git@github.com:wang2366/DirAI.git ~/work/DirAI     <span class="c"># any location works</span>
 ln -sfn ~/work/DirAI/bin/DirAI ~/.local/bin/DirAI          <span class="c"># any folder on your PATH</span></code></pre>
-<p>To update later: <code>git -C ~/work/DirAI pull</code>, then <code>DirAI restart</code> in each running tree.
-(Coming from a version before 2026-10, use <code>DirAI stop &amp;&amp; DirAI start</code> once instead: the checkout's
-files moved.)</p>
+<p>To update later: <code>git -C ~/work/DirAI pull</code>, then <code>DirAI restart</code> in each running tree.</p>
 
 <h2 id="tree">3. Set up a tree</h2>
 <pre><code>cd ~/work            <span class="c"># a repo (anywhere inside it), or the top of any folder</span>
 DirAI init           <span class="c"># once: picks a free port, writes www/dirai.json</span>
 DirAI start          <span class="c"># starts the server and waits until it answers</span></code></pre>
-<p><code>init</code> creates <code>www/</code> in the tree for DirAI's own files (the agent list, chat threads,
-caches, logs). In a git repo it also adds those files to <code>.gitignore</code> and adds the line
-<code>@~/.config/dirai/AGENT_RULE.md</code> to <code>CLAUDE.md</code>, so your own Claude sessions in the repo
-follow the <a href="#rules">agent rules</a> too. Outside git it asks before touching <code>CLAUDE.md</code>,
-since that file would apply to every project below.</p>
-<p>Afterwards, every <code>DirAI</code> command works from any folder below the tree: it finds the
-nearest <code>www/dirai.json</code> above you. Or point at a tree from anywhere with
-<code>DirAI -C ~/work status</code>.</p>
+<p><code>init</code> creates <code>www/</code> for DirAI's files (agent list, chat threads, caches, logs). In a git
+repo it also ignores them in <code>.gitignore</code> and adds <code>@~/.config/dirai/AGENT_RULE.md</code> to
+<code>CLAUDE.md</code>, so your own Claude sessions there follow the <a href="#rules">agent rules</a> too.
+Outside git it asks first, since <code>CLAUDE.md</code> would then apply to every project below.</p>
+<p>After that, any <code>DirAI</code> command works from folders below the tree: it finds the nearest
+<code>www/dirai.json</code> above you. From anywhere else, use <code>DirAI -C ~/work status</code>.</p>
 <div class="note warn"><b>Refused on purpose:</b> <code>init</code> won't serve <code>/</code> or your home
 folder, and <code>start</code> won't run a tree that overlaps a running one (e.g. <code>~/work</code> and
 <code>~/work/projA</code>), because both would serve, and edit, the same agents.</div>
 
 <h2 id="open">4. Open it in the browser</h2>
-<p>Log in once per browser. This sets a cookie (valid for a year) that marks you as the owner, then
-shows the agent list:</p>
+<p>Log in once per browser. The login sets a year-long cookie that marks you as the owner, then shows the
+agent list:</p>
 <pre><code>PORT=$(python3 -c 'import json; print(json.load(open("www/dirai.json"))["port"])')   <span class="c"># in the tree</span>
 open "http://127.0.0.1:$PORT/_review/login?key=$(cat ~/.config/dirai/key)"</code></pre>
 <p>After that, bookmark <code>http://127.0.0.1:&lt;port&gt;/www/index.html</code>.</p>
-<div class="note"><b>Why 127.0.0.1 and a key?</b> The server is reachable from your network, but anyone
-else only gets the <code>index.html</code> files, read-only. The panel, which runs Claude with your account and files, needs
-both a connection from this machine <i>and</i> the secret cookie. On a shared cluster node, other users
-can reach <code>127.0.0.1</code> too; the key is what proves it's you.</div>
+<div class="note"><b>Why 127.0.0.1 and a key?</b> Anyone on your network can read the agents' <code>index.html</code>
+files, but nothing else. The panel runs Claude with your account and files, so it needs a connection from
+this machine <i>and</i> the secret cookie. On a shared cluster node, other users can reach
+<code>127.0.0.1</code> too; the key is what proves it's you.</div>
 <h3>From your laptop: <code>DirAI connect</code></h3>
 <p>When the tree runs on another machine (a server you ssh to, or a cluster node), run this there, in the
 tree, telling it once how your laptop reaches that machine:</p>
@@ -111,20 +105,18 @@ default one is taken (<code>dirai-my_assistant 18765</code>); pick the browser w
 its own name, so logging in to one doesn't log you out of another.</div>
 
 <h2 id="list">5. The agent list</h2>
-<p><code>/www/index.html</code> lists every agent in the tree, newest first, with each
-folder's size and the Claude tokens spent in it. As the owner you also see each agent's chat status
-(working, unread, read, closed), your Claude plan usage in the header, the serving machine's CPU
-and memory (and how much of it DirAI and its agents' runs use), and the
-<a href="#newagent">New agent</a> button. The list is rebuilt every 10 minutes and whenever a new
-agent is created; <code>DirAI build</code> rebuilds it now.</p>
+<p><code>/www/index.html</code> lists every agent in the tree, newest first, with its folder size and the Claude
+tokens spent in it. As owner you also see each agent's chat status (working, unread, read, closed), your
+Claude plan usage, the server machine's CPU and memory (and how much DirAI and its agents use), and the
+<a href="#newagent">New agent</a> button. It rebuilds every 10 minutes and whenever an agent is created;
+<code>DirAI build</code> rebuilds it now.</p>
 <p>The scan skips <code>.git</code>, <code>node_modules</code>, virtualenvs, caches and other trees'
-<code>www/</code> folders. Add your own with <code>"exclude"</code> in <a href="#settings">dirai.json</a>.</p>
+<code>www/</code> folders. Add your own under <code>"exclude"</code> in <a href="#settings">dirai.json</a>.</p>
 
 <h2 id="panel">6. The agent's panel</h2>
-<p>Open any agent's <code>index.html</code> and click <b>Chat</b> (bottom right). Type a message and press <b>Send</b>.
-The panel shows the thread; the reply arrives when the run ends. While there is something to show, <code>index.html</code> also gets a status bar at
-the top: what the agent is working on and your SLURM jobs running there. With neither, there is no
-bar; the summary card's Open field says what is unfinished.</p>
+<p>Open any agent's <code>index.html</code> and click <b>Chat</b> (bottom right), type, and press <b>Send</b>.
+The reply appears when the run ends. A status bar at the top of the page shows what the agent is working on
+and your SLURM jobs there; it's hidden when there's nothing to show.</p>
 <div class="tbl"><table>
 <tr><th>Control</th><th>What it does</th></tr>
 <tr><td><b>Ask the agent about this</b></td><td>Select text in <code>index.html</code> and click it: your message is sent with that
@@ -149,13 +141,12 @@ The agent stays "working" while DirAI checks the queue every 10 minutes (no toke
 are done, DirAI sends the agent their results so it can update <code>index.html</code>. You can still send messages meanwhile;
 at most 5 automatic messages run in a row before it waits for you.</p>
 <h3>Usage limits</h3>
-<p>New runs pause when Claude's 5-hour or weekly usage reaches its pause level, and resume by themselves.
-The 5-hour level is 100% unless you drag the marker on its bar of the agent list lower; a paused run
-resumes after the 5-hour reset. The weekly level has an <b>Auto</b> button, on by default: on day
-<i>n</i> of the 7-day window the level is <i>n</i>/7 of the limit (14%, 29%, … 100%), so a paused run resumes
-when the next day starts. Dragging the weekly marker sets the level by hand and turns Auto off. The
-levels apply to all your trees.
-A run cut off by the limit is resent automatically, in the same session, once the limit resets.</p>
+<p>When Claude's 5-hour or weekly usage reaches its pause level, new runs wait and resume by themselves.
+The 5-hour level is 100% unless you drag its marker lower on the agent list; it resumes after the 5-hour
+reset. The weekly level follows the <b>Auto</b> button (on by default): on day <i>n</i> of the 7-day window
+it is <i>n</i>/7 of the limit (14%, 29%, … 100%), so a paused run resumes when the next day starts.
+Dragging the weekly marker sets it by hand and turns Auto off. Levels apply to all your trees.
+A run cut off by the limit is resent in the same session once the limit resets.</p>
 
 <h2 id="newagent">7. New agent</h2>
 <p>Click <b>New agent</b> on the agent list (or in any agent), type a folder path relative to the tree
