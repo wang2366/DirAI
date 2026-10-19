@@ -63,7 +63,10 @@
   #rv-ask{position:absolute;z-index:99999;display:none;padding:3px 9px;border-radius:12px;border:1px solid #0b63ce;
     background:#0b63ce;color:#fff;font:600 12px system-ui;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.2)}
   .rv-changed{background:rgba(255,213,0,.28)!important;box-shadow:0 0 0 3px rgba(255,213,0,.28)}
-  body.rv-nohl .rv-changed{background:none!important;box-shadow:none}`;
+  body.rv-nohl .rv-changed{background:none!important;box-shadow:none}
+  .rv-removed{margin:4px 0;padding:2px 8px;border-left:3px solid #d93025;background:rgba(217,48,37,.14)}
+  .rv-removed>summary{cursor:pointer;color:#c5221f;font:600 12px system-ui}
+  body.rv-nohl .rv-removed{display:none}`;
   document.head.insertAdjacentHTML("beforeend", "<style>" + css + "</style>");
   document.body.insertAdjacentHTML("beforeend", `
   <button id="rv-btn">Chat</button><button id="rv-ask">Ask the agent about this</button>
@@ -241,7 +244,7 @@
   // Highlight the blocks that differ from index.html as it was before the agent's latest edit:
   // a leaf block (paragraph, list item, cell, heading, image...) whose content isn't in the old copy.
   const BLOCKS = "p,li,h1,h2,h3,h4,h5,h6,pre,blockquote,figcaption,caption,td,th,dt,dd,summary,img,svg,video,iframe,div";
-  const SKIP = "#dirai-status,[id^=rv-],[id^=na-],script,style";
+  const SKIP = "#dirai-status,[id^=rv-],[id^=na-],.rv-removed,script,style";
   const sig = el => el.tagName + "|" + (/^(IMG|VIDEO|IFRAME)$/.test(el.tagName) ? el.getAttribute("src")
     : el.tagName === "SVG" || el.tagName === "svg" ? el.outerHTML.length + ":" + el.textContent.slice(0, 200)
     : el.textContent.replace(/\s+/g, " ").trim());
@@ -252,12 +255,50 @@
   function highlight() {
     fetch("/_review/prev?agent=" + encodeURIComponent(AGENT)).then(r => r.ok ? r.text() : null).then(old => {
       if (old === null) return;
-      const seen = {};
-      leaves(new DOMParser().parseFromString(old, "text/html").body).forEach(el => { const k = sig(el); seen[k] = (seen[k] || 0) + 1; });
-      const changed = leaves(document.body).filter(el => { const k = sig(el); return seen[k] ? (seen[k]--, false) : true; });
+      const before = leaves(new DOMParser().parseFromString(old, "text/html").body);
+      const free = {};     // signature -> indexes of old blocks not yet matched to a current one
+      before.forEach((el, i) => (free[sig(el)] = free[sig(el)] || []).push(i));
+      const twin = new Map();   // old block -> the current block with the same content
+      const changed = leaves(document.body).filter(el => {
+        const k = free[sig(el)];
+        return k && k.length ? (twin.set(before[k.shift()], el), false) : true;
+      });
       changed.forEach(el => el.classList.add("rv-changed"));
-      if (changed.length) $("rv-hl").style.display = "";
+      const removed = showRemoved(before, twin);
+      if (changed.length || removed) $("rv-hl").style.display = "";
     });
+  }
+  // Old blocks with no current twin were removed: show each run of them, collapsed, after the
+  // current twin of the old block just before it (or before the first kept block, if none is before).
+  function showRemoved(before, twin) {
+    let runs = 0, run = [], after = null;
+    const placed = new Map();   // spot -> the last box put after it
+    const flush = next => {
+      if (!run.length) return;
+      const box = document.createElement("details");
+      box.className = "rv-removed";
+      box.innerHTML = `<summary>Removed (${run.length} block${run.length === 1 ? "" : "s"})</summary><div></div>`;
+      run.forEach(el => {
+        // a cell, list item... out of its table or list: keep only what's inside it
+        const part = /^(TD|TH|LI|DT|DD|CAPTION|FIGCAPTION|SUMMARY)$/.test(el.tagName) ? document.createElement("div") : document.importNode(el, false);
+        el.childNodes.forEach(n => part.appendChild(document.importNode(n, true)));
+        part.querySelectorAll("script").forEach(x => x.remove());
+        [part, ...part.querySelectorAll("[id]")].forEach(x => x.removeAttribute("id"));   // the page's ids stay unique
+        box.lastChild.appendChild(part);
+      });
+      // never inside a table, or a <details> that may be closed; runs after the same spot keep their order
+      const spot = el => el.closest("table") || el.closest("details") || el;
+      if (after) { const at = spot(after); (placed.get(at) || at).after(box); placed.set(at, box); }
+      else if (next) spot(next).before(box);
+      else document.body.prepend(box);
+      runs++, run = [];
+    };
+    before.forEach(el => {
+      if (twin.has(el)) { flush(twin.get(el)); after = twin.get(el); }
+      else run.push(el);
+    });
+    flush(null);
+    return runs;
   }
   $("rv-hl").onclick = () => {
     $("rv-hl").textContent = document.body.classList.toggle("rv-nohl") ? "Show changes" : "Hide changes";
