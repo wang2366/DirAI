@@ -8,8 +8,9 @@ Outputs, Result, Open, Updated; see `AGENT_RULE.md`) and carries no CSS (the ser
 `index.css`). DirAI lists every agent on the repo's `www/index.html`, the agent list. The owner gets
 the agent's panel on each `index.html`: a message there starts a background `claude -p` session in
 that folder, which edits `index.html`, reruns scripts or submits jobs, then replies in the thread.
-The parts of `index.html` its latest edit added or changed are highlighted (compared with a copy
-saved before the run, in `www/before_run/`).
+The parts of `index.html` its latest edit added or changed are highlighted in yellow, and what it
+removed is shown in red, collapsed, where it was (compared with a copy saved before the run, in
+`www/before_run/`).
 
 The owner also sees the agent's folder at the end of its `index.html`: every text file in it raw,
 with line numbers, one collapsed section per file (a `.md` rendered, with a **Raw** switch; rendering
@@ -179,5 +180,7 @@ python3 -m unittest discover -s tests -t .     # from the DirAI checkout; no ext
 `tests/test_helpers.py` covers the pure helpers (permission rules, selections, summary cards,
 config), `tests/test_agents.py` the message queue and its state in `agents.json`, and
 `tests/test_server.py` runs `lib/server.py` on a temporary tree with `tests/fake_claude.py`
-standing in for `claude`, and the agent list. Nothing touches
+standing in for `claude`, and the agent list. `tests/test_highlights.py` checks the change marks
+(yellow for added or changed, red and collapsed for removed) in a headless browser with
+`tests/highlights.js`; it needs node and Playwright and is skipped without them. Nothing touches
 `~/.config/dirai` or `~/.claude`.

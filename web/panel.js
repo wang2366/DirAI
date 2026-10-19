@@ -347,7 +347,11 @@
     const first = line(r.startContainer);
     let last = line(r.endContainer);
     // a selection that ends at the very start of a line (triple click, dragging to the line's edge) ends on the one before
-    if (last && last !== first && r.endOffset === 0 && last.previousElementSibling) last = last.previousElementSibling;
+    if (last && last !== first && r.endOffset === 0) {   // (skipping a box of removed lines)
+      let prev = last.previousElementSibling;
+      while (prev && !prev.dataset.line) prev = prev.previousElementSibling;
+      if (prev) last = prev;
+    }
     const file = el => el && el.closest("details[data-file]").dataset.file;
     if (first || last) {
       if (!first || !last || file(first) !== file(last)) return null;   // half in a file, or across two
