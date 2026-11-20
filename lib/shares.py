@@ -12,7 +12,11 @@ Sharing always goes through one github.com account, "Share as", chosen once in ~
 (else gh's active github.com account), whatever that machine's own logins are (e.g. Purdue's GitHub server,
 or another github.com account): gh holds several accounts, DirAI runs gh with that account's token (GH_TOKEN,
 GH_HOST=github.com) and git over HTTPS with the same token (a credential helper given per command, never saved),
-so the active gh account and your own git stay as they are. checks() are the four steps behind the Share
+so the active gh account and your own git stay as they are. Other GitHub servers gh is logged in to (e.g. Purdue's
+GitHub Enterprise, github.itap.purdue.edu) take part too, each with gh's account there: their agent repos are
+listed, published to and connected like github.com's, and "+ new repo" can make one there, in any org you may
+create repos in, private or internal. A repo on another server is named "<host>/<owner>/<repo>" (github.com's
+stay "<owner>/<repo>"; a login never holds a "."), and its clones sit under www/shares/<host>/. checks() are the four steps behind the Share
 pill (1-2 make it usable, 3-4 set up your own repo); each failed one has a fix that DirAI runs for you
 (fix()), as a background job whose progress the pill polls.
 
@@ -35,7 +39,10 @@ import dirai_config
 GH = os.environ.get("DIRAI_GH") or shutil.which("gh") or os.path.expanduser("~/.local/bin/gh")
 HOST = "github.com"
 GIT_URL = os.environ.get("DIRAI_SHARE_GIT_URL", "https://github.com/%s.git")     # % "owner/repo"
-ACCOUNT_FILE = os.path.join(dirai_config.CONFIG_DIR, "share_account.json")      # {"account": "<login>"}
+GIT_URL_HOST = os.environ.get("DIRAI_SHARE_GIT_URL_HOST", "https://%s/%s.git")   # % (host, "owner/repo"): other servers
+# {"account": "<login>" (github.com), "hosts": {"<host>": "<login>"} (other servers; else gh's active one there)}
+ACCOUNT_FILE = os.path.join(dirai_config.CONFIG_DIR, "share_account.json")
+VISIBILITY = ("private", "internal")      # internal: everyone on that GitHub Enterprise server reads it
 AUTH_S = 300             # the account list and token are asked from gh at most this often (or on demand)
 # git asks this for the password: the Share-as account's token, from the environment of that one command
 CRED_HELPER = '!f() { test "$1" = get && echo username=x-access-token && echo "password=$DIRAI_SHARE_TOKEN"; }; f'
@@ -45,7 +52,8 @@ TOPIC = "dirai-agents"
 ORG_SUFFIXES = ("-dirai", "-dirai-agents", "-dirai-2")     # your org's name: the first free one
 CACHE_S = 600            # checks and the gh search are redone at most this often (or on demand)
 FILE_MAX = 1 << 20       # files over this are left out of a Publish
-FULL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")
+FULL_RE = re.compile(r"^(?:[a-z0-9-]+(?:\.[a-z0-9-]+)+/)?[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")
+HOST_RE = re.compile(r"^[a-z0-9-]+(?:\.[a-z0-9-]+)+$")
 LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}$")
 NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 SECRET_RE = re.compile(r"gh[pousr]_[A-Za-z0-9]{30,}|sk-ant-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|"
@@ -55,7 +63,7 @@ QUERY = """query($after: String) { viewer { login
   repositories(first: 100, after: $after, affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER],
                ownerAffiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]) {
     pageInfo { hasNextPage endCursor }
-    nodes { name nameWithOwner owner { login } viewerPermission pushedAt
+    nodes { name nameWithOwner owner { login } viewerPermission pushedAt visibility
       marker: object(expression: "HEAD:dirai-share.json") { id }
       agents: object(expression: "HEAD:agents") { ... on Tree { entries { name type } } } } } } }"""
 
@@ -76,22 +84,52 @@ def bare_env():
                                                               "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")}
 
 
-def chosen_account():
+def split_full(full):
+    """(host, "owner/repo") of a repo's name: "<host>/<owner>/<repo>" on another server, else github.com."""
+    parts = full.split("/")
+    return (parts[0], "/".join(parts[1:])) if len(parts) == 3 else (HOST, full)
+
+
+def join_full(host, nwo):
+    return nwo if host == HOST else host + "/" + nwo
+
+
+def git_url(full):
+    host, nwo = split_full(full)
+    return GIT_URL % nwo if host == HOST else GIT_URL_HOST % (host, nwo)
+
+
+def web_url(full):
+    host, nwo = split_full(full)
+    return "https://%s/%s" % (host, nwo)
+
+
+def _account_file():
     a = dirai_config.load_json(ACCOUNT_FILE, {})
-    a = a.get("account") if isinstance(a, dict) else None
+    return a if isinstance(a, dict) else {}
+
+
+def chosen_account(host=HOST):
+    a = _account_file()
+    a = a.get("account") if host == HOST else (a.get("hosts") or {}).get(host)
     return a if isinstance(a, str) and LOGIN_RE.match(a) else None
 
 
-def choose_account(login):
-    dirai_config.save_json(ACCOUNT_FILE, {"account": login}, indent=1)
-    _auth["t"] = 0
+def choose_account(login, host=HOST):
+    a = _account_file()
+    if host == HOST:
+        a["account"] = login
+    else:
+        a.setdefault("hosts", {})[host] = login
+    dirai_config.save_json(ACCOUNT_FILE, a, indent=1)
+    _auth.clear()
 
 
-def gh_accounts():
-    """([logins gh holds for github.com], the active one) on this machine."""
-    rc, out = run([GH, "auth", "status", "--hostname", HOST], env=bare_env(), timeout=30)
+def gh_accounts(host=HOST):
+    """([logins gh holds for this host], the active one) on this machine."""
+    rc, out = run([GH, "auth", "status", "--hostname", host], env=bare_env(), timeout=30)
     logins, active = [], None
-    parts = re.split(r"Logged in to github\.com (?:account|as) ", out)[1:]
+    parts = re.split(r"Logged in to %s (?:account|as) " % re.escape(host), out)[1:]
     for p in parts:
         m = re.match(r"([A-Za-z0-9-]+)", p)
         if not m:
@@ -102,40 +140,58 @@ def gh_accounts():
     return logins, active
 
 
-_auth = {"t": 0}
-
-
-def auth(force=False):
-    """{"accounts", "active", "chosen", "login" (who shares), "token" (None: not held here)}, cached AUTH_S."""
-    if not force and time.time() - _auth["t"] < AUTH_S:
-        return _auth
-    a = {"accounts": [], "active": None, "chosen": chosen_account(), "login": None, "token": None}
+def gh_hosts():
+    """The other GitHub servers (not github.com) gh holds a login for on this machine, cached AUTH_S."""
+    h = _auth.get("hosts")
+    if h and time.time() - h[0] < AUTH_S:
+        return h[1]
+    found = []
     if os.access(GH, os.X_OK):
-        a["accounts"], a["active"] = gh_accounts()
+        rc, out = run([GH, "auth", "status"], env=bare_env(), timeout=30)
+        for m in re.finditer(r"Logged in to (\S+) (?:account|as) ", out):
+            if m.group(1) != HOST and HOST_RE.match(m.group(1)) and m.group(1) not in found:
+                found.append(m.group(1))
+    _auth["hosts"] = (time.time(), found)
+    return found
+
+
+_auth = {}      # host -> {"accounts", "active", "chosen", "login", "token", "t"}; "hosts" -> (t, [hosts])
+
+
+def auth(force=False, host=HOST):
+    """{"accounts", "active", "chosen", "login" (who shares), "token" (None: not held here)} on one host,
+    cached AUTH_S."""
+    old = _auth.get(host)
+    if old and not force and time.time() - old["t"] < AUTH_S:
+        return old
+    a = {"accounts": [], "active": None, "chosen": chosen_account(host), "login": None, "token": None}
+    if os.access(GH, os.X_OK):
+        a["accounts"], a["active"] = gh_accounts(host)
         a["login"] = a["chosen"] or a["active"]
         if a["login"] in a["accounts"]:
-            rc, tok = run([GH, "auth", "token", "--hostname", HOST, "--user", a["login"]], env=bare_env(), timeout=30)
+            rc, tok = run([GH, "auth", "token", "--hostname", host, "--user", a["login"]], env=bare_env(), timeout=30)
             a["token"] = tok if rc == 0 and tok else None
-    _auth.clear()
-    _auth.update(a, t=time.time())
-    return _auth
+    a["t"] = time.time()
+    _auth[host] = a
+    return a
 
 
-def gh_env():
-    a = auth()
-    return dict(bare_env(), GH_HOST=HOST, GH_TOKEN=a["token"]) if a["token"] else None
+def gh_env(host=HOST):
+    a = auth(host=host)
+    return dict(bare_env(), GH_HOST=host, GH_TOKEN=a["token"],
+                GH_ENTERPRISE_TOKEN=a["token"]) if a["token"] else None
 
 
-def gh(*args, **kw):
-    """gh as the Share-as account, on github.com; refused when that account isn't logged in here."""
-    env = gh_env()
+def gh(*args, host=HOST, **kw):
+    """gh as the sharing account of that host (github.com: Share as); refused when it isn't logged in here."""
+    env = gh_env(host)
     if env is None:
-        return 1, "gh holds no github.com login for %s on this machine" % (auth()["login"] or "you")
+        return 1, "gh holds no %s login for %s on this machine" % (host, auth(host=host)["login"] or "you")
     return run([GH] + list(args), env=env, **kw)
 
 
-def gh_json(*args):
-    rc, out = gh(*args)
+def gh_json(*args, host=HOST):
+    rc, out = gh(*args, host=host)
     if rc:
         return None
     try:
@@ -144,7 +200,7 @@ def gh_json(*args):
         return None
 
 
-def git(cwd, *args, timeout=180):
+def git(cwd, *args, timeout=180, host=HOST):
     # a commit made by DirAI needs a name even where git has none configured
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
     for k, v in (("GIT_AUTHOR_NAME", "DirAI"), ("GIT_AUTHOR_EMAIL", "dirai@localhost")):
@@ -152,8 +208,9 @@ def git(cwd, *args, timeout=180):
             env.setdefault(k, v)
             env.setdefault(k.replace("AUTHOR", "COMMITTER"), v)
     pre = []
-    if GIT_URL.startswith("https://") and args and args[0] in ("clone", "fetch", "push", "pull", "ls-remote"):
-        tok = auth()["token"]       # the Share-as account, for this command only (your own helpers are off)
+    https = (GIT_URL if host == HOST else GIT_URL_HOST).startswith("https://")
+    if https and args and args[0] in ("clone", "fetch", "push", "pull", "ls-remote"):
+        tok = auth(host=host)["token"]      # that host's sharing account, for this command only (your own helpers are off)
         if tok:
             env["DIRAI_SHARE_TOKEN"] = tok
             pre = ["-c", "credential.helper=", "-c", "credential.helper=" + CRED_HELPER]
@@ -235,6 +292,7 @@ class Shares:
         s = dirai_config.load_json(self.state_path, {})
         for k in ("targets", "mode", "connected"):
             s.setdefault(k, {})
+        s.setdefault("hidden", [])      # your repos taken off this tree's Share to list
         return s
 
     def save(self, s):
@@ -338,15 +396,26 @@ class Shares:
         threading.Thread(target=go, daemon=True).start()
 
     def _search(self):
-        f = {"mine": [], "shared": [], "invitations": []}
+        """The agent repos on github.com and on every other GitHub server gh is logged in to here, and per
+        server, where "+ new repo" may make one: {"places": [{host, login, orgs}]}."""
+        f = {"mine": [], "shared": [], "invitations": [], "places": []}
         if not os.access(GH, os.X_OK):
             return f
+        for host in [HOST] + gh_hosts():
+            me = self._search_host(host, f)
+            if host == HOST:
+                f["me"] = me
+        for item in f["mine"]:
+            item["readers"] = self.readers(item["full"])
+        return f
+
+    def _search_host(self, host, f):
         nodes, after, me = [], None, None
         while True:
             args = ["api", "graphql", "-f", "query=" + QUERY] + (["-f", "after=" + after] if after else [])
-            d = gh_json(*args)
+            d = gh_json(*args, host=host)
             if not d or "data" not in d:
-                return f
+                return me
             v = d["data"]["viewer"]
             me, r = v["login"], v["repositories"]
             nodes += r["nodes"]
@@ -357,23 +426,27 @@ class Shares:
             if not n.get("marker"):
                 continue
             entries = (n.get("agents") or {}).get("entries") or []
-            item = {"full": n["nameWithOwner"], "owner": n["owner"]["login"],
+            item = {"full": join_full(host, n["nameWithOwner"]), "host": host, "owner": n["owner"]["login"],
+                    "name": n["name"], "visibility": (n.get("visibility") or "PRIVATE").lower(),
                     "agents": sum(1 for e in entries if e.get("type") == "tree"), "pushed": (n["pushedAt"] or "")[:10]}
             (f["mine"] if n["viewerPermission"] == "ADMIN" else f["shared"]).append(item)
-        for i in gh_json("api", "user/repository_invitations") or []:
+        for i in gh_json("api", "user/repository_invitations", host=host) or []:
             repo = i.get("repository") or {}
             if repo.get("name", "").endswith(SUFFIX):
-                f["invitations"].append({"id": i["id"], "full": repo["full_name"],
+                f["invitations"].append({"id": i["id"], "full": join_full(host, repo["full_name"]), "host": host,
                                          "from": (i.get("inviter") or {}).get("login", "")})
-        for item in f["mine"]:
-            item["readers"] = self.readers(item["full"])
-        f["me"] = me
-        return f
+        orgs = [o["login"] for o in gh_json("api", "user/orgs", host=host) or [] if isinstance(o, dict) and "login" in o]
+        f["places"].append({"host": host, "login": me, "orgs": orgs})
+        return me
 
     def readers(self, full):
-        """[{login, role}] of the outside collaborators of one of your repos."""
-        got = gh_json("api", "repos/%s/collaborators?affiliation=outside" % full) or []
-        return [{"login": c["login"], "role": c.get("role_name", "")} for c in got if isinstance(c, dict)]
+        """[{login, role}] of the people added to one of your repos by name: outside collaborators, and members
+        of its org added by hand (a group org such as KubisGroup); not you, nor the org's owners."""
+        host, nwo = split_full(full)
+        got = gh_json("api", "repos/%s/collaborators?affiliation=direct" % nwo, host=host) or []
+        me = auth(host=host)["login"]
+        return [{"login": c["login"], "role": c.get("role_name", "")} for c in got
+                if isinstance(c, dict) and c.get("login") != me]
 
     # --- publishing ---------------------------------------------------------------------------------
     def folder(self, agent):
@@ -468,13 +541,13 @@ class Shares:
 
     def sync_mine(self, full):
         """Your clone of one of your repos, up to date with GitHub (cloned the first time)."""
-        path = self.clone_dir(full, mine=True)
+        path, host = self.clone_dir(full, mine=True), split_full(full)[0]
         if not os.path.isdir(os.path.join(path, ".git")):
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            rc, out = git(None, "clone", "-q", GIT_URL % full, path)
+            rc, out = git(None, "clone", "-q", git_url(full), path, host=host)
             return None if rc == 0 else "git clone %s: %s" % (full, out)
-        git(path, "remote", "set-url", "origin", GIT_URL % full)     # HTTPS even for a clone made over ssh
-        rc, out = git(path, "fetch", "-q", "origin")
+        git(path, "remote", "set-url", "origin", git_url(full))     # HTTPS even for a clone made over ssh
+        rc, out = git(path, "fetch", "-q", "origin", host=host)
         if rc:
             return "git fetch %s: %s" % (full, out)
         rc, out = git(path, "reset", "-q", "--hard", "@{u}")      # only Publish writes here
@@ -518,10 +591,11 @@ class Shares:
                     if rc:
                         errors.append("git commit: " + out)
                         continue
-                    rc, out = git(clone, "push", "-q", "origin", "HEAD")
+                    host = split_full(full)[0]
+                    rc, out = git(clone, "push", "-q", "origin", "HEAD", host=host)
                     if rc:
-                        git(clone, "pull", "-q", "--rebase", "origin")
-                        rc, out = git(clone, "push", "-q", "origin", "HEAD")
+                        git(clone, "pull", "-q", "--rebase", "origin", host=host)
+                        rc, out = git(clone, "push", "-q", "origin", "HEAD", host=host)
                     if rc:
                         errors.append("git push %s: %s" % (full, out))
                         continue
@@ -561,7 +635,7 @@ class Shares:
                 git(clone, "rm", "-rq", *paths)
                 rc, out = git(clone, "commit", "-q", "-m", "Unshare " + t["slug"])
                 if rc == 0:
-                    rc, out = git(clone, "push", "-q", "origin", "HEAD")
+                    rc, out = git(clone, "push", "-q", "origin", "HEAD", host=split_full(full)[0])
                 if rc:
                     return out
             for a in gone:
@@ -577,13 +651,24 @@ class Shares:
         s = self.state()
         targets = s["targets"].get(agent, {})
         files, out, children = self.folder(agent)
-        repos = []
+        repos, places, hidden = [], [], []
         if self.ready(c):
-            for r in self.found().get("mine", []):
+            f = self.found()
+            for r in f.get("mine", []):
+                if r["full"] in s["hidden"]:
+                    hidden.append({"full": r["full"], "shared": r["full"] in targets})
+                    continue
                 t = targets.get(r["full"])
                 repos.append(dict(r, shared=bool(t), published=t and t["published"],
                                   changed=self.changed(agent, r["full"], t["slug"]) if t else None))
-        return {"checks": c, "ready": self.ready(c), "repos": repos, "mode": s["mode"].get(agent, "hand"),
+            org = self.my_org()
+            for p in f.get("places", []):    # where "+ new repo" may make one: your <login>-dirai org first
+                orgs = p["orgs"]
+                if p["host"] == HOST and org:
+                    orgs = [org] + [o for o in orgs if o != org]
+                places.append(dict(p, orgs=orgs))
+        return {"checks": c, "ready": self.ready(c), "repos": repos, "places": places, "hidden": hidden,
+                "mode": s["mode"].get(agent, "hand"),
                 "children": [{"agent": ch, "title": page_title(os.path.join(self.root, ch, "index.html")),
                               "shared": sorted(s["targets"].get(ch, {}))} for ch in children],
                 "files": len(files), "bytes": sum(n for _, n in files), "left_out": ["%s (%s)" % (r, why) if why != "left out" else r for r, why in out][:8],
@@ -603,15 +688,16 @@ class Shares:
     def connect(self, full, invitation=None):
         if not FULL_RE.match(full):
             return "bad repo name"
+        host = split_full(full)[0]
         if invitation is not None:
-            rc, out = gh("api", "-X", "PATCH", "user/repository_invitations/%d" % int(invitation))
+            rc, out = gh("api", "-X", "PATCH", "user/repository_invitations/%d" % int(invitation), host=host)
             if rc:
                 return "accepting the invitation: " + out
         path = self.clone_dir(full)
         with self.lock:
             if not os.path.isdir(os.path.join(path, ".git")):
                 os.makedirs(os.path.dirname(path), exist_ok=True)
-                rc, out = git(None, "clone", "-q", GIT_URL % full, path)
+                rc, out = git(None, "clone", "-q", git_url(full), path, host=host)
                 if rc:
                     shutil.rmtree(path, ignore_errors=True)
                     return "git clone: " + out
@@ -634,8 +720,8 @@ class Shares:
     def fetch(self, full):
         """Bring one connected clone to GitHub's version; the agents whose folders changed are marked."""
         path = self.clone_dir(full)
-        git(path, "remote", "set-url", "origin", GIT_URL % full)
-        rc, out = git(path, "fetch", "-q", "origin")
+        git(path, "remote", "set-url", "origin", git_url(full))
+        rc, out = git(path, "fetch", "-q", "origin", host=split_full(full)[0])
         if rc:
             return out
         rc, names = git(path, "diff", "--name-only", "HEAD", "@{u}", "--", "agents")
@@ -701,8 +787,10 @@ class Shares:
                            "published": dates[slug] if slug in dates else dates.setdefault(slug, self.published(full, slug)),
                            "updated": slug in c.get("updated", []),
                            "url": "/%s/shares/%s/agents/%s/" % (dirai_config.DATA, full, slug)})
-        owner, repo = full.split("/")
+        host, nwo = split_full(full)
+        owner, repo = nwo.split("/")
         return {"full": full, "name": repo[:-len(SUFFIX)] if repo.endswith(SUFFIX) else repo, "owner": owner,
+                "repo": repo, "host": host, "web": web_url(full),
                 "fetched": c.get("fetched", ""), "updated": len(c.get("updated", [])), "agents": agents}
 
     def report(self):
@@ -716,21 +804,25 @@ class Shares:
         return {"gh": os.access(GH, os.X_OK), "me": f.get("me"),
                 "shared": [r for r in f.get("shared", []) if r["full"] not in connected],
                 "invitations": [i for i in f.get("invitations", []) if i["full"] not in connected],
-                "mine": f.get("mine", []), "connected": [self.box(full) for full in sorted(connected)]}
+                "mine": [r for r in f.get("mine", []) if r["full"] not in s["hidden"]], "connected": [self.box(full) for full in sorted(connected)]}
 
     def shared_page(self, page):
         """For a page under www/shares/<owner>/<repo>/agents/<slug>/: {full, slug, owner, published}."""
         parts = page.split("/")
-        if len(parts) < 6 or parts[:2] != [dirai_config.DATA, "shares"] or parts[4] != "agents":
+        if len(parts) < 3 or parts[:2] != [dirai_config.DATA, "shares"]:
             return None
-        full, slug = parts[2] + "/" + parts[3], "/".join(p for p in parts[5:] if p)    # a child: <parent>/<child>
+        i = 3 if HOST_RE.match(parts[2]) else 2      # www/shares/<host>/<owner>/<repo>/… on another server
+        if len(parts) < i + 4 or parts[i + 2] != "agents":
+            return None
+        full = "/".join(parts[2:i + 2])
+        slug = "/".join(p for p in parts[i + 3:] if p)    # a child: <parent>/<child>
         if not slug or ".." in slug.split("/"):
             return None
         if full not in self.state()["connected"]:
             return None
         self.seen(full, slug)
-        return {"full": full, "slug": slug, "owner": parts[2], "repo": parts[3],
-                "published": self.published(full, slug)}
+        return {"full": full, "slug": slug, "owner": parts[i], "repo": parts[i + 1], "host": split_full(full)[0],
+                "web": web_url(full), "published": self.published(full, slug)}
 
     # --- copies in your tree -----------------------------------------------------------------------
     def copy(self, page, dest):
@@ -882,7 +974,10 @@ class Shares:
             return self.start(op, self._gh_login)
         if op == "create_repo":
             name = str(body.get("name") or "")
-            return self.start(op, self._create_repo, name)
+            host = str(body.get("host") or HOST)
+            org = str(body.get("org") or "") or None
+            vis = str(body.get("visibility") or "private")
+            return self.start(op, self._create_repo, name, host, org, vis)
         if op == "add_reader":
             full, login = str(body.get("repo") or ""), str(body.get("login") or "").strip().lstrip("@")
             if not FULL_RE.match(full) or not LOGIN_RE.match(login):
@@ -931,19 +1026,29 @@ class Shares:
         auth(force=True)
         return None
 
-    def _create_repo(self, name):
-        login, org = self.login(), self.my_org()
+    def _create_repo(self, name, host=HOST, org=None, visibility="private"):
+        """A new agent repo: on github.com in your <login>-dirai org by default; or on another server gh is
+        logged in to, in an org you may create repos in (e.g. KubisGroup), private or internal."""
+        if host != HOST and host not in gh_hosts():
+            return "gh holds no login for %s on this machine" % host
+        if visibility not in VISIBILITY:
+            return "visibility is private or internal"
+        login = auth(host=host)["login"] if host != HOST else self.login()
+        org = org or (self.my_org() if host == HOST else None)
         if not org:
-            return "make your org first (step 3)"
+            return "make your org first (step 3)" if host == HOST else "pick an org on %s" % host
+        if not LOGIN_RE.match(org):
+            return "bad org name"
         name = name or login + SUFFIX
         if not name.endswith(SUFFIX):
             name += SUFFIX
         if not NAME_RE.match(name):
             return "bad repo name"
-        full = "%s/%s" % (org, name)
-        for args in (["repo", "create", full, "--private", "--description", "DirAI agents shared by " + login],
-                     ["repo", "edit", full, "--add-topic", TOPIC]):
-            rc, out = gh(*args)
+        nwo = "%s/%s" % (org, name)
+        full = join_full(host, nwo)
+        for args in (["repo", "create", nwo, "--" + visibility, "--description", "DirAI agents shared by " + login],
+                     ["repo", "edit", nwo, "--add-topic", TOPIC]):
+            rc, out = gh(*args, host=host)
             if rc:
                 return out
         clone = self.clone_dir(full, mine=True)
@@ -955,15 +1060,31 @@ class Shares:
             f.write("# %s\n\nAgents shared by %s with DirAI. One folder per agent under agents/. Read-only for you:\n"
                     "copy an agent into your own tree to run or change it.\n" % (name, login))
         for args in (["init", "-q"], ["add", MARKER, "README.md"], ["commit", "-q", "-m", "Start the agent repo (DirAI)"],
-                     ["branch", "-M", "main"], ["remote", "add", "origin", GIT_URL % full], ["push", "-q", "-u", "origin", "main"]):
-            rc, out = git(clone, *args)
+                     ["branch", "-M", "main"], ["remote", "add", "origin", git_url(full)], ["push", "-q", "-u", "origin", "main"]):
+            rc, out = git(clone, *args, host=host)
             if rc:
                 return out
         return None
 
     def _add_reader(self, full, login):
-        rc, out = gh("api", "-X", "PUT", "repos/%s/collaborators/%s" % (full, login), "-f", "permission=pull")
+        host, nwo = split_full(full)
+        rc, out = gh("api", "-X", "PUT", "repos/%s/collaborators/%s" % (nwo, login), "-f", "permission=pull", host=host)
         return None if rc == 0 else out
+
+    def hide(self, full, hidden=True):
+        """Take one of your repos off this tree's Share to list (and the Connect row's "yours"), or put it back.
+        Only here: the repo, its agents and its readers on GitHub stay as they are."""
+        with self.lock:
+            s = self.state()
+            if hidden:
+                if full not in {r["full"] for r in self.found().get("mine", [])}:
+                    return "not one of your agent repos: %s" % full
+                if full not in s["hidden"]:
+                    s["hidden"].append(full)
+            elif full in s["hidden"]:
+                s["hidden"].remove(full)
+            self.save(s)
+        return None
 
     # --- the one entry point for the server ---------------------------------------------------------
     def act(self, body, agent=None):
@@ -975,6 +1096,9 @@ class Shares:
             return {"ok": True}
         if op in ("install_gh", "gh_login", "create_repo", "add_reader"):
             why = self.fix(op, body)
+            return {"error": why} if why else {"ok": True}
+        if op in ("hide", "unhide"):      # off this tree's Share to list, or back; GitHub is untouched
+            why = self.hide(str(body.get("repo") or ""), op == "hide")
             return {"error": why} if why else {"ok": True}
         if op == "account":       # Share as: one of the github.com accounts gh holds here
             login = str(body.get("account") or "")

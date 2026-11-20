@@ -9,21 +9,27 @@ from tests import util
 
 REMOTE = os.path.join(util.TMP, "remote")
 os.environ["DIRAI_SHARE_GIT_URL"] = REMOTE + "/%s.git"
+os.environ["DIRAI_SHARE_GIT_URL_HOST"] = REMOTE + "/%s/%s.git"
 os.environ["DIRAI_GH"] = os.path.join(util.TMP, "no-gh")
 
 import shares  # noqa: E402
 
 FULL = "wang-dirai/wang_agent_repo"
+PURDUE = "git.example.edu/kubis/wang_agent_repo"     # a repo on another GitHub server (Enterprise)
 
 
 FAKE_GH = """#!/usr/bin/env python3
 import os, sys
 a = sys.argv[1:]
+host = a[a.index("--hostname") + 1] if "--hostname" in a else None
 if a[:2] == ["auth", "status"]:
-    print("github.com\\n  \\u2713 Logged in to github.com account purdue-me (keyring)\\n  - Active account: true\\n"
-          "  \\u2713 Logged in to github.com account personal-me (keyring)\\n  - Active account: false")
+    if host in (None, "github.com"):
+        print("github.com\\n  \\u2713 Logged in to github.com account purdue-me (keyring)\\n  - Active account: true\\n"
+              "  \\u2713 Logged in to github.com account personal-me (keyring)\\n  - Active account: false")
+    if host in (None, "git.example.edu"):
+        print("git.example.edu\\n  \\u2713 Logged in to git.example.edu account wang (keyring)\\n  - Active account: true")
 elif a[:2] == ["auth", "token"]:
-    print("tok-" + a[a.index("--user") + 1])
+    print("tok-%s-%s" % (host, a[a.index("--user") + 1]))
 else:
     print("host=%s\\ntoken=%s" % (os.environ.get("GH_HOST"), os.environ.get("GH_TOKEN")))
 """
@@ -35,9 +41,9 @@ def sh(cwd, *args):
                             GIT_COMMITTER_EMAIL="t@t"))
 
 
-def make_remote():
+def make_remote(full=FULL):
     """An agent repo as create_repo leaves it: the empty marker and a README, on main."""
-    bare = os.path.join(REMOTE, FULL + ".git")
+    bare = os.path.join(REMOTE, full + ".git")
     shutil.rmtree(bare, ignore_errors=True)
     os.makedirs(bare)
     sh(bare, "git", "init", "-q", "--bare")
@@ -220,24 +226,68 @@ class TestShares(unittest.TestCase):
         try:
             self.assertEqual(shares.gh_accounts(), (["purdue-me", "personal-me"], "purdue-me"))
             a = shares.auth(force=True)
-            self.assertEqual((a["login"], a["token"]), ("purdue-me", "tok-purdue-me"))     # nothing chosen: the active one
+            self.assertEqual((a["login"], a["token"]), ("purdue-me", "tok-github.com-purdue-me"))     # nothing chosen: the active one
             self.assertEqual(self.s.act({"op": "account", "account": "nobody"})["error"][:6], "gh hol")
             self.assertEqual(self.s.act({"op": "account", "account": "personal-me"}), {"ok": True})
             self.assertEqual(shares.chosen_account(), "personal-me")
             a = shares.auth()
-            self.assertEqual((a["login"], a["token"]), ("personal-me", "tok-personal-me"))
+            self.assertEqual((a["login"], a["token"]), ("personal-me", "tok-github.com-personal-me"))
             # gh runs as that account, on github.com, whatever the caller's own GH_TOKEN/GH_HOST
             rc, out = shares.gh("api", "user")
-            self.assertEqual(out.splitlines(), ["host=github.com", "token=tok-personal-me"])
+            self.assertEqual(out.splitlines(), ["host=github.com", "token=tok-github.com-personal-me"])
+            # another GitHub server gh is logged in to: its own account and token, github.com's unchanged
+            self.assertEqual(shares.gh_hosts(), ["git.example.edu"])
+            rc, out = shares.gh("api", "user", host="git.example.edu")
+            self.assertEqual(out.splitlines(), ["host=git.example.edu", "token=tok-git.example.edu-wang"])
+            self.assertEqual(shares.auth()["login"], "personal-me")
             # a chosen account this machine's gh doesn't hold: refused, not run as the active one
             shares.choose_account("elsewhere")
             self.assertEqual(shares.gh("api", "user")[0], 1)
             self.assertIsNone(shares.auth()["token"])
         finally:
             shares.GH = old
-            shares._auth["t"] = 0
+            shares._auth.clear()
             if os.path.exists(shares.ACCOUNT_FILE):
                 os.remove(shares.ACCOUNT_FILE)
+
+    def test_repo_on_another_server(self):
+        # D7: a repo on another GitHub server ("<host>/<owner>/<repo>"), published to with github.com's in one go
+        make_remote(PURDUE)
+        self.assertEqual(shares.split_full(PURDUE), ("git.example.edu", "kubis/wang_agent_repo"))
+        self.assertEqual(shares.split_full(FULL), ("github.com", FULL))
+        self.assertEqual(shares.web_url(PURDUE), "https://git.example.edu/kubis/wang_agent_repo")
+        self.s.found = lambda force=False: {"mine": [{"full": FULL}, {"full": PURDUE}], "shared": [], "invitations": []}
+        self.assertEqual(self.s.act({"op": "publish", "repos": [FULL, PURDUE]}, "proj/fit"), {"ok": True})
+        self.assertEqual(sorted(self.s.state()["targets"]["proj/fit"]), sorted([FULL, PURDUE]))
+        self.assertTrue(os.path.isfile(os.path.join(self.s.clone_dir(PURDUE, mine=True), "agents/fit/index.html")))
+        reader = shares.Shares(util.new_tree("reader2"))
+        self.assertIsNone(reader.connect(PURDUE))
+        self.assertTrue(reader.clone_dir(PURDUE).endswith("www/shares/git.example.edu/kubis/wang_agent_repo"))
+        box = reader.box(PURDUE)
+        self.assertEqual((box["owner"], box["repo"], box["host"]), ("kubis", "wang_agent_repo", "git.example.edu"))
+        page = box["agents"][0]["url"].strip("/")
+        sp = reader.shared_page(page)
+        self.assertEqual((sp["full"], sp["slug"], sp["owner"]), (PURDUE, "fit", "kubis"))
+        self.assertIsNone(reader.shared_page("www/shares/git.example.edu/kubis/agents/fit"))   # too short
+
+    def test_create_repo_refuses_unknown_server_and_visibility(self):
+        self.assertIn("no login", self.s._create_repo("x", "nowhere.example.org", "kubis", "private"))
+        self.assertIn("private or internal", self.s._create_repo("x", "github.com", "kubis", "public"))
+
+    def test_remove_repo_from_list(self):
+        # Remove from list: off this tree's Share to list and the Connect row's "yours"; nothing on GitHub changes
+        self.s.checks = lambda force=False: [{"login": "wang"}, {}, {"ok": True, "org": "wang-dirai"}, {}]
+        self.s.act({"op": "publish", "repos": [FULL]}, "proj/fit")
+        self.assertIn("error", self.s.act({"op": "hide", "repo": "someone/else_agent_repo"}, "proj/fit"))
+        self.assertEqual(self.s.act({"op": "hide", "repo": FULL}, "proj/fit"), {"ok": True})
+        p = self.s.page_state("proj/fit")
+        self.assertEqual((p["repos"], p["hidden"]), ([], [{"full": FULL, "shared": True}]))
+        self.assertEqual(self.s.report()["mine"], [])
+        self.assertIn(FULL, self.s.state()["targets"]["proj/fit"])          # still published there
+        self.assertTrue(os.path.isdir(self.s.clone_dir(FULL, mine=True)))
+        self.assertEqual(self.s.act({"op": "unhide", "repo": FULL}, "proj/fit"), {"ok": True})
+        p = self.s.page_state("proj/fit")
+        self.assertEqual(([r["full"] for r in p["repos"]], p["hidden"]), ([FULL], []))
 
     def test_remove_copy_only_inside_copies(self):
         origin = '{"repo": "x/y", "slug": "fit", "commit": "abc"}'

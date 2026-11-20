@@ -642,12 +642,14 @@
     let s = `<div class="dim pick ghpick"><b>Connect from GitHub (gh)${label ? " into " + esc(label) : ""}:</b></div>`;
     if (!sh) return "";
     if (!sh.gh) return s + '<div class="dim">gh isn\'t installed here: the Share pill on any of your pages installs it</div>';
-    const opts = sh.shared.map(r => `<option value="${esc(r.full)}">${esc(r.full.split("/")[1])} · ${esc(r.owner)} · ${r.agents} agents</option>`)
-      .concat(sh.invitations.map(i => `<option value="${esc(i.full)}" data-inv="${i.id}">${esc(i.full.split("/")[1])} · invited by ${esc(i.from)} (accept)</option>`));
+    // a repo's name, with its server when that isn't github.com ("<host>/<owner>/<repo>", shares.py)
+    const rn = full => { const p = full.split("/"); return p.length === 3 ? `${p[2]} @ ${p[0]}` : p[1]; };
+    const opts = sh.shared.map(r => `<option value="${esc(r.full)}">${esc(rn(r.full))} · ${esc(r.owner)} · ${r.agents} agents</option>`)
+      .concat(sh.invitations.map(i => `<option value="${esc(i.full)}" data-inv="${i.id}">${esc(rn(i.full))} · invited by ${esc(i.from)} (accept)</option>`));
     // yours too (as its readers see it, e.g. from another machine), unless connected already
     const conn = new Set((sh.connected || []).map(g => g.full));
     const mine = (sh.mine || []).filter(r => !conn.has(r.full));
-    opts.push(...mine.map(r => `<option value="${esc(r.full)}">${esc(r.full.split("/")[1])} · yours · ${r.agents} agents</option>`));
+    opts.push(...mine.map(r => `<option value="${esc(r.full)}">${esc(rn(r.full))} · yours · ${r.agents} agents</option>`));
     const none = sh.me ? `no one else has shared an agent repo with ${esc(sh.me)} yet` +
       (conn.size && !mine.length && (sh.mine || []).length ? " (yours is connected, below)" : "") +
       ((sh.mine || []).length ? "" : "; yours isn't made yet (the Share pill on any of your pages sets it up)") : "searching…";
@@ -672,7 +674,7 @@
     tid = esc(tid || "");
     return `<div class="tnode git" title="${esc(g.full)}: a shared agent repo, cloned into this server's www/shares/">` +
       `<button class="x" data-sop="disconnect" data-stree="${tid}" data-repo="${esc(g.full)}" title="Disconnect: delete the clone (your access stays)">×</button>` +
-      `<b>${esc(g.owner)}${g.name !== g.owner ? " · " + esc(g.name) : ""}</b><br>` +
+      `<b>${esc(g.owner)}${g.name !== g.owner ? " · " + esc(g.name) : ""}</b>${g.host && g.host !== "github.com" ? ` <span class="dim">@ ${esc(g.host)}</span>` : ""}<br>` +
       `<span class="dim">shared · read-only</span><br>` +
       `${g.agents.length} agent${g.agents.length === 1 ? "" : "s"}${g.updated ? ` · <b>${g.updated} updated</b>` : ""} <span class="dim">· fetched ${esc(g.fetched.slice(5, 16).replace("T", " "))}</span>
         <button class="gray" data-sop="fetch" data-stree="${tid}" data-repo="${esc(g.full)}" title="Fetch now">⟳</button></div>`;
@@ -1089,7 +1091,7 @@
     allRows().filter(tr => tr.dataset.shared && !tr.dataset.tree).forEach(tr => old2[tr.dataset.agent] = tr);
     const sharedRows = (sh, t, olds, pre) => ((sh && sh.connected) || []).forEach(g => g.agents.forEach(a => {
       const path = a.url.replace(/^\/+|\/+$/g, ""), k = pre + path;
-      const label = (t ? t.via[t.via.length - 1] + ": " : "") + `${g.owner} / ${g.full.split("/")[1]} / ${a.slug} · shared, read-only`;
+      const label = (t ? t.via[t.via.length - 1] + ": " : "") + `${g.owner} / ${g.full.split("/").pop()} / ${a.slug} · shared, read-only`;
       const href = t ? (t.fport ? remoteUrl(t, a.url) : "") : a.url;
       const sig = JSON.stringify([label, href, a.title, a.published]);
       if (t) remoteRec[k] = {};

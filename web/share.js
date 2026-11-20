@@ -57,7 +57,7 @@
       const s = r && r.shared;
       if (!s) { pill.textContent = "Shared agent · read-only"; return; }
       pill.textContent = `From ${s.owner} · read-only`;
-      const issue = `https://github.com/${s.full}/issues/new?title=${encodeURIComponent("[" + s.slug + "] question")}` +
+      const issue = `${s.web || "https://github.com/" + s.full}/issues/new?title=${encodeURIComponent("[" + s.slug + "] question")}` +
         `&body=${encodeURIComponent("About agents/" + s.slug + " (published " + s.published + "):\n\n")}`;
       pop.innerHTML = `<h4>${esc(s.owner)}'s agent · published ${esc(s.published)}</h4>
         <div class="dim">From ${esc(s.full)}. Read-only here, and no Chat: it isn't yours to run.</div>
@@ -166,17 +166,30 @@
       const n = c.slice(0, 2).filter(x => x.ok).length, first = c.slice(0, 2).findIndex(x => x.ok === false);
       h += `<div class="dim">Sharing needs gh on this machine: ${n} of 2 ready. Only the first open step's button is active.</div>`;
       h += c.slice(0, 2).map((x, i) => checkRow(x, i === first)).join("");
-    } else if (!st.repos.length) {
+    } else if (!st.repos.length && !(st.hidden || []).length) {
       const first = c.findIndex(x => x.ok === false);
       h += `<div class="dim">GitHub is ready (${esc(c[1].found)}). Set up sharing, once:</div>` + c.slice(2).map(x => checkRow(x, c.indexOf(x) === first)).join("");
       if (c[2].ok && !c[3].ok) h += `<div class="dim">Repo name: <input type="text" data-rname value="${esc(c[0].login || "")}_agent_repo"></div>`;
     } else {
       h += `<div class="dim"><b>Share to</b> · a repo's readers see every agent shared to it</div>`;
+      // each repo: its name, and where it is when that isn't your github.com org (another org, another server, internal)
+      const where = r => (r.host && r.host !== "github.com" ? `${r.owner} @ ${r.host}` : (st.places[0] && st.places[0].orgs[0] === r.owner ? "" : r.owner)) +
+        (r.visibility === "internal" ? " · internal: all of " + r.host + " reads it" : "");
       h += st.repos.map(r => `<div class="row"><input type="checkbox" data-repo="${esc(r.full)}" ${r.shared ? "checked" : ""}>
-        <code>${esc(r.full.split("/")[1])}</code> <span class="dim">${esc((r.readers || []).map(x => x.login).join(" · ") || "no readers yet")}</span>
+        <code>${esc(r.full.split("/").pop())}</code> <span class="dim">${esc(where(r))}${where(r) ? " · " : ""}${esc((r.readers || []).map(x => x.login).join(" · ") || (r.visibility === "internal" ? "" : "no readers yet"))}</span>
         <span class="f">${r.shared ? "published " + esc((r.published || "").slice(5, 10)) + (r.changed ? " · " + r.changed + " changed" : "") : "not shared"}</span></div>
-        <div class="row" style="margin-left:22px"><input type="text" data-reader="${esc(r.full)}" placeholder="GitHub login"><button class="gray" data-addreader="${esc(r.full)}">+ add reader</button></div>`).join("");
-      h += `<div class="row"><input type="text" data-rname placeholder="e.g. kubis"><button class="gray" data-fix="create_repo">+ new repo</button><span class="dim">for another audience</span></div>`;
+        <div class="row" style="margin-left:22px"><input type="text" data-reader="${esc(r.full)}" placeholder="login"><button class="gray" data-addreader="${esc(r.full)}">+ add reader</button>
+          <button class="gray" data-hide="${esc(r.full)}" title="Take it off this list (in this tree only); the repo on GitHub, its agents and its readers stay">Remove from list</button></div>`).join("");
+      const hid = st.hidden || [];      // removed from the list: each can be put back
+      if (hid.length) h += `<details class="dim"><summary>${hid.length} removed from this list</summary>` + hid.map(r =>
+        `<div class="row"><code>${esc(r.full.split("/").pop())}</code>${r.shared ? " · this agent is in it" : ""}<button class="gray" data-unhide="${esc(r.full)}">Put back</button></div>`).join("") + "</details>";
+      // + new repo: on which GitHub server (each one gh is logged in to here), in which org, private or internal
+      const pl = st.places || [];
+      h += `<div class="sec"><b>+ new repo</b> <span class="dim">for another audience</span><div class="row">
+        <input type="text" data-rname placeholder="e.g. kubis">
+        <select data-rhost>${pl.map((p, i) => `<option value="${i}">${esc(p.host)}</option>`).join("")}</select>
+        <select data-rorg></select><select data-rvis></select>
+        <button class="gray" data-fix="create_repo">Create</button></div><div class="dim" data-rnote></div></div>`;
       h += `<div class="sec">Mode: <select data-mode><option value="hand">by hand</option><option value="run" ${st.mode === "run" ? "selected" : ""}>after it changes (checked every 10 min)</option></select></div>`;
       // the agents Publish sends and Unshare removes: this one (with children: its own tick box) and the ticked children
       if (st.children.length) h += `<div class="sec"><b>Agents</b>` +
@@ -213,10 +226,33 @@
       if (b.dataset.open) window.open(b.dataset.open, "_blank", "noopener");
       const op = fixOp(b.dataset.fix);
       if (!op) return;
-      if (op === "create_repo" && !confirm(b.textContent + ": this changes your GitHub account. Go ahead?")) return;
-      const name = pop.querySelector("[data-rname]");
-      act({op, name: name ? name.value.trim() : ""});
+      const name = pop.querySelector("[data-rname]"), body = {op, name: name ? name.value.trim() : ""};
+      const hs = pop.querySelector("[data-rhost]");
+      if (op === "create_repo" && hs && st.places[hs.value]) {
+        const p = st.places[hs.value];
+        Object.assign(body, {host: p.host, org: pop.querySelector("[data-rorg]").value, visibility: pop.querySelector("[data-rvis]").value});
+      }
+      if (op === "create_repo" && !confirm(`Create ${body.org ? body.org + "/" : ""}${(body.name || "…").replace(/_agent_repo$/, "")}_agent_repo` +
+        (body.host ? ` on ${body.host}, ${body.visibility}` : "") + "? This changes your GitHub account.")) return;
+      act(body);
     });
+    const hs = pop.querySelector("[data-rhost]");
+    if (hs) {     // the org and visibility lists follow the server picked
+      const fill = () => {
+        const p = st.places[hs.value] || {orgs: []}, dotcom = p.host === "github.com";
+        pop.querySelector("[data-rorg]").innerHTML = p.orgs.map(o => `<option>${esc(o)}</option>`).join("") || "<option value=''>no org</option>";
+        pop.querySelector("[data-rvis]").innerHTML = `<option value="private">private: readers you add</option>` +
+          (dotcom ? "" : `<option value="internal">internal: everyone on ${esc(p.host)} reads</option>`);
+        pop.querySelector("[data-rnote]").textContent = p.orgs.length ? "" : `You're in no org on ${p.host}: readers of a repo under your own name can push, so make or join an org first.`;
+      };
+      hs.onchange = fill; fill();
+    }
+    pop.querySelectorAll("[data-hide]").forEach(b => b.onclick = () => {
+      const r = st.repos.find(x => x.full === b.dataset.hide) || {};
+      if (!r.shared || confirm(`This agent is published in ${b.dataset.hide.split("/").pop()} and stays there (use Unshare… to take it out).\nRemove the repo from this list anyway?`))
+        act({op: "hide", repo: b.dataset.hide});
+    });
+    pop.querySelectorAll("[data-unhide]").forEach(b => b.onclick = () => act({op: "unhide", repo: b.dataset.unhide}));
     pop.querySelectorAll("[data-addreader]").forEach(b => b.onclick = () => {
       const login = pop.querySelector(`[data-reader="${b.dataset.addreader}"]`).value.trim();
       if (login && confirm(`Give ${login} read access to ${b.dataset.addreader} (every agent in it)?`)) act({op: "add_reader", repo: b.dataset.addreader, login});
@@ -232,7 +268,7 @@
         const mine = me && st.repos.some(x => x.full === r && x.shared);
         const items = (mine ? [agent.split("/").pop() || "this tree"] : []).concat(
           st.children.filter(ch => ch.shared.includes(r) && (mine || kids.includes(ch.agent))).map(ch => ch.agent.split("/").pop()));
-        if (items.length) gone.push(`${r.split("/")[1]}: ${items.map(x => x + "/").join(", ")}`);
+        if (items.length) gone.push(`${r.split("/").pop()}:${items.map(x => x + "/").join(", ")}`);
       }
       if (!gone.length) { msg = "Nothing to unshare: none of the ticked agents is in the ticked repos."; draw(); return; }
       if (confirm(`Remove from GitHub (its old commits still hold them):\n${gone.join("\n")}`))
