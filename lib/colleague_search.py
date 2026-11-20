@@ -1,6 +1,6 @@
 """Keyword search over this tree's agents, for the Colleagues box (proposal 23, D1 "search only", D2
-"this server only"). Uses dirai_card and the agent dicts of agent_list.find_agents(). Not wired into
-agent_list.py / server.py / panel.js yet.
+"this server only"). Uses dirai_card and the agent dicts of agent_list.find_agents(). Wired into
+agent_list.py (index), server.py (/_review/colleague_search) and panel.js (the box).
 
 build_index(root, agents)  -> list of entries, one per local agent
 search(index, query, exclude="", limit=10) -> [{"path", "title", "rank", "why"}]
@@ -18,7 +18,7 @@ import dirai_card
 import dirai_config
 
 INDEX_NAME = "colleague_index.json"     # in <root>/www, rewritten with the agent list
-MAX_RESULTS = 10
+MAX_RESULTS = 30          # the panel shows 4 rows and scrolls the rest
 FILE_DEPTH = 2            # folder levels below the agent whose file names are searched
 TEXT_MAX = 200_000        # bytes of index.html read for the page text
 KEEP_TEXT = 30_000        # characters of it kept in the index file

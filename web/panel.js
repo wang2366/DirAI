@@ -70,7 +70,7 @@
   .rv-sitem button[data-op=delete]{color:#555;font-size:14px;line-height:1}
   #rv-colls{margin-top:6px;font-size:12.5px}
   #rv-colls summary{cursor:pointer;color:#555}
-  #rv-colllist{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0}
+  #rv-colllist{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0;max-height:92px;overflow-y:auto}
   .rv-coll{display:inline-flex;align-items:center;gap:2px;padding:1px 4px 1px 8px;border-radius:10px;background:#eef4ff;max-width:100%}
   .rv-coll a{color:#0b63ce;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .rv-coll.gone a{color:#999;text-decoration:line-through}
@@ -79,7 +79,8 @@
   .rv-coll.read{background:#e6f4ea} .rv-coll.own{background:#fde4e1} .rv-coll.own button.rv-cname{color:#b3261e}
   .rv-coll.all{background:#a50e0e} .rv-coll.all button,.rv-coll.all a{color:#fff}
   .rv-coll.gone button.rv-cname{color:#999;text-decoration:line-through}
-  .rv-hit{display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid #eee}
+  #rv-collres{max-height:120px;overflow-y:auto;overscroll-behavior:contain}
+  .rv-hit{display:flex;align-items:center;gap:6px;height:30px;box-sizing:border-box;border-bottom:1px solid #eee}
   .rv-hit .rv-hitx{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .rv-hit i{color:#777}
   .rv-hit button{flex:none;white-space:nowrap}
@@ -332,8 +333,15 @@
     const colls = st.colleagues || [];
     $("rv-collsum").textContent = "Colleagues" + (colls.length ? " (" + colls.length + ")" : "");
     const collKey = JSON.stringify(colls);
+    // a chip shows the folder name, or as many trailing path parts as it takes to tell same-named colleagues apart
+    const tail = (p, k) => p.split("/").slice(-k).join("/");
+    const chipName = p => {
+      if (!p) return "top agent";
+      for (let k = 1; ; k++)
+        if (k >= p.split("/").length || colls.every(o => o.path === p || tail(o.path, k) !== tail(p, k))) return tail(p, k);
+    };
     if (collKey !== render.shownColls) render.shownColls = collKey, $("rv-colllist").innerHTML = colls.map(c => {
-      const mode = c.mode || "read", name = c.path.split("/").pop() || "top agent";
+      const mode = c.mode || "read", name = chipName(c.path);
       return `<span class="rv-coll ${mode}${c.gone ? " gone" : ""}">` +
         `<button class="rv-cname" data-mode="${attr(c.path)}" data-next="${attr(c.next || "own")}" title="${attr(c.path || "the tree's top agent")}${c.gone ? " (gone)" : ""}: ` +
         `${COLL_SAYS[mode]}. Click: ${COLL_SAYS[c.next || "own"]} (from its next run)">${COLL_MARK[mode]}${esc(name)}</button>` +
@@ -1525,9 +1533,11 @@
     const v = $("rv-colllink").value.trim(), n = ++collSeq;
     if (!v || isLink(v)) { $("rv-collres").innerHTML = ""; return; }
     fetch("/_review/colleague_search?agent=" + encodeURIComponent(AGENT) + "&q=" + encodeURIComponent(v))
-      .then(r => r.json()).then(r => {
+      .then(r => r.json()).catch(() => ({results: []})).then(r => {
         if (n !== collSeq) return;      // a newer keystroke is already searching
-        $("rv-collres").innerHTML = r.results.length ? r.results.map(c =>
+        const res = r.results || [];    // 4 rows show; the rest scroll (#rv-collres max-height)
+        $("rv-collres").title = res.length > 4 ? res.length + " matches; scroll for more" : "";
+        $("rv-collres").innerHTML = res.length ? res.map(c =>
           `<div class="rv-hit"><span class="rv-hitx" title="${attr(c.path + " " + c.title + " (" + c.why + ")")}">` +
           `<b>${esc(c.path || "top agent")}</b> ${esc(c.title)} <i>${esc(c.why)}</i></span>` +
           (c.added ? `<i>already a colleague</i>` : `<button data-add="${attr(c.path || "/")}">+ Add</button>`) + "</div>").join("")
