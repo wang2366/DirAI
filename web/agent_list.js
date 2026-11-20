@@ -659,9 +659,9 @@
   // 2026-11-18: "like a server inside the machine", not a machine box of its own); its agents are rows of
   // the list below (syncRemote), not listed here. tid: that tree ("" for this server); into: its path, when
   // the machine has more than one tree
-  function gitNode(g, tid, into) {
+  function gitNode(g, tid, into, off) {
     tid = esc(tid || "");
-    return `<div class="tnode git" title="${esc(g.full)}: a shared agent repo, cloned into ${esc(into || "this tree")}'s www/shares/">` +
+    return `<div class="tnode git${off ? " hid" : ""}" title="${esc(g.full)}: a shared agent repo, cloned into ${esc(into || "this tree")}'s www/shares/">` +
       `<button class="x" data-sop="disconnect" data-stree="${tid}" data-repo="${esc(g.full)}" title="Disconnect: delete the clone (your access stays)">×</button>` +
       `<b>${esc(g.owner)}${g.name !== g.owner ? " · " + esc(g.name) : ""}</b><br>` +
       `<span class="dim">shared · read-only${into ? " · in " + esc(into) : ""}</span><br>` +
@@ -883,9 +883,9 @@
           title="DirAI restart here: reloads this server with the current code (e.g. after a DirAI update), then this page. Running agent runs are stopped.">Restart</button></div>` + pullBox(rep.self_update)
           : m.trees.map(t => treeNode(t, rep)).join("") || (reached ? '<div class="dim">no DirAI trees there yet</div>' : "");
         // connected shared repos (proposal 72): a server-like node each, under the trees, in this machine's box
-        s += m.local ? (rep.shares && rep.shares.connected || []).map(g => gitNode(g, "", "")).join("")
+        s += m.local ? (rep.shares && rep.shares.connected || []).map(g => gitNode(g, "", "", rep.hidden)).join("")
           : (m.trees || []).map(t => (t.shares && t.shares.connected || [])
-              .map(g => gitNode(g, t.id, m.trees.length > 1 ? short(t.root) : "")).join("")).join("");
+              .map(g => gitNode(g, t.id, m.trees.length > 1 ? short(t.root) : "", t.hidden)).join("")).join("");
         if (!m.local && linked && m.at != null) s += newTree(m.alias, m.at, m.trees);
         if (linked) s += connectPicker(m.local ? "this machine" : m.name, m.hosts, m.pickAt);
         if (m.local) s += ghPicker(rep.shares, "");
@@ -1104,10 +1104,12 @@
     Object.values(old2).forEach(tr => tr.remove());     // disconnected, or unshared by their owner
     Object.values(old).forEach(tr => tr.remove());      // trees unticked or gone, agents removed
     const pre = rep.machine + ":" + short(rep.root) + "/";
-    allRows().filter(tr => !tr.dataset.tree && !tr.dataset.shared).forEach(tr => {
-      const label = shown.length ? pre + (tr.dataset.agent ? tr.dataset.agent + "/" : "") : tr.dataset.label;
-      tr.querySelector("a").textContent = label; tr.children[0].dataset.v = label;
-      tr.classList.toggle("rv-off", localHidden);
+    allRows().filter(tr => !tr.dataset.tree).forEach(tr => {
+      if (!tr.dataset.shared) {
+        const label = shown.length ? pre + (tr.dataset.agent ? tr.dataset.agent + "/" : "") : tr.dataset.label;
+        tr.querySelector("a").textContent = label; tr.children[0].dataset.v = label;
+      }
+      tr.classList.toggle("rv-off", localHidden);     // this tree's shared agents follow its tick box too
     });
     drawFavs();
     paint();

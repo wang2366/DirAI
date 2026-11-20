@@ -65,7 +65,48 @@ def build_index(root, agents):
             "io": " ".join(card.get(k, "") for k in ("inputs", "outputs")),
             "card": " ".join(card.get(k, "") for k in ("objective", "result", "open")),
             "text": page_text(folder)})
-    return entries
+    return entries + shared_entries(root)
+
+
+def shared_entries(root):
+    """The agents of connected shared repos (www/shares/<owner>/<repo>/agents/<slug>/), which the agent list's
+    scan skips, so the Colleagues box finds them too (proposal 72). Path is relative to the tree, as a link
+    to one would give it."""
+    out, base = [], os.path.join(dirai_config.data_dir(root), "shares")
+    try:
+        owners = sorted(o for o in os.listdir(base) if not o.startswith("."))
+    except OSError:
+        return out
+    for owner in owners:
+        try:
+            repos = sorted(os.listdir(os.path.join(base, owner)))
+        except OSError:
+            continue
+        top_dirs = [(r, os.path.join(base, owner, r, "agents")) for r in repos]
+        for repo, top in top_dirs:
+            for d, dirs, names in os.walk(top):
+                dirs[:] = sorted(n for n in dirs if not n.startswith("."))
+                if d == top or "index.html" not in names:
+                    continue
+                try:
+                    card = dirai_card.extract(d) or {}
+                except OSError:
+                    continue
+                title = re.sub(r"\s+", " ", TAG_RE.sub("", (re.search(r"<h1[^>]*>(.*?)</h1>", page_text_raw(d), re.S | re.I) or [None, ""])[1])).strip()
+                out.append({
+                    "path": os.path.relpath(d, root).replace(os.sep, "/"), "title": title, "files": file_names(d),
+                    "io": " ".join(card.get(k, "") for k in ("inputs", "outputs")),
+                    "card": " ".join(card.get(k, "") for k in ("objective", "result", "open")),
+                    "text": page_text(d)})
+    return out
+
+
+def page_text_raw(folder):
+    try:
+        with open(os.path.join(folder, "index.html"), "rb") as f:
+            return f.read(TEXT_MAX).decode("utf-8", "replace")
+    except OSError:
+        return ""
 
 
 def index_path(root):
