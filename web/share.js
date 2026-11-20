@@ -34,9 +34,19 @@
   const pill = document.createElement("button"); pill.id = "rv-share"; pill.textContent = shared ? "From …" : "Share";
   const pop = document.createElement("div"); pop.id = "rv-share-pop";
   document.body.append(pill, pop);
-  // left of Chat (panel.js may add it after us)
+  // left of Chat (panel.js may add it after us). Chat's width changes with its label ("Chat ❗", "Chat …"),
+  // so follow it with a ResizeObserver rather than measuring once, which left Share under a wider Chat.
   const place = () => { const c = document.getElementById("rv-btn"); pill.style.right = (c && c.offsetWidth ? c.offsetWidth + 24 : 16) + "px"; };
-  place(); setTimeout(place, 500); window.addEventListener("resize", place);
+  const follow = (tries) => {
+    const c = document.getElementById("rv-btn");
+    place();
+    if (c && window.ResizeObserver) new ResizeObserver(place).observe(c);
+    else if (!c && tries > 0) setTimeout(() => follow(tries - 1), 250);   // no Chat on others' agents: give up after 5 s
+  };
+  follow(20); window.addEventListener("resize", place);
+  // one popover at a time: opening Share closes Chat's panel, and Chat's panel closes this (panel.js)
+  const opened = () => document.dispatchEvent(new CustomEvent("dirai:popup", {detail: "share"}));
+  document.addEventListener("dirai:popup", e => { if (e.detail !== "share") pop.classList.remove("open"); });
   let st = null, poll = null, msg = "";
   const MARK = {true: ["#2f7d4a", "✓"], false: ["#c0392b", "✗"], null: ["#bbb", "–"], run: ["#c77c1e", "…"]};
   const mark = ok => { const [c, t] = MARK[ok]; return `<span class="mk" style="background:${c}">${t}</span>`; };
@@ -70,7 +80,7 @@
       };
       pop.querySelector("[data-ask]").onclick = () => window.open(issue, "_blank", "noopener");
     });
-    pill.onclick = () => pop.classList.toggle("open");
+    pill.onclick = () => { if (pop.classList.toggle("open")) opened(); };
     return;
   }
 
@@ -116,7 +126,7 @@
   }
   pill.onclick = () => {
     pop.classList.toggle("open");
-    if (pop.classList.contains("open")) { pop.innerHTML = '<div class="dim">Checking GitHub on this machine…</div>'; load(); }
+    if (pop.classList.contains("open")) { opened(); pop.innerHTML = '<div class="dim">Checking GitHub on this machine…</div>'; load(); }
   };
   const fixOp = op => op === "open_org" ? null : op;
   function jobBox(j, op) {

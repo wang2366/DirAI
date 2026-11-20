@@ -477,8 +477,11 @@
   const refresh = () => api("state?agent=" + encodeURIComponent(AGENT)).then(render);
   const post = (path, body) => api(path, body).then(r => { if (r.error) alert(r.error); refresh(); });
 
+  // one popover at a time: opening Chat closes the others (the Share popover, share.js), and they close Chat
+  const openedChat = () => document.dispatchEvent(new CustomEvent("dirai:popup", {detail: "chat"}));
+  document.addEventListener("dirai:popup", e => { if (e.detail !== "chat") $("rv-panel").classList.remove("open"); });
   $("rv-btn").onclick = () => {
-    $("rv-panel").classList.toggle("open");
+    if ($("rv-panel").classList.toggle("open")) openedChat();
     if ($("rv-panel").classList.contains("open") && state && scrollToEnd) {   // no state yet: the first render() does it
       $("rv-thread").scrollTop = $("rv-thread").scrollHeight; scrollToEnd = false;   // first open: newest message
     }
@@ -585,7 +588,7 @@
   window.addEventListener("dragenter", e => {
     if (!isFileDrag(e)) return;
     dragDepth++;
-    $("rv-panel").classList.add("open", "rv-dragging");
+    $("rv-panel").classList.add("open", "rv-dragging"); openedChat();
   });
   window.addEventListener("dragleave", e => {
     if (isFileDrag(e) && --dragDepth <= 0) dragDepth = 0, $("rv-panel").classList.remove("rv-dragging");
