@@ -517,12 +517,24 @@ class Shares:
         old = s["targets"].get(agent, {}).get(full, {}).get("slug")
         if old:
             return old
+        back = self.origin_slug(agent, full)
+        if back:
+            return back
         base = clean_name(os.path.basename(agent) or "tree")
         used = {t[full]["slug"] for a, t in s["targets"].items() if full in t and a != agent}
         slug, i = base, 2
         while slug in used:
             slug, i = "%s-%d" % (base, i), i + 1
         return slug
+
+    def origin_slug(self, agent, full):
+        """A copy (Copy to my tree) published to the repo it came from goes back to its place there: the
+        slug in its .dirai-origin (e.g. fit/demo for a child), if that names this repo and a safe path."""
+        o = dirai_config.load_json(os.path.join(self.root, agent, ".dirai-origin"), None)
+        if not isinstance(o, dict) or o.get("repo") != full or not isinstance(o.get("slug"), str):
+            return None
+        parts = o["slug"].split("/")
+        return o["slug"] if all(p and p == clean_name(p) for p in parts) else None
 
     def changed(self, agent, full, slug):
         """How many files differ between the folder and what was published (None: not published here)."""
@@ -570,8 +582,16 @@ class Shares:
                 clone = self.clone_dir(full, mine=True)
                 pslug = self.slug(s, agent, full)
                 todo = [(agent, pslug)] + [(c, self.slug(s, c, full, pslug, agent)) for c in children]
+                # one folder of this tree per place in the repo: a copy going back to a place that another
+                # folder (its original) holds is refused, rather than silently taking it over
+                taken = ["%s is already shared at %s in %s: publish from there, or unshare it first" % (b, slug, full)
+                         for a, slug in todo for b, ts in sorted(s["targets"].items())
+                         if b != a and ts.get(full, {}).get("slug") == slug]
+                if taken:
+                    errors.extend(taken)
+                    continue
                 for a, slug in todo:
-                    old = s["targets"].get(a, {}).get(full, {}).get("slug")
+                    old =s["targets"].get(a, {}).get(full, {}).get("slug")
                     if old and old != slug and not slug.startswith(old + "/"):
                         # published before elsewhere (alone, or as <parent>--<child>): it moves inside its parent
                         for b in self.inside(s, a, full):
@@ -603,6 +623,13 @@ class Shares:
                 now = time.strftime("%Y-%m-%dT%H:%M:%S")
                 for a, slug in todo:
                     s["targets"].setdefault(a, {})[full] = {"slug": slug, "commit": head, "published": now}
+                    if self.origin_slug(a, full) == slug:
+                        # a copy that went back: its origin is now this commit, so it isn't shown
+                        # as "a newer version" of itself
+                        p = os.path.join(self.root, a, ".dirai-origin")
+                        o = dirai_config.load_json(p, {})
+                        o["commit"] = git(clone, "log", "-1", "--format=%H", "--", "agents/" + slug)[1]
+                        dirai_config.save_json(p, o, indent=1)
             self.save(s)
             return errors
 

@@ -210,6 +210,37 @@ class TestShares(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(mine, "fit")))
         self.assertEqual(self.s.state()["targets"], {})
 
+    def test_copy_publishes_back_to_its_place(self):
+        # a child copied out of the shared repo goes back to its place there (fit/demo), not to a new demo/
+        self.s.act({"op": "publish", "repos": [FULL], "children": ["proj/fit/demo"]}, "proj/fit")
+        self.assertIsNone(self.s.connect(FULL))
+        self.assertIsNone(self.s.copy("www/shares/%s/agents/fit/demo" % FULL, "copies/demo"))
+        util.write(os.path.join(self.root, "copies/demo/index.html"), "<h1>Demo v2</h1>")
+        # the original still holds that place in this tree: refused, and nothing changes
+        r = self.s.act({"op": "publish", "repos": [FULL]}, "copies/demo")
+        self.assertIn("proj/fit/demo is already shared at fit/demo", r.get("error", ""))
+        self.assertNotIn("copies/demo", self.s.state()["targets"])
+        # once the original is unshared there, the copy goes back to fit/demo
+        self.assertEqual(self.s.act({"op": "unshare", "repos": [FULL], "agents": ["proj/fit/demo"]}, "proj/fit"), {"ok": True})
+        self.assertEqual(self.s.act({"op": "publish", "repos": [FULL]}, "copies/demo"), {"ok": True})
+        t = self.s.state()["targets"]
+        self.assertEqual(t["copies/demo"][FULL]["slug"], "fit/demo")
+        self.assertNotIn("proj/fit/demo", t)
+        # and now the original, ticked in its parent's Publish, is the one refused
+        self.assertIn("copies/demo is already shared at fit/demo",
+                      self.s.act({"op": "publish", "repos": [FULL], "children": ["proj/fit/demo"]}, "proj/fit").get("error", ""))
+        mine = os.path.join(self.s.clone_dir(FULL, mine=True), "agents")
+        with open(os.path.join(mine, "fit/demo/index.html")) as f:
+            self.assertEqual(f.read(), "<h1>Demo v2</h1>")
+        self.assertFalse(os.path.exists(os.path.join(mine, "demo")))
+        self.assertIsNone(self.s.fetch(FULL))
+        self.assertEqual(self.s.origin("copies/demo")["files"], [])   # its own Publish isn't "a newer version"
+        # a copy whose origin is another repo gets a name of its own
+        util.write(os.path.join(self.root, "copies/x/index.html"), "<h1>X</h1>")
+        util.write(os.path.join(self.root, "copies/x/.dirai-origin"), '{"repo": "alice-dirai/alice_agent_repo", "slug": "x/y"}')
+        self.assertEqual(self.s.act({"op": "publish", "repos": [FULL]}, "copies/x"), {"ok": True})
+        self.assertEqual(self.s.state()["targets"]["copies/x"][FULL]["slug"], "x")
+
     def test_slugs_stay_unique(self):
         util.write(os.path.join(self.root, "other/fit/index.html"), "<h1>Other</h1>")
         self.s.act({"op": "publish", "repos": [FULL]}, "proj/fit")
