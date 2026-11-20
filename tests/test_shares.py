@@ -111,6 +111,14 @@ class TestShares(unittest.TestCase):
                          [("fit", None, "Fit results"), ("fit/demo", "fit", "Demo")])
         self.assertEqual(reader.shared_page("www/shares/%s/agents/fit/demo" % FULL)["slug"], "fit/demo")
         self.assertEqual(box["owner"], "wang-dirai")
+        # its tick in the Machines map: out of the agent list and back; the clone stays connected
+        self.assertTrue(box["listed"])
+        self.assertEqual(reader.act({"op": "unlist", "repo": FULL}), {"ok": True})
+        self.assertFalse(reader.box(FULL)["listed"])
+        self.assertEqual(len(reader.box(FULL)["agents"]), 2)
+        self.assertIn("error", reader.act({"op": "unlist", "repo": "someone/else_agent_repo"}))
+        self.assertEqual(reader.act({"op": "list", "repo": FULL}), {"ok": True})
+        self.assertTrue(reader.box(FULL)["listed"])
 
         # the reader copies it into their tree
         page = "www/shares/%s/agents/fit" % FULL

@@ -672,8 +672,9 @@
   }
   function gitNode(g, tid) {
     tid = esc(tid || "");
-    return `<div class="tnode git" title="${esc(g.full)}: a shared agent repo, cloned into this server's www/shares/">` +
+    return `<div class="tnode git${g.listed === false ? " hid" : ""}" title="${esc(g.full)}: a shared agent repo, cloned into this server's www/shares/">` +
       `<button class="x" data-sop="disconnect" data-stree="${tid}" data-repo="${esc(g.full)}" title="Disconnect: delete the clone (your access stays)">×</button>` +
+      `<input type="checkbox" data-slist="${tid}" data-repo="${esc(g.full)}" ${g.listed === false ? "" : "checked"} title="Show this repo's agents in this list (unticked: they stay connected and fetched, and agents can still find them as colleagues)">` +
       `<a href="${esc((g.web || "https://github.com/" + g.full) + "/tree/HEAD/agents")}" target="_blank" rel="noopener" title="Its agents/ folder on GitHub, in a new tab"><b>${esc(g.owner)}${g.name !== g.owner ? " · " + esc(g.name) : ""}</b></a>${g.host && g.host !== "github.com" ? ` <span class="dim">@ ${esc(g.host)}</span>` : ""}<br>` +
       `<span class="dim">shared · read-only</span><br>` +
       `${g.agents.length} agent${g.agents.length === 1 ? "" : "s"}${g.updated ? ` · <b>${g.updated} updated</b>` : ""} <span class="dim">· fetched ${esc(g.fetched.slice(5, 16).replace("T", " "))}</span>
@@ -1019,6 +1020,20 @@
           .then(r => r.json()).catch(err => ({error: String(err)}))
           .then(r => { if (r.error) actMsg = "GitHub: " + r.error; lastMap = ""; machines(); });
       });
+      // a connected repo's tick: its agents in the list or not; shown at once, then saved by the tree holding the clone
+      el.querySelectorAll("input[data-slist]").forEach(c => c.onchange = () => {
+        const tid = c.dataset.slist, t = tid && curRep.trees.find(x => x.id === tid);
+        const sh = tid ? t && t.shares : curRep.shares;
+        ((sh && sh.connected) || []).forEach(g => { if (g.full === c.dataset.repo) g.listed = c.checked; });
+        c.parentElement.classList.toggle("hid", !c.checked);
+        lastMap = "";
+        syncRemote(curRep);
+        const body = {op: c.checked ? "list" : "unlist", repo: c.dataset.repo};
+        if (tid) return remoteAct({op: "call", tree: tid, path: "share", data: body});
+        fetch("/_review/share", {method: "POST", headers: {"Content-Type": "application/json", "X-Review": "1"}, body: JSON.stringify(body)})
+          .then(r => r.json()).catch(err => ({error: String(err)}))
+          .then(r => { if (r.error) actMsg = "GitHub: " + r.error; });
+      });
       // a tree's tick: its agents in the list (both tabs); shown at once, then saved on the server
       // (curRep, not rep: the handlers of a kept map act on the latest reply)
       el.querySelectorAll("input[data-tree]").forEach(c => c.onchange = () => {
@@ -1089,7 +1104,7 @@
     // this server's (old2, no data-tree) and those of each tree shown (in old, with that tree's rows)
     const old2 = {};
     allRows().filter(tr => tr.dataset.shared && !tr.dataset.tree).forEach(tr => old2[tr.dataset.agent] = tr);
-    const sharedRows = (sh, t, olds, pre) => ((sh && sh.connected) || []).forEach(g => g.agents.forEach(a => {
+    const sharedRows = (sh, t, olds, pre) => ((sh && sh.connected) || []).filter(g => g.listed !== false).forEach(g => g.agents.forEach(a => {
       const path = a.url.replace(/^\/+|\/+$/g, ""), k = pre + path;
       const label = (t ? t.via[t.via.length - 1] + ": " : "") + `${g.owner} / ${g.full.split("/").pop()} / ${a.slug} · shared, read-only`;
       const href = t ? (t.fport ? remoteUrl(t, a.url) : "") : a.url;

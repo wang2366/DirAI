@@ -23,7 +23,8 @@ pill (1-2 make it usable, 3-4 set up your own repo); each failed one has a fix t
 Kept in www/shares.json:
   {"targets": {"<agent>": {"<owner>/<repo>": {"slug", "commit", "published"}}},
    "mode": {"<agent>": "run"},              (absent: by hand; "run": republished when it changed, per pass)
-   "connected": {"<owner>/<repo>": {"fetched", "updated": [slugs not opened since the fetch]}}}
+   "connected": {"<owner>/<repo>": {"fetched", "updated": [slugs not opened since the fetch],
+                                    "unlisted": true when its agents are kept out of the agent list}}}
 Clones: www/shares/<owner>/<repo>/ (others' repos), www/shares/.mine/<owner>/<repo>/ (yours, to publish).
 """
 import json
@@ -780,6 +781,21 @@ class Shares:
             self.found(force=True)
             self.checks(force=True)
 
+    def list_agents(self, full, listed=True):
+        """A connected repo's agents in this tree's agent list (rows of the home page), or not; the clone,
+        its fetches and the colleague search stay as they are."""
+        with self.lock:
+            s = self.state()
+            c = s["connected"].get(full)
+            if c is None:
+                return "not connected"
+            if listed:
+                c.pop("unlisted", None)
+            else:
+                c["unlisted"] = True
+            self.save(s)
+        return None
+
     def seen(self, full, slug):
         with self.lock:
             s = self.state()
@@ -824,7 +840,7 @@ class Shares:
         host, nwo = split_full(full)
         owner, repo = nwo.split("/")
         return {"full": full, "name": repo[:-len(SUFFIX)] if repo.endswith(SUFFIX) else repo, "owner": owner,
-                "repo": repo, "host": host, "web": web_url(full),
+                "repo": repo, "host": host, "web": web_url(full), "listed": not c.get("unlisted"),
                 "fetched": c.get("fetched", ""), "updated": len(c.get("updated", [])), "agents": agents}
 
     def report(self):
@@ -1147,6 +1163,9 @@ class Shares:
             return {"error": why} if why else {"ok": True}
         if op == "disconnect":
             why = self.disconnect(str(body.get("repo") or ""))
+            return {"error": why} if why else {"ok": True}
+        if op in ("list", "unlist"):      # a connected repo's agents in this tree's agent list, or not
+            why = self.list_agents(str(body.get("repo") or ""), op == "list")
             return {"error": why} if why else {"ok": True}
         if op == "fetch":
             full = str(body.get("repo") or "")
