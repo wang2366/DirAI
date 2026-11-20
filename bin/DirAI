@@ -1,0 +1,405 @@
+#!/bin/bash
+# DirAI: serve a folder (the "tree") as agents: every folder holding an index.html is one, browsable
+# in the browser, with an AI agent working in it.
+# Run it anywhere inside a tree: it acts on the nearest folder at or above you holding www/dirai.json,
+# else on the git repo you are in. `DirAI start` sets up that folder the first time (or the current
+# one if neither exists; outside git it asks first); the tree doesn't have to be a git repo.
+#
+#   DirAI start [NODE|--job]   start this tree's server on this machine (default), on NODE,
+#                              or as its own sbatch job (--job); the first time, set the tree up
+#                              first: www/dirai.json (port), .gitignore lines, CLAUDE.md import.
+#                              Opens the agent list logged in when a browser is at hand (--no-open: don't)
+#   DirAI status               is it alive? node, port, job time left
+#   DirAI restart              reload in place: same node/port, current code, fresh agent list
+#                              (opens it like start; --no-open: don't)
+#   DirAI stop                 stop this tree's server
+#   DirAI forget [PATH]        stop it if it runs and drop it from the list of trees (folder kept;
+#                              PATH: that tree, also one whose folder is already deleted)
+#   DirAI build                rebuild this tree's agent list (www/index.html) now
+#   DirAI list [--json]        every tree DirAI has started, and whether it is up (--json: with
+#                              this machine's owner key, for a DirAI server upstream reading it over ssh)
+#   DirAI pull                 update DirAI's own git checkout (git pull --ff-only; refused if it can't
+#                              fast-forward), then restart this tree's server once no agent run is going
+#   DirAI -C DIR <command>     act on the tree holding DIR instead of the current directory
+# Each tree has its own server, port and state (www/), so trees start and stop independently;
+# trees may not overlap while running. Trees on other machines: add the machine under Machines
+# in your own agent list. (`DirAI init` still sets a tree up without starting it, for scripts.)
+set -uo pipefail
+
+TOOL=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+CONFIG_DIR=${DIRAI_CONFIG_DIR:-$HOME/.config/dirai}
+TREES_FILE=$CONFIG_DIR/trees
+# CLAUDE.md imports the agent rules from this fixed path, a link to this checkout's AGENT_RULE.md, so the
+# committed import line is the same on every machine wherever DirAI was cloned (kept fixed even
+# when DIRAI_CONFIG_DIR is set, since the import line can't follow it)
+RULE_LINK=$HOME/.config/dirai/AGENT_RULE.md
+RULE_IMPORT='@~/.config/dirai/AGENT_RULE.md'
+# import lines of earlier versions, rewritten to RULE_IMPORT (the file was PAGES.md, and before
+# that DirAI had to live in ~/DirAI); the old link is kept too, for trees not started since
+OLD_IMPORTS=('@~/DirAI/PAGES.md' '@~/.config/dirai/PAGES.md')
+OLD_LINK=$HOME/.config/dirai/PAGES.md
+SSH="ssh -o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=10"
+
+if [[ "${1:-}" == -C ]]; then cd "${2:?-C needs a directory}" || exit 1; shift 2; fi
+NAMED=${1:+1}     # a command was typed: a bare "DirAI" starts an existing tree but never sets one up
+CMD=${1:-start}
+[[ $# -gt 0 ]] && shift
+NO_OPEN=; ARGS=()
+for a in "$@"; do if [[ "$a" == --no-open ]]; then NO_OPEN=1; else ARGS+=("$a"); fi; done
+set -- ${ARGS[@]+"${ARGS[@]}"}
+
+find_root() {   # the nearest folder at or above here holding www/dirai.json, else the git repo's top
+    local d; d=$(pwd -P)
+    while :; do
+        [[ -s $d/www/dirai.json ]] && { echo "$d"; return 0; }
+        [[ $d == / ]] && break
+        d=$(dirname "$d")
+    done
+    git rev-parse --show-toplevel 2>/dev/null
+}
+
+case "$CMD" in -h|--help|help) sed -n '2,26p' "$0"; exit 0 ;; list|forget) ;; *)   # forget finds its own tree
+    ROOT=$(find_root)
+    if [[ -z "$ROOT" ]]; then
+        [[ "$CMD" == init || ( "$CMD" == start && -n "$NAMED" ) ]] ||
+            { echo "No DirAI tree here or above; run  DirAI start  in the folder to serve (or use DirAI -C DIR)." >&2; exit 1; }
+        ROOT=$PWD
+    fi
+    ROOT=$(cd "$ROOT" && pwd -P)
+    DATA=$ROOT/www
+    HOST_FILE=$DATA/server_host.txt
+    IS_GIT=0; git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 && IS_GIT=1
+esac
+
+cfg() {   # cfg KEY [TREE]: a value from the tree's dirai.json (lists space-separated)
+    python3 - "$TOOL/lib" "${2:-$ROOT}" "$1" <<'EOF'
+import sys; sys.path.insert(0, sys.argv[1]); import dirai_config as c
+v = c.tree_config(sys.argv[2]).get(sys.argv[3])
+print(" ".join(v) if isinstance(v, list) else ("" if v is None else v))
+EOF
+}
+
+read_host() {
+    [[ -s "$HOST_FILE" ]] || return 1
+    read -r NODE JOB STARTED_D STARTED_T PID CAP HPORT < "$HOST_FILE"
+}
+
+run_on() {   # run_on NODE CMD: on this machine if NODE is this host, else over ssh
+    if [[ "$1" == "$(hostname -s)" ]]; then bash -c "$2"; else $SSH "$1" "$2"; fi
+}
+http_code() {   # http_code NODE PORT TIMEOUT: status of the agent list, asked on the node itself
+    # last line only: a login script that echoes over ssh would come first
+    run_on "$1" "curl -s -o /dev/null -m $3 -w '%{http_code}' http://127.0.0.1:$2/www/index.html" 2>/dev/null | tail -n 1
+}
+
+local_name() {   # this machine's .local (mDNS) name, if it has one
+    local n
+    if [[ "$(uname)" == Darwin ]]; then n=$(scutil --get LocalHostName 2>/dev/null)
+    else n=$(hostname -s); getent hosts "$n.local" >/dev/null 2>&1 || n=; fi
+    [[ -n "$n" ]] && echo "$(tr '[:upper:]' '[:lower:]' <<<"$n").local"
+}
+has_browser() {   # a browser opens here for the person at this terminal (not over ssh, not an agent's run)
+    [[ -t 1 && -z "${SSH_CONNECTION:-}" ]] || return 1
+    [[ "$(uname)" == Darwin ]] || { [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v "${DIRAI_BROWSER:-xdg-open}" >/dev/null; }
+}
+browse() {   # browse URL: open it in DIRAI_BROWSER, else the default browser
+    if [[ "$(uname)" == Darwin ]]; then open ${DIRAI_BROWSER:+-a "$DIRAI_BROWSER"} "$1"
+    else "${DIRAI_BROWSER:-xdg-open}" "$1" >/dev/null 2>&1 & fi
+}
+open_lines() {   # open_lines NODE PORT [open]: lines that open the agent list logged in; with open, opens it too
+    # the lines hold $(cat KEYFILE), not the key, so it stays out of scrollback and logs
+    local node=$1 port=$2 b h k="'$CONFIG_DIR/key'"
+    if [[ "$node" != "$(hostname -s)" ]]; then   # no browser where the server runs: open it from the laptop
+        echo "To open it from your laptop: add this machine under Machines in your laptop's agent list"; return 0
+    fi
+    [[ "$CONFIG_DIR" == "$HOME"/* && "$CONFIG_DIR" =~ ^[A-Za-z0-9._/-]+$ ]] && k="~${CONFIG_DIR#"$HOME"}/key"
+    if [[ "$(uname)" == Darwin ]]; then b="open${DIRAI_BROWSER:+ -a \"$DIRAI_BROWSER\"}"; else b=${DIRAI_BROWSER:-xdg-open}; fi
+    if [[ "${3:-}" == open && -z "$NO_OPEN" ]] && has_browser && [[ -r "$CONFIG_DIR/key" ]]; then
+        browse "http://127.0.0.1:$port/_review/login?key=$(cat "$CONFIG_DIR/key")" &&
+            echo "Opened it in the browser (logged in). To open it again:"
+    else
+        echo "Open it (logged in):"
+    fi
+    echo "! $b \"http://127.0.0.1:$port/_review/login?key=\$(cat $k)\""
+    if [[ "$(cfg bind)" != 127.0.0.1 ]] && h=$(local_name); then
+        echo "! $b \"http://$h:$port/_review/login?key=\$(cat $k)\""
+        echo "  (the .local link logs in on this machine only; from another computer, add this machine under Machines there)"
+    fi
+}
+
+nested_tree() {   # a running tree inside this one or holding it: both would serve the same agents
+    local t
+    while read -r t; do
+        [[ -n "$t" && "$t" != "$ROOT" && -s "$t/www/server_host.txt" ]] || continue
+        [[ "$ROOT" == "$t"/* || "$t" == "$ROOT"/* ]] && { echo "$t"; return 0; }
+    done < <(cat "$TREES_FILE" 2>/dev/null)
+    return 1
+}
+
+port_busy() {   # port_busy NODE PORT: something on NODE already accepts connections there (e.g. an ssh
+                # tunnel on 127.0.0.1, which a bind to 0.0.0.0 would not notice)
+    run_on "$1" "python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(s.connect_ex((\"127.0.0.1\", $2)) != 0)'"
+}
+
+update_import() {   # rewrite an earlier version's import line in the tree's CLAUDE.md
+    local md=$ROOT/CLAUDE.md old
+    for old in "${OLD_IMPORTS[@]}"; do
+        if grep -qxF "$old" "$md" 2>/dev/null; then
+            sed "s|^$old\$|$RULE_IMPORT|" "$md" > "$md.tmp" && cat "$md.tmp" > "$md" && rm -f "$md.tmp"
+            echo "Changed $old to $RULE_IMPORT in CLAUDE.md"
+        fi
+    done
+}
+
+ignore_generated() {   # list DirAI's generated files in the tree's .gitignore (once each)
+    local gi=$ROOT/.gitignore line added=0
+    [[ $IS_GIT == 1 ]] || return 0
+    for line in www/dirai.json www/index.html www/server_host.txt 'www/serve_node*.log' www/agents.json \
+                www/agent_sizes.json www/agent_sizes.json.lock www/agent_tokens.json 'www/*.tmp' www/before_run/ \
+                www/machines.json www/remote_ports.json 'pasted/'; do
+        grep -qxF "$line" "$gi" 2>/dev/null || { [[ $added == 0 ]] && echo "# generated by DirAI" >> "$gi"; echo "$line" >> "$gi"; added=1; }
+    done
+    [[ $added == 1 ]] && echo "Added DirAI's generated files to .gitignore"
+    return 0
+}
+
+register() {   # on init and start: the rules link, CLAUDE.md, .gitignore, the list of trees
+    mkdir -p "$CONFIG_DIR" "$(dirname "$RULE_LINK")"
+    ln -sfn "$TOOL/AGENT_RULE.md" "$RULE_LINK"   # repoint it if this checkout moved
+    ln -sfn "$TOOL/AGENT_RULE.md" "$OLD_LINK"
+    update_import
+    ignore_generated
+    grep -qxF "$ROOT" "$TREES_FILE" 2>/dev/null || echo "$ROOT" >> "$TREES_FILE"
+}
+
+status() {
+    local port; port=$(cfg port)
+    echo "tree:    $ROOT"
+    if ! read_host; then
+        echo "DOWN: no $HOST_FILE (server not running, or started <30 s ago)"
+        return 1
+    fi
+    echo "node:    $NODE"
+    echo "port:    ${HPORT:-$port}"
+    echo "started: $STARTED_D $STARTED_T"
+    if [[ "$JOB" != nojob ]]; then
+        local left; left=$(PYTHONPATH=$TOOL/lib python3 -c 'import sys, slurm as p
+j = [j for j in p.active_jobs() or [] if j["id"] == sys.argv[1]]
+print("%s, %s left" % (j[0]["state"], j[0]["left"]) if j else "")' "$JOB" 2>/dev/null)   # sacct: squeue is slow here
+        echo "job:     $JOB (${left:-not in queue anymore})"
+    fi
+    echo "list:    built $(date -r "$DATA/index.html" '+%F %T' 2>/dev/null || echo never)"
+    local code; code=$(http_code "$NODE" "${HPORT:-$port}" 5)
+    [[ "$code" == 200 ]] && { echo "ALIVE"; open_lines "$NODE" "${HPORT:-$port}"; return 0; }
+    echo "NOT ANSWERING (${code:-no answer})"; return 1
+}
+
+port_in_use_by_other_tree() {   # another registered tree with the same port that is up
+    local port=$1 t
+    while read -r t; do
+        [[ -n "$t" && "$t" != "$ROOT" && -s "$t/www/server_host.txt" ]] || continue
+        [[ "$(cfg port "$t")" == "$port" ]] && { echo "$t"; return 0; }
+    done < <(cat "$TREES_FILE" 2>/dev/null)
+    return 1
+}
+
+start() {
+    if [[ ! -s "$DATA/dirai.json" ]]; then     # the first start here: set the tree up
+        [[ -n "$NAMED" ]] || { echo "$ROOT isn't a DirAI tree yet; to serve it: DirAI start" >&2; return 1; }
+        if [[ $IS_GIT == 0 && -t 0 ]]; then    # outside git, any folder could become a tree by a stray start: ask
+            local ans; read -r -p "Serve $ROOT as a new DirAI tree? [Y/n] " ans
+            [[ $ans == [nN]* ]] && { echo "Nothing set up."; return 1; }
+        fi
+        echo "Setting up a new DirAI tree at $ROOT"
+        setup_tree || return 1
+    fi
+    local port other; port=$(cfg port)
+    if read_host && status >/dev/null 2>&1; then
+        echo "Already running on $NODE:${HPORT:-$port}"; open_lines "$NODE" "${HPORT:-$port}" open; return 0
+    fi
+    if other=$(port_in_use_by_other_tree "$port"); then
+        echo "Port $port is already used by $other; change \"port\" in $DATA/dirai.json." >&2; return 1
+    fi
+    if other=$(nested_tree); then
+        echo "$other is running and overlaps this tree (one would serve the other's agents); stop it first: DirAI -C $other stop" >&2; return 1
+    fi
+    # server_host.txt names a server that doesn't answer (hung, or died without its cleanup): make sure
+    # it is gone before starting another, maybe on another node, or two servers would share www/agents.json
+    if read_host; then
+        if python3 -c 'import os, sys, time; sys.exit(time.time() - os.path.getmtime(sys.argv[1]) > 60)' "$HOST_FILE" 2>/dev/null; then
+            echo "Its server on $NODE started under a minute ago and may still be coming up; try again in a minute" >&2; return 1
+        fi
+        stop_leftover
+    fi
+    register
+    if [[ "${1:-}" == --job ]]; then
+        # extra sbatch options (account, partition, time) from dirai.json "slurm", e.g. ["-A","grp","-p","cpu"]
+        sbatch -J "dirai-$(basename "$ROOT")" -n 1 -c 1 --mem=2G -o "$DATA/serve_node.%j.log" \
+            $(cfg slurm) "$TOOL/bin/dirai_serve" "$ROOT"
+        return
+    fi
+    local node=${1:-}
+    [[ -z "$node" || "$node" == --here ]] && node=$(hostname -s)   # default: where DirAI was run
+    if run_on "$node" "pgrep -u $USER -f '[d]irai_serve $ROOT\$' >/dev/null"; then
+        echo "Already running on $node (server_host.txt may take ~30 s to show up)"; open_lines "$node" "$port" open; return 0
+    fi
+    if port_busy "$node" "$port"; then
+        echo "Port $port on $node is already taken by another program (an ssh tunnel? see: lsof -nP -iTCP:$port -sTCP:LISTEN); change \"port\" in $DATA/dirai.json." >&2
+        return 1
+    fi
+    # own session, so it outlives this shell and its stop (kill 0) reaches only itself; macOS has no
+    # setsid command, so fall back to Python's os.setsid there
+    run_on "$node" "if command -v setsid >/dev/null; then S=setsid; else S='python3 -c \"import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])\"'; fi;
+        eval \"\$S nohup '$TOOL/bin/dirai_serve' '$ROOT' > '$DATA/serve_node.log' 2>&1 < /dev/null &\"" &&
+        echo "Started $ROOT on $node:$port (log: $DATA/serve_node.log)"
+    SECONDS=0
+    while (( SECONDS < 120 )); do
+        [[ "$(http_code "$node" "$port" 3)" == 200 ]] &&
+            { echo "Up on $node, port $port"
+              open_lines "$node" "$port" open
+              return 0; }
+        sleep 2
+    done
+    echo "Not answering after 2 min; check $DATA/serve_node.log" >&2; return 1
+}
+
+pull() {   # DirAI's own checkout (lib/self_update.py: checks, git pull --ff-only), then restart once idle
+    PYTHONPATH="$TOOL/lib" python3 "$TOOL/lib/self_update.py" pull || return 1
+    { read_host && status >/dev/null 2>&1; } || return 0     # this tree's server isn't running: nothing to restart
+    local n
+    while n=$(PYTHONPATH="$TOOL/lib" python3 -c 'import sys, self_update as s; print(s.tree_runs(sys.argv[1]))' "$ROOT") &&
+          (( n > 0 )); do
+        echo "Restart waits: $n agent run(s) going in $ROOT (Ctrl-C, then DirAI restart later)"; sleep 10
+    done
+    restart
+}
+
+restart() {
+    local port; port=$(cfg port)
+    read_host || { echo "Not running (no $HOST_FILE). Start it with: DirAI start"; return 1; }
+    run_on "$NODE" "kill -USR1 $PID" || return 1
+    sleep 2
+    SECONDS=0
+    while (( SECONDS < 180 )); do   # ask the node directly: server_host.txt can lag on NFS
+        [[ "$(http_code "$NODE" "${HPORT:-$port}" 3)" == 200 ]] &&
+            { echo "Back up on $NODE after $((SECONDS + 2)) s"; open_lines "$NODE" "${HPORT:-$port}" open; return 0; }
+        sleep 2
+    done
+    echo "Not answering after 3 min; check: DirAI status" >&2; return 1
+}
+
+stop() {
+    read_host || { echo "Not running"; return 0; }
+    run_on "$NODE" "kill -TERM $PID"     # its cleanup trap stops the Python server
+    if [[ "$JOB" != nojob ]] && [[ "$(sacct -X -n -P -j "$JOB" --state=PENDING,RUNNING -o JobName 2>/dev/null)" == dirai-* ]]; then
+        scancel "$JOB"   # its own job; never cancels a job you started for something else
+    fi
+    rm -f "$HOST_FILE"
+    echo "Stopped $ROOT"
+}
+
+forget() {   # forget [PATH]: stop the tree's server if it runs, then drop the tree from TREES_FILE (the
+    # Machines box, DirAI list, New tree…'s path list). The folder, www/ and the agents' sessions are kept,
+    # and DirAI start there brings it back. PATH may be a folder already deleted: then only its line goes.
+    local p=${1:-} kept="folder kept"
+    if [[ -n "$p" && ! -d "$p" ]]; then
+        ROOT=${p%/}; [[ "$ROOT" == /* ]] || ROOT=$PWD/$ROOT; kept="its folder is already gone"
+    else
+        [[ -n "$p" ]] && { cd "$p" || return 1; }
+        ROOT=$(find_root)
+        [[ -n "$ROOT" ]] || { echo "No DirAI tree here or above; give its path: DirAI forget PATH" >&2; return 1; }
+        ROOT=$(cd "$ROOT" && pwd -P)
+        # a PATH inside a tree is not that tree: never forget the enclosing one by mistake
+        if [[ -n "$p" && "$ROOT" != "$(pwd -P)" ]]; then
+            echo "$(pwd -P) is not a tree (it is inside $ROOT); to forget that one: DirAI forget $ROOT" >&2; return 1
+        fi
+        DATA=$ROOT/www; HOST_FILE=$DATA/server_host.txt
+        read_host && stop
+    fi
+    if ! grep -qxF "$ROOT" "$TREES_FILE" 2>/dev/null; then
+        echo "$ROOT is not in $TREES_FILE (forgotten already?)"; return 0
+    fi
+    grep -vxF "$ROOT" "$TREES_FILE" > "$TREES_FILE.tmp$$"; mv "$TREES_FILE.tmp$$" "$TREES_FILE"
+    echo "Forgot $ROOT ($kept)"
+}
+
+stop_leftover() {   # after read_host: stop the not-answering server it names, if it still runs, and drop the file
+    echo "The last server ($NODE, pid $PID, $JOB) isn't answering: making sure it is gone first"
+    # its wrapper leads its own process group (setsid): TERM the group, KILL it after 10 s. Only while that
+    # pid is still this tree's dirai_serve (a pid can be reused); a node that can't be reached fails the check
+    local alive="ps -o args= -p $PID 2>/dev/null | grep -q '[d]irai_serve $ROOT\$'" i
+    if run_on "$NODE" "$alive" 2>/dev/null; then
+        run_on "$NODE" "kill -TERM -- -$PID 2>/dev/null || kill -TERM $PID"
+        for i in 1 2 3 4 5 6 7 8 9 10; do run_on "$NODE" "$alive" 2>/dev/null || break; sleep 1; done
+        if run_on "$NODE" "$alive" 2>/dev/null; then
+            run_on "$NODE" "kill -KILL -- -$PID 2>/dev/null || kill -KILL $PID"; echo "  it ignored TERM: killed"
+        fi
+    fi
+    if [[ "$JOB" != nojob ]] && [[ "$(sacct -X -n -P -j "$JOB" --state=PENDING,RUNNING -o JobName 2>/dev/null)" == dirai-* ]]; then
+        scancel "$JOB"   # its own job; never a job started for something else
+    fi
+    rm -f "$HOST_FILE"
+}
+
+setup_tree() {   # the first start (or DirAI init): www/dirai.json with a free port, CLAUDE.md, .gitignore
+    local home; home=$(cd "$HOME" && pwd -P)
+    if [[ "$ROOT" == / || "$ROOT" == "$home" ]]; then
+        echo "Refusing to serve $ROOT: its agents could read everything in it. Pick a project folder." >&2; return 1
+    fi
+    mkdir -p "$DATA"
+    if [[ ! -s "$DATA/dirai.json" ]]; then
+        local used port t
+        used=$(while read -r t; do [[ -n "$t" ]] && cfg port "$t"; done < <(cat "$TREES_FILE" 2>/dev/null))
+        port=8765
+        while grep -qxF "$port" <<<"$used" || port_busy "$(hostname -s)" "$port"; do port=$((port + 1)); done
+        printf '{\n "port": %d,\n "read_dirs": [],\n "allow": []\n}\n' "$port" > "$DATA/dirai.json"
+        echo "Wrote $DATA/dirai.json (port $port; local to this clone, not committed)."
+    fi
+    local md=$ROOT/CLAUDE.md ans
+    update_import
+    if ! grep -qxF "$RULE_IMPORT" "$md" 2>/dev/null; then
+        # outside git, CLAUDE.md here reaches every project below (e.g. all of ~/work): ask first
+        ans=y
+        if [[ $IS_GIT == 0 ]]; then
+            ans=n
+            [[ -t 0 ]] && read -r -p "Add $RULE_IMPORT to $md? It applies the agent rules to every Claude session under $ROOT. [y/N] " ans
+        fi
+        if [[ $ans == [yY]* ]]; then
+            printf '\n%s\n' "$RULE_IMPORT" >> "$md"
+            echo "Added $RULE_IMPORT to CLAUDE.md (agent conventions for Claude sessions)"
+        else
+            echo "Left CLAUDE.md alone (agents get the rules anyway; to add them for your own sessions: echo '$RULE_IMPORT' >> $md)"
+        fi
+    fi
+    register
+}
+
+list() {
+    # --json: for the DirAI server upstream that reaches this machine over ssh (lib/remotes.py)
+    [[ "${1:-}" == --json ]] && exec python3 "$TOOL/lib/remotes.py" --list
+    local t port
+    [[ -s "$TREES_FILE" ]] || { echo "No trees yet (run DirAI start in the folder to serve)."; return 0; }
+    while read -r t; do
+        [[ -n "$t" ]] || continue
+        port=$(cfg port "$t")
+        if [[ -s "$t/www/server_host.txt" ]]; then
+            read -r n j _ _ _ _ _ < "$t/www/server_host.txt"
+            printf '%-6s %-5s %-8s %s\n' up "$port" "$n" "$t"
+        else
+            printf '%-6s %-5s %-8s %s\n' down "$port" - "$t"
+        fi
+    done < "$TREES_FILE"
+}
+
+case "$CMD" in
+    start)   start "${1:-}" ;;
+    status)  status ;;
+    restart) restart ;;
+    stop)    stop ;;
+    forget)  forget "${1:-}" ;;
+    build)   python3 "$TOOL/lib/agent_list.py" "$ROOT" ;;
+    init)    setup_tree && echo "Ready. Start it with: DirAI start" ;;
+    list)    list "$@" ;;
+    pull)    pull ;;
+    *) sed -n '2,26p' "$0"; exit 1 ;;
+esac

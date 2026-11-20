@@ -1,0 +1,96 @@
+#!/bin/bash
+# Install or update DirAI, from a checkout you already have (the repo is private, so clone it with
+# your SSH key first):  ./install.sh
+# Run from elsewhere (e.g. piped into bash), it clones (or pulls) DirAI into $DIRAI_HOME (default
+# ~/.local/share/dirai); either way it links the DirAI command into $DIRAI_BIN (default ~/.local/bin).
+# Run it again to update: $DIRAI_HOME is made to match origin's branch exactly, whatever it holds
+# (it is a copy to run, not a checkout to develop in: local edits are dropped, old commits pruned).
+# A running DirAI keeps the old code until DirAI restart.
+#   DIRAI_REPO   where to clone from (default https://github.com/wang2366/DirAI.git; an
+#                git@github.com:... URL uses your SSH key, e.g. while the repo is private)
+#   DIRAI_REF    branch to install (default main)
+set -euo pipefail
+
+REPO=${DIRAI_REPO:-https://github.com/wang2366/DirAI.git}
+REF=${DIRAI_REF:-main}
+BIN=${DIRAI_BIN:-$HOME/.local/bin}
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'DirAI install: %s\n' "$*" >&2; exit 1; }
+
+for c in git python3 curl; do
+    command -v "$c" >/dev/null 2>&1 || die "needs $c on PATH"
+done
+python3 -c 'import sys; sys.exit(sys.version_info < (3, 6))' || die "needs Python 3.6+"
+
+# run from inside a checkout (./install.sh): install that one, without cloning
+SELF=${BASH_SOURCE[0]:-}
+if [[ -n "$SELF" && -f "$SELF" && -x "$(dirname "$SELF")/bin/DirAI" ]]; then
+    HOME_DIR=$(cd "$(dirname "$SELF")" && pwd -P)
+    say "Using this checkout: $HOME_DIR"
+else
+    HOME_DIR=${DIRAI_HOME:-$HOME/.local/share/dirai}
+    if [[ -d "$HOME_DIR/.git" ]]; then
+        say "Updating $HOME_DIR"
+        git -C "$HOME_DIR" fetch -q origin "$REF"
+        # an install is a copy of origin/$REF to run, not a place to develop: make it match exactly
+        # (local edits dropped), keep no other refs, and prune the rest, so commits that are no
+        # longer on GitHub (e.g. a rewritten history) leave this disk too
+        G=(git -C "$HOME_DIR")
+        "${G[@]}" checkout -q -f -B "$REF" "origin/$REF" ||
+            die "couldn't reset $HOME_DIR to origin/$REF; move it away (mv $HOME_DIR $HOME_DIR.old) and rerun"
+        "${G[@]}" for-each-ref --format='%(refname)' refs/heads refs/remotes refs/tags refs/stash |
+            grep -vx -e "refs/heads/$REF" -e "refs/remotes/origin/$REF" |
+            while read -r ref; do "${G[@]}" update-ref --no-deref -d "$ref"; done || true
+        "${G[@]}" reflog expire --expire=now --all
+        "${G[@]}" gc -q --prune=now
+    elif [[ -e "$HOME_DIR" ]]; then
+        die "$HOME_DIR exists and is not a git checkout; move it or set DIRAI_HOME"
+    else
+        say "Cloning $REPO into $HOME_DIR"
+        mkdir -p "$(dirname "$HOME_DIR")"
+        git clone -q --branch "$REF" "$REPO" "$HOME_DIR" \
+            || die "clone failed (a private repo needs DIRAI_REPO=git@github.com:wang2366/DirAI.git)"
+    fi
+fi
+
+mkdir -p "$BIN"
+ln -sfn "$HOME_DIR/bin/DirAI" "$BIN/DirAI"
+say "Linked $BIN/DirAI -> $HOME_DIR/bin/DirAI"
+
+# repoint ~/.config/dirai/AGENT_RULE.md if a running tree's checkout moved (DirAI start does this too)
+mkdir -p "$HOME/.config/dirai"
+ln -sfn "$HOME_DIR/AGENT_RULE.md" "$HOME/.config/dirai/AGENT_RULE.md"
+
+CLAUDE=${DIRAI_CLAUDE_CMD:-${REVIEW_CLAUDE_CMD:-$HOME/.local/bin/claude}}
+if [[ ! -x "$CLAUDE" ]]; then
+    say ""
+    say "Claude Code not found at $CLAUDE. Install it with"
+    say "    curl -fsSL https://claude.ai/install.sh | bash"
+    say "or set DIRAI_CLAUDE_CMD to its path."
+fi
+
+# optional models that don't use the Claude limits; an agent's panel offers the ones it finds
+GENAI_KEY=${DIRAI_GENAI_KEY_FILE:-$HOME/.config/purdue_llm/api_key}
+say ""
+say "Models besides Claude's (optional; an agent's panel offers only the ones found):"
+if [[ -s "$GENAI_KEY" ]]; then
+    say "  Purdue GenAI Studio: key found ($GENAI_KEY)"
+else
+    say "  Purdue GenAI Studio: no key. Make one at https://genai.rcac.purdue.edu (Settings > Account >"
+    say "    API Keys) and save it in $GENAI_KEY (chmod 600)"
+fi
+if curl -sf -m 2 "http://${OLLAMA_HOST:-127.0.0.1:11434}/api/tags" >/dev/null 2>&1; then
+    say "  Ollama: running at ${OLLAMA_HOST:-127.0.0.1:11434} (checked again where the server runs)"
+else
+    say "  Ollama: not running here (only needed for the local gpt-oss models)"
+fi
+
+case ":$PATH:" in *":$BIN:"*) ;; *)
+    say ""
+    say "$BIN is not on your PATH. Add this to ~/.bashrc (or your shell's rc file):"
+    say "    export PATH=\"$BIN:\$PATH\""
+esac
+
+say ""
+say "Done. Next, in the folder to serve:  DirAI start"

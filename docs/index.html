@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DirAI user guide, README and its figures</title>
+</head>
+<body>
+<main>
+
+<h1>DirAI user guide, README and its figures</h1>
+<p class="lede">The <a href="#guide">user guide</a>, and the home of DirAI's <code>README.md</code> work: the figures it shows, the scripts that draw them, its opening and the claims behind it. Lead with what a user gets: <b>agents that work 24/7</b>, and <b>every machine in one list, where every folder is an agent with a memory</b>.</p>
+
+<!-- dirai:card -->
+<details id="dirai-card" open>
+  <summary>Summary</summary>
+  <dl>
+    <dt>Objective</dt> <dd>Hold the user guide (install, trees, the agent list and panel, agent rules, permissions, settings, commands). Keep DirAI's <code>README.md</code> clear and selling: a newcomer understands in 10 seconds why to try DirAI. Hold its figures and their scripts.</dd>
+    <dt>Inputs</dt>    <dd><code>README.md</code> here (the root <code>README.md</code> is a link to it), <code>web/agent_list.js</code>, <code>web/files.js</code>, <code>web/panel.js</code>, <code>lib/remotes.py</code>, <code>lib/server.py</code>, <code>lib/claude_usage.py</code>, proposal 64 (<code>improvement/readme-pitch</code>, moved here 2026-11-11).</dd>
+    <dt>Outputs</dt>   <dd><code>README.md</code> (the repo's README; the root <code>README.md</code> links here), <code>overview.svg</code> (<code>overview.py</code>, at its top), <code>ssh_config_demo.gif</code>, <code>connect_demo.gif</code> and <code>new_tree_demo.gif</code> (all from <code>ssh_config_demo.py</code>, in README "Add a machine"), <code>hero.svg</code> (<code>hero.py</code>), <code>night.svg</code> (<code>night.py</code>), <code>connections.svg</code> (<code>connections.py</code>), <code>share.svg</code> (<code>share.py</code>), this page.</dd>
+    <dt>Result</dt>    <dd><b>2026-11-19, user guide:</b> the root page's tutorial (§1–11) moved here as the <a href="#guide">User guide</a>. Brought up to date on the way: the curl install, Codex as a second engine, sticky notes, ⤓ downloads and subfolders in Files, auto compact instead of a Compact button, inline SVG, and <code>DirAI pull</code> after a history rewrite.
+                           <b>2026-11-19:</b> <code>README.md</code> now has agent sharing, as a fifth benefit and a section "Share agents with other people", checked against <code>lib/shares.py</code> and <code>web/share.js</code> (<a href="#sharing">sharing</a>).<b><code>README.md</code> now opens with the former draft</b> (2026-11-11, <a href="#draft">what changed</a>): headline, hero picture, 3 benefits, night timeline, 2-command start, "Add a machine" with the GIF and the Machines figure. Then come "How it works" with the architecture diagram, Setup, Use, Where things live, Agent safety and Tests. Each claim was checked against the code (<a href="#claims">table</a>). A mock-up of the Machines section and the Schedule editor (<a href="#connections">figure</a>). An <code>~/.ssh/config</code> how-to (<a href="#ssh-config">how-to</a>), with 3 short animations: the terminal steps (28 s), Connect (13 s) and New tree… (14 s) (<a href="#ssh-demo">animations</a>), already in <code>README.md</code>. Host keys stay manual (no <code>accept-new</code>, decided 2026-11-10).</dd>
+    <dt>Open</dt>      <dd>The guide's figure <code>overview.svg</code> still draws "Claude Code runs" and SLURM. <b>Pushed in <code>2dd89e1</code> (2026-11-19):</b> the agent-sharing section of <code>README.md</code> with <code>share.svg</code> (<a href="#sharing">sharing</a>), and the one-line curl install (<a href="#install-curl">install</a>), and Codex and Ollama named next to Claude (<a href="#engines">engines</a>). "Use (per tree)" is removed (<a href="#no-use">details</a>). "How it works" is removed and SLURM isn't named (<a href="#no-how">details</a>); the <code>"slurm"</code> config key stays unless you say otherwise. <code>connections.svg</code> still says only "Claude usage"; to redraw it, say so. <code>install.sh</code>'s header still says the repo is private; the root agent should fix it. The checkout is now up to date (fast-forwarded to <code>56eafff</code> on 2026-11-19), so it can be committed and pushed when you ask.The new <code>README.md</code> and the redrawn figures are pushed (<code>963f050</code>). Then pushed in <code>d723d37</code> (2026-11-11): "Install details" (<a href="#setup-dup">note</a>), the section renamed "Run agents on another machine", and the animation split into 3 GIFs of equal height on one line (<a href="#gif-split">split</a>, <a href="#gif-row">one row</a>). Pushed in <code>4d0da57</code>: the 3 GIFs scaled to 66 % so they fit in one row on GitHub (<a href="#gif-scale">scale</a>). Not committed yet: the same GIFs drawn natively at that size, so the text is sharp again (<a href="#gif-sharp">sharpness</a>).Look at <code>github.com/wang2366/DirAI</code>: its front page should show the new <code>docs/README.md</code> with every picture (D5 (a)). This can't be checked from here. The commit also holds this page as it was just before this note. <span id="old-pics"><b>Old pictures in the repo</b> (searched 2026-11-11 for every copy of these figures).</span> The only stale ones are old PNG renders from 2026-11-08 in the repo's root <code>tmp/</code>: <code>overview.png</code>, <code>hero.png</code> and <code>night.png</code>. They are untracked, so they were never on GitHub, and they belong to the root agent, so this agent can't delete them (it may delete only inside <code>docs/</code>). To remove them: <code>rm ~/DirAI/tmp/overview.png ~/DirAI/tmp/hero.png ~/DirAI/tmp/night.png</code>. Everything in <code>docs/</code> is current and in use. <code>night.svg</code> is the one picture in <code>README.md</code> that wasn't redrawn. If it is the outdated one, say what to change. Check <code>connections.svg</code> and the redrawn <code>hero.svg</code> (<a href="#hero">figure</a>) in a browser: their text widths are estimated. D1 (ownership in the headline, plus a fourth benefit) and D3 (no recording) are decided (<a href="#decisions">decisions</a>). Done: <code>README.md</code> lives here as <code>docs/README.md</code>, and the root <code>README.md</code> links to it, on main since <code>dd20266</code> (<a href="#history">history</a>).</dd>
+    <dt>Updated</dt>   <dd>2026-11-19</dd>
+  </dl>
+</details>
+<!-- /dirai:card -->
+
+<h2 id="guide">User guide</h2>
+<p>How to install DirAI, serve a tree of agents and work with each one. Moved here from the root page on 2026-11-19 and checked then against the code; the proposals for DirAI are in <a href="../improvement/index.html">improvement/</a>. The README work follows <a href="#problem">after the guide</a>.</p>
+
+<h3 id="guide-idea">The idea</h3>
+<p>Each folder with an <code>index.html</code> is an <b>agent</b>. That page is its report: results and
+write-up in HTML (plans go in <code>&lt;folder&gt;/plan_*.html</code>). DirAI serves the folder they share
+(the <b>tree</b>) and lists every agent in one place. As the owner, opening an agent's page shows a chat
+panel; each message starts a background <code>claude -p</code> run in that agent's folder.</p>
+<div class="flow">
+  <div><b>1. Message</b><span>"Rerun the fit with 2× the events and update the plot."</span></div>
+  <div><b>2. Claude works</b><span>In the agent's folder: edits index.html, runs scripts, submits jobs.</span></div>
+  <div><b>3. Reply + highlights</b><span>Answer in the thread; changed parts of index.html are highlighted. Later, when SLURM jobs finish, DirAI wakes the agent to update index.html.</span></div>
+</div>
+<p>A tree can be a git repo or any folder, such as <code>~/work</code> holding several repos. Each tree runs
+its own server on its own port.</p>
+<figure id="guide-overview-figure">
+  <img src="overview.svg" alt="How DirAI works: browser, DirAI server, the tree of agent folders, a Claude Code run and SLURM, with numbered steps 1 to 6">
+  <figcaption>The whole loop. Script: <code>overview.py</code></figcaption>
+</figure>
+
+<h3 id="guide-install">Install (once per machine)</h3>
+<p>You need Python 3.6+, <code>git</code>, <code>curl</code> and an agent engine: Claude Code
+(<code>~/.local/bin/claude</code>, or set <code>DIRAI_CLAUDE_CMD</code> to its path) or the Codex CLI.</p>
+<pre><code>curl -fsSL https://raw.githubusercontent.com/wang2366/DirAI/main/install.sh | bash</code></pre>
+<p>It clones DirAI into <code>~/.local/share/dirai</code> and puts <code>DirAI</code> on your <code>PATH</code>; run it again to update.
+Machines you add under <a href="#guide-machines">Machines</a> need no install: DirAI copies itself there.
+In a checkout of your own, <code>DirAI pull</code> updates it (see the <a href="#guide-commands">commands</a>).</p>
+
+<h3 id="guide-tree">Set up a tree</h3>
+<pre><code>cd ~/work            <span class="c"># a repo (anywhere inside it), or the top of any folder</span>
+DirAI start          <span class="c"># the first time, sets the tree up; then starts the server and waits until it answers</span></code></pre>
+<p>The first <code>start</code> in a folder sets it up: it picks a free port and writes <code>www/dirai.json</code>, and creates
+<code>www/</code> for DirAI's files (agent list, chat threads, caches, logs). In a git repo it also ignores them in
+<code>.gitignore</code> and adds <code>@~/.config/dirai/AGENT_RULE.md</code> to <code>CLAUDE.md</code>, so your own Claude
+sessions there follow the <a href="#guide-rules">agent rules</a> too. Outside git it asks first whether to serve that folder
+at all, then whether to touch <code>CLAUDE.md</code>, since that would apply to every project below. A bare
+<code>DirAI</code> starts an existing tree but never sets one up. (<code>DirAI init</code> still sets a tree up without starting it, for scripts.)</p>
+<p>After that, any <code>DirAI</code> command works from folders below the tree: it finds the nearest
+<code>www/dirai.json</code> above you. From anywhere else, use <code>DirAI -C ~/work status</code>.</p>
+<div class="note warn"><b>Refused on purpose:</b> <code>start</code> won't set up <code>/</code> or your home
+folder as a tree, and won't run a tree that overlaps a running one (e.g. <code>~/work</code> and
+<code>~/work/projA</code>), because both would serve, and edit, the same agents.</div>
+
+<h3 id="guide-open">Open it in the browser</h3>
+<p>Log in once per browser. The login sets a year-long cookie that marks you as the owner, then shows the
+agent list:</p>
+<pre><code>PORT=$(python3 -c 'import json; print(json.load(open("www/dirai.json"))["port"])')   <span class="c"># in the tree</span>
+open "http://127.0.0.1:$PORT/_review/login?key=$(cat ~/.config/dirai/key)"</code></pre>
+<p>After that, bookmark <code>http://127.0.0.1:&lt;port&gt;/www/index.html</code>.</p>
+<div class="note"><b>Why 127.0.0.1 and a key?</b> Anyone on your network can read the agents' <code>index.html</code>
+files, but nothing else. The panel runs Claude with your account and files, so it needs a connection from
+this machine <i>and</i> the secret cookie. On a shared cluster node, other users can reach
+<code>127.0.0.1</code> too; the key is what proves it's you.</div>
+<h4 id="guide-machines">Trees on other machines: <b>Machines</b></h4>
+<p>Run DirAI on your laptop too, and reach every other machine from its agent list. Open the <b>Machines</b> section,
+pick a host under "Connect from ~/.ssh/config" in that machine's box (it lists the <code>Host</code> entries there) and click
+<b>Connect</b>. DirAI copies itself to <code>~/.local/share/dirai</code> on that machine if needed, lists its trees,
+and adds their agents to the same table as your own, with the same columns, sorting and filter. Each agent is then named
+<code>machine:path/folder/</code>, e.g. <code>nas:~/work/photos/</code>. Each tree's box has <b>Open</b>, <b>Restart</b> and
+<b>Stop…</b> (asks first, and offers Stop when idle); a stopped tree gets <b>Start</b>, and <b>×</b> forgets it (the same as
+<code>DirAI forget</code> there); <b>New tree…</b> sets one up. When a machine's DirAI differs from yours, its box says so, with <b>Update</b>.
+A machine you reach only through another (a cluster through an always-on NAS) is connected under that machine's box.
+You log in once, to your laptop's own list; DirAI passes the remote keys on over ssh. Needs ssh keys that work without
+a password prompt (how to set them up: <a href="#ssh-config">add a machine with ~/.ssh/config</a>). Details: <a href="../improvement/remote-machines/index.html">proposal 16</a>.
+Each machine runs one engine, Claude Code or Codex: click the title of its usage widget to switch.</p>
+<div class="note">Without DirAI on the device you browse from, a plain tunnel still works:
+<code>ssh -N -L 8765:localhost:8765 &lt;host&gt;</code>, then the login link above with that machine's key
+(<code>~/.config/dirai/key</code> there).</div>
+
+<h3 id="guide-list">The agent list</h3>
+<p><code>/www/index.html</code> lists every agent in the tree, newest first, with its folder size and the Claude
+tokens spent in it. As owner you also see each agent's chat status (working, unread, read, closed), your
+Claude plan usage (one line per window, with the level at which new runs pause), and the
+<b>New agent</b> and <b>Refresh</b> buttons. <b>New agent</b> has a <b>Where</b> choice: this tree or any running tree under
+Machines, with the folder relative to the tree you pick. It rebuilds every 10 minutes, whenever an agent is created, and when you click <b>Refresh</b> (which also checks the SLURM jobs agents wait on right away);
+<code>DirAI build</code> rebuilds it now.</p>
+<p>Click the <b>☆</b> beside an agent to make it a favorite (click <b>★</b> again to remove it); the
+<b>★ Favorites</b> tab above the filter (the first tab, and the one shown until you pick <b>All</b>) shows only those, and the filter still narrows them. Favorites are kept
+in <code>www/favorites.json</code>, so they are the same in every browser; the tab you last picked is remembered per browser.</p>
+<p>The scan skips <code>.git</code>, <code>node_modules</code>, virtualenvs, caches and other trees'
+<code>www/</code> folders. Add your own under <code>"exclude"</code> in <a href="#guide-settings">dirai.json</a>.</p>
+
+<h3 id="guide-panel">The agent's panel</h3>
+<p>Open any agent's <code>index.html</code> and click <b>Chat</b> (bottom right), type, and press <b>Enter</b> to send (<b>Shift+Enter</b> for a new line;
+on a touch screen, tap <b>Send</b>).
+The reply appears when the run ends. You can keep typing while the agent works: each message waits (dashed, ⏳ queued)
+with <b>✎ edit</b> and <b>✕ remove</b>, and goes when the run ends, several as one numbered message. After a
+cancelled or failed run they stay until you press <b>Send now</b>. A status bar at the top of the page shows what the agent is working on
+and your SLURM jobs there; it's hidden when there's nothing to show.</p>
+<div class="tbl"><table>
+<tr><th>Control</th><th>What it does</th></tr>
+<tr><td><b>Ask the agent about this</b></td><td>Select text in <code>index.html</code> and click it: your message is sent with that
+passage (and its heading) attached, so you can say "this number looks wrong".</td></tr>
+<tr><td>Replies</td><td>Kept to about 3 lines; the details go into <code>index.html</code>. A link in a reply jumps to that
+part of the page, and a longer reply opens with <b>more</b>.</td></tr>
+<tr><td><b>Schedule…</b></td><td>Send a message to this agent later: once at a date and time, daily, weekly on chosen days, or hourly,
+at a clock time. The list under the buttons shows what is waiting for this agent; edit or delete from there. A message due while
+the agent is busy waits until it is free.</td></tr>
+<tr><td>Model picker</td><td>Model for this agent's next messages. Sonnet (default) uses less of your Claude limit
+than Opus; the local gpt-oss models (via Ollama) use none but are slower.</td></tr>
+<tr><td><b>+ Sticky note</b></td><td>Select text and leave a note on it; many per page, numbered yellow marks. <b>Send notes</b> puts the open ones in your next message as chips;
+the agent answers on each note, and you can reply on a note. Kept in the agent's <code>.notes.json</code>.</td></tr>
+<tr><td>Files in this folder</td><td>At the end of <code>index.html</code>: every text file in the agent's folder,
+raw with line numbers, collapsed (a <code>.md</code> rendered, with a <b>Raw</b> switch; then other files with thumbnails,
+and subfolders, which open at any depth). <b>⤓</b> downloads a file, or a folder as <code>.zip</code>. Select lines in one and click
+<b>Ask the agent about this</b>: the message names the file and lines, the agent edits them, and the section
+reloads with the changed lines highlighted (removed ones in red, collapsed) when the run ends.</td></tr>
+<tr><td><b>Hide changes</b></td><td>Parts of <code>index.html</code> the latest run added or changed are highlighted in yellow; what it removed is shown in red, collapsed (click to open). This toggles both.</td></tr>
+<tr><td><b>&#8630; Undo / Redo &#8631;</b></td><td>At the upper left of each block the latest run changed in <code>index.html</code>. Undo puts that block back as it was before the run; Redo (shown where you undid one) brings it back. The agent is told on your next message. Not offered once the page was edited by hand after the run.</td></tr>
+<tr><td><b>Mark read</b> / <b>TaskDone</b></td><td>Clear the unread badge / close the thread. A new message reopens it.</td></tr>
+<tr><td>Auto compact</td><td>No button: when a run ends past the context limit (default 200K, per tree and per agent), DirAI runs
+Claude Code's <code>/compact</code>, so the session continues with fewer tokens per message.</td></tr>
+<tr><td><b>New chat</b></td><td>Next message starts a fresh session that re-reads <code>index.html</code> and the last few messages.</td></tr>
+<tr><td><b>Allow once</b> / <b>Always allow</b></td><td>Shown when Claude was blocked from something. See <a href="#guide-access">access</a>.</td></tr>
+<tr><td><b>Colleagues</b></td><td>Other agents this one may read and whose grants it shares. See <a href="#guide-access">access</a>.</td></tr>
+<tr><td><b>Permissions</b></td><td>At the end of the summary card, collapsed: what this agent was granted. See <a href="#guide-grants-where">where grants are kept</a>.</td></tr>
+</table></div>
+<h4>Long jobs</h4>
+<p>Claude submits heavy work with <code>sbatch</code> instead of running it inline, then ends its reply.
+The agent stays "working" while DirAI checks the queue every 10 minutes (no tokens spent). When the jobs
+are done, DirAI sends the agent their results so it can update <code>index.html</code>. You can still send messages meanwhile;
+at most 5 automatic messages run in a row before it waits for you.</p>
+<h4>Usage limits</h4>
+<p>When Claude's 5-hour or weekly usage reaches its pause level, new runs wait and resume by themselves.
+The 5-hour level is 100% unless you drag its marker lower on the agent list; it resumes after the 5-hour
+reset. The weekly level follows the <b>Auto</b> button (on by default): on day <i>n</i> of the 7-day window
+it is <i>n</i>/7 of the limit (14%, 29%, … 100%), so a paused run resumes when the next day starts.
+Dragging the weekly marker sets it by hand and turns Auto off. Levels apply to all your trees.
+A run cut off by the limit is resent in the same session once the limit resets.</p>
+
+<h3 id="guide-rules">Writing index.html</h3>
+<p>An agent's <code>index.html</code> is plain HTML, written by you or by the agent. The agent rules
+(<code>AGENT_RULE.md</code> in the DirAI checkout, given to every agent run):</p>
+<ul>
+  <li><b>Every <code>index.html</code> starts with a summary card</b>: a collapsible "Summary" with Objective, Inputs,
+      Outputs, Result, Open and Updated (all required; <code>none</code> when nothing applies), plus
+      optional JSON results, between <code>&lt;!-- dirai:card --&gt;</code> markers. The one at the top of
+      this page is an example. After a run that changed <code>index.html</code> the server checks the card, asks the
+      agent once to fix it if needed, and otherwise flags it (<b>card ✗</b> on the list, a note in the
+      panel). Agents read each other's results through <code>dirai_card.py &lt;folder&gt;</code>, a few lines
+      instead of the whole <code>index.html</code>.</li>
+  <li><b>Every figure names its plotting script</b>, as a caption with its path relative to the agent's folder,
+      e.g. <code>Script: analysis/plot_rate.sh</code>. Ideally <code>foo.png</code> comes from
+      <code>foo.sh</code> or <code>foo.py</code>.</li>
+  <li><b>Open items go in the card's Open field</b>: what is unfinished or still running. There is no
+      separate <code>todo.md</code>.</li>
+  <li>Reference images by relative path. The server only serves <code>.html</code> and images
+      (<code>.png .jpg .jpeg .gif .svg .webp</code>); everything else is 404. This is on purpose: the pages are readable by anyone
+      who can reach the port, so sources, data, logs and DirAI's own state (<code>www/agents.json</code>, <code>dirai.json</code>) stay private.
+      Symlinks are resolved first (<code>send_head()</code> in <code>lib/server.py</code>), so a link is served only if its <i>target</i> is inside the tree
+      and itself an <code>.html</code> or image: <code>diff.html → foo.cpp</code> gives 404.
+      For the owner only, <code>/_review/files?agent=&lt;folder&gt;</code> returns the text files in that agent's folder as JSON
+      (each up to 1 MB; not links out of the folder); it is what shows "Files in this folder". Its downloads are owner-only too.
+      A local <code>&lt;img src="x.svg"&gt;</code> under 300 kB is put inline, so a diagram's text can be selected; save plots as SVG with <code>svg.fonttype = 'none'</code>.</li>
+  <li>No "Home" link needed: the server adds one to every <code>index.html</code>.</li>
+  <li><b>No CSS in <code>index.html</code>.</b> One without a <code>&lt;style&gt;</code> gets the shared <code>index.css</code>
+      from the server; use plain HTML and its classes (<code>.note</code>, <code>.note warn</code>,
+      <code>.tbl</code>, <code>figure</code> + <code>figcaption</code>). Files that keep their own
+      <code>&lt;style&gt;</code> are left as they are.</li>
+</ul>
+
+<h3 id="guide-access">What an agent may do</h3>
+<p>Runs use <code>claude -p --restricted</code> with an allow list, so nobody needs to approve anything
+while it runs. Your own Claude Code settings (<code>~/.claude/settings.json</code>) don't apply to agents.</p>
+<div class="tbl"><table>
+<tr><th>Where</th><th>Read</th><th>Write</th><th>Commands</th></tr>
+<tr><td>The agent's own folder and every folder below it (the tree's top agent: the whole tree)</td>
+    <td>✓</td><td>✓</td><td>the defaults, <code>dirai.json</code> <code>"allow"</code> and <b>the agent's grants</b></td></tr>
+<tr><td>Each colleague's folder and every folder below it</td>
+    <td>✓</td><td>✗</td><td>plus <b>that colleague's grants</b>, except its edit grants</td></tr>
+<tr><td><code>"read_dirs"</code> in <code>dirai.json</code></td><td>✓</td><td>✗</td><td></td></tr>
+<tr><td>Anywhere else</td><td>only with a grant</td><td>only with a grant</td><td></td></tr>
+</table></div>
+<ul>
+  <li><b>Delete</b> only through <code>agent_rm.sh</code>, which refuses anything outside the agent's folder.</li>
+  <li><b>Git</b> (agents inside a repo): add, commit and push the agent's folder, only when your message asks.
+      Force-push, reset, stash, rebase, clean, <code>rm -rf</code> and <code>sudo</code> are always blocked,
+      whatever is granted. <code>checkout</code> and <code>restore</code> are refused until you allow them, and
+      only the exact command you approve.</li>
+</ul>
+<h4>Grants: one agent's own</h4>
+<p>Every grant belongs to one agent. There is no grant for every agent at once: for that, use <code>"allow"</code> or
+<code>"read_dirs"</code> in <code>dirai.json</code>.</p>
+<ul>
+  <li><b>Name it in your message</b>: "compare with <code>projB/results</code>". Paths inside the tree that you
+      name (relative, <code>~/…</code> or absolute) are granted to that agent for reading before the run starts,
+      and logged in the thread.</li>
+  <li><b>Approve when blocked</b>: the panel lists what was refused (in <b>Ask in chat</b> mode, the chat
+      asks while the run waits).
+      <ul>
+        <li><b>Allow once</b>: the retry it starts may do it; later runs may not.</li>
+        <li><b>Always allow</b>: this agent's later runs may do it too, and so may the agents that list it
+            as a colleague.</li>
+      </ul></li>
+  <li>A refused command is granted as its program and subcommand: allowing
+      <code>basecamp attachments download 123 --out x</code> grants <code>Bash(basecamp attachments:*)</code>,
+      so later downloads go through too (a program in <code>~/.local/bin</code> also under its full path). The
+      panel shows the rule before you click. Commands whose second word is a flag or a path, and
+      <code>rm</code>, <code>git</code>, <code>curl</code>, <code>ssh</code>, <code>chmod</code>, <code>kill</code> and
+      the like, stay exact. For a whole program, add a rule such as <code>"Bash(basecamp:*)"</code> to
+      <code>"allow"</code> in <code>dirai.json</code> (it applies after a restart).</li>
+</ul>
+<h4 id="guide-grants-where">Where grants are kept, and where you see them</h4>
+<ul>
+  <li><b>Kept</b> in one file per tree, <code>www/agents.json</code>: each agent's entry has a <code>"grants"</code>
+      list. The server adds to it when you click <b>Always allow</b> (in the panel, or on a prompt in <b>Ask in chat</b>
+      mode) and when you name a folder in a message. <b>Allow once</b> goes in a separate <code>"once"</code> list
+      that the next run uses up.</li>
+  <li><b>Shown</b> under <b>Permissions</b>, collapsed at the end of the agent's summary card. It lists only this
+      agent's own grants: not the defaults, <code>dirai.json</code> or once-only rules. A colleague's grants are on
+      the colleague's page. A rule that is always blocked is marked as having no effect.</li>
+  <li><b>Never written to <code>index.html</code></b>: the panel draws the list in your browser from
+      <code>agents.json</code> when the page opens, right after each click in the panel, and every 4 seconds while
+      the agent works. A new grant shows within seconds, without a restart.</li>
+</ul>
+<h4>Colleagues: sharing what another agent has</h4>
+<p>Open <b>Colleagues</b> in the agent's panel and paste a link to another agent's page (or its folder path).
+From the next run on, the agent:</p>
+<ul>
+  <li>may <b>read</b> the colleague's folder and everything below it, never write to it;</li>
+  <li>gets the colleague's <b>grants</b>, except its edit grants, one level deep (not the grants of the
+      colleague's own colleagues);</li>
+  <li>finds the colleague's summary card in its instructions (up to 8 colleagues).</li>
+</ul>
+<p>So to let several agents use what one was granted (for example Basecamp access), grant it to one agent and
+add that agent as their colleague.</p>
+<div class="note warn"><b>Limit:</b> these rules confine Claude's own file tools (Read, Edit, Write) and
+simple shell commands. A script the agent runs (<code>python3 x.py</code>) can read and write whatever your
+user can, and the default <code>cp</code>, <code>mv</code>, <code>mkdir</code>, <code>touch</code>,
+<code>tee</code> and <code>sed</code> rules take any path. A broad <code>"read_dirs"</code> entry (all of
+scratch, say) also widens every agent's reads.</div>
+
+<h3 id="guide-cluster">On a cluster</h3>
+<p>Start the tree on your devnode (<code>DirAI start</code>), another node (<code>DirAI start NODE</code>),
+or as its own batch job (<code>DirAI start --job</code>; add account and partition under
+<code>"slurm"</code> in dirai.json). Open it from your laptop through <a href="#guide-open">Machines</a>: connect the cluster's
+login host; a tree running on a compute node is reached through it. The cluster has its own key in your cluster home;
+Machines fetches it, so you never type it.</p>
+
+<h3 id="guide-settings">Settings (<code>www/dirai.json</code>)</h3>
+<p>Per tree, local to this checkout, never committed:</p>
+<pre><code>{"port": 8775,
+ "title": "My Work",
+ "read_dirs": ["/data/shared"],
+ "allow": ["Bash(~/tools/run.sh:*)"],
+ "slurm": ["-A", "mygroup", "-p", "cpu"],
+ "exclude": ["data", "projA/build"]}</code></pre>
+<div class="tbl"><table>
+<tr><th>Key</th><th>Meaning</th></tr>
+<tr><td><code>port</code></td><td>This tree's server port. After changing it: <code>DirAI stop</code>, then <code>DirAI start</code>.</td></tr>
+<tr><td><code>title</code></td><td>Heading of the agent list (default: the folder's name).</td></tr>
+<tr><td><code>read_dirs</code></td><td>Extra folders every agent may read.</td></tr>
+<tr><td><code>allow</code></td><td>Extra Claude Code permission rules for the agents.</td></tr>
+<tr><td><code>slurm</code></td><td>Extra <code>sbatch</code> options for <code>DirAI start --job</code>.</td></tr>
+<tr><td><code>exclude</code></td><td>Folders the agent list skips: a name skips it anywhere, a path with a slash skips that one folder.</td></tr>
+</table></div>
+<p>Per user, in <code>~/.config/dirai/</code>: the owner <code>key</code>, the list of trees
+(<code>trees</code>) and the <code>AGENT_RULE.md</code> link. Grants are kept per agent, in the tree's
+<code>www/agents.json</code>; an old <code>permissions.json</code> there is no longer read.</p>
+
+<h3 id="guide-commands">Command reference</h3>
+<div class="tbl"><table>
+<tr><th>Command</th><th>Does</th></tr>
+<tr><td><code>DirAI start [NODE | --job]</code></td><td>Start the server here, on NODE, or as a SLURM job. The first time, set the tree up first: port, <code>www/dirai.json</code>; in git, <code>.gitignore</code> and <code>CLAUDE.md</code> lines.</td></tr>
+<tr><td><code>DirAI status</code></td><td>Node, port, start time, job time left, and whether it answers.</td></tr>
+<tr><td><code>DirAI restart</code></td><td>Reload with the current DirAI code, same node and port.</td></tr>
+<tr><td><code>DirAI stop</code></td><td>Stop the server (and its job, if it has one).</td></tr>
+<tr><td><code>DirAI build</code></td><td>Rebuild the agent list now.</td></tr>
+<tr><td><code>DirAI pull</code></td><td>Update DirAI's own git checkout (<code>git pull --ff-only</code>; after an upstream history rewrite listed in <code>lib/history_rewrite.map</code>, it moves the checkout onto the new history; otherwise refused, with the commands to run, if it can't fast-forward or would touch a file with uncommitted changes), then restart this tree's server once no agent run is going. The same as <b>Pull, restart when idle</b> in this server's box under Machines.</td></tr>
+<tr><td><code>DirAI list</code></td><td>Every tree you've started, up or down, with port and node (<code>--json</code>: what Machines reads over ssh).</td></tr>
+<tr><td><code>DirAI forget [PATH]</code></td><td>Stop the tree's server if it runs and drop it from <code>DirAI list</code> and Machines; the folder is kept.</td></tr>
+<tr><td><code>DirAI -C DIR &lt;cmd&gt;</code></td><td>Act on the tree holding DIR.</td></tr>
+</table></div>
+
+
+<hr>
+<h2 id="problem">The problem with today's README</h2>
+<p>It opens with <i>how</i> DirAI works (a server, <code>claude -p</code> runs, change marks), which is right for
+someone who has already decided to use it. A newcomer first wants to know <i>what they get</i>. They don't see that
+the agents keep working overnight, or that all their machines show up in one place, until the middle of the page.</p>
+<div class="tbl"><table>
+<tr><th></th><th>Today</th><th>Proposed</th></tr>
+<tr><td>First line</td><td>"DirAI serves a git repo (or any folder) in your browser as a set of agents."</td><td><b>"Your own AI agents, working 24/7 in your folders, on every machine you have."</b></td></tr>
+<tr><td>First picture</td><td>An architecture diagram (server, run, SLURM)</td><td>Three machines, their folders as agents, one list (below); the architecture diagram moves down to "How it works"</td></tr>
+<tr><td>Then</td><td>Six steps of a message</td><td>Three benefits with an icon each, then a night timeline</td></tr>
+<tr><td>To start</td><td>Install, setup, use: three sections</td><td>Two commands, plus "put an index.html in a folder"</td></tr>
+</table></div>
+
+<h2 id="hero">The hero picture: every folder an agent, every machine one list</h2>
+<figure>
+  <img src="hero.svg" alt="Left: a lab workstation (drawn as a monitor and tower) and an HPC cluster (two server racks), each with two folders that are agents and their states. Both link over ssh to the right: a laptop whose screen is a browser showing one agent list with all six agents, the laptop's own ~/paper/ and ~/talk/ included">
+  <figcaption>Proposed first picture of the README: message 2 (connect machines; each folder is an agent). Redrawn 2026-11-11 on your request: each machine has an icon, and the browser sits on the laptop's screen. The laptop's own agents are the <code>laptop:</code> rows, so it no longer has a separate box. Not checked in a browser: no SVG renderer here, so the layout was checked only by its coordinates and by an XML parse. Script: <code>hero.py</code></figcaption>
+</figure>
+
+<h2 id="connections">How the machines connect</h2>
+<p>The hero picture only says "over ssh". This figure shows what a user actually sees: a mock-up of the agent list's <b>Machines</b> section and of one agent's panel with the <b>Schedule…</b> editor.
+The example machines are a laptop, an Oracle Cloud VM and an HPC/GPU cluster.</p>
+<figure>
+  <img src="connections.svg" alt="Mock-up of the Machines section: MacBook (this server) linked by a green ssh arrow to oracle-vm, which links hpc-gpu. Each box has a Claude usage widget (Chart, Auto, 5-hour and weekly bars with a draggable pause mark), its trees (alive, node, port, agents, Open / Restart / Stop…, a down tree with Start and why it stopped), New tree… and Connect from ~/.ssh/config. Below, an agent panel with a scheduled message, a reply with its cost, and the Schedule editor: Once / Daily / Weekly / Every hour, at 08:00, the message, fresh chat or continue, Save schedule. Numbered marks are explained in a key.">
+  <figcaption>Machines section and an agent's panel, with example machines and values. Changed 2026-11-11 on your request: less text. Each numbered key entry is now one short line (the details are in the list below), and the subtitle is shorter. The figure is in <code>README.md</code>, at the end of "Add a machine". Script: <code>connections.py</code></figcaption>
+</figure>
+<p>How it matches the UI. The figure is drawn from the code, not a screenshot: box parts and their order come from <code>machineBox</code>, <code>treeNode</code> and <code>usageWidget</code>, colours and sizes from the <code>#rv-machines</code> CSS, and the arrows from <code>drawArrows</code> (all in <code>web/agent_list.js</code>). The panel and Schedule editor come from <code>#rv-panel</code> and <code>#rv-sedit</code> in <code>web/panel.js</code>.</p>
+<p>Differences from the real page:</p>
+<ul>
+<li>The numbered marks and the key aren't in the UI.</li>
+<li>Fonts are approximated.</li>
+<li>The two machines form a chain (laptop → oracle-vm → hpc-gpu). Two machines linked straight from the laptop would draw both arrows from its right edge, and the second would run behind the first box.</li>
+</ul>
+<ul>
+<li><b>One ssh link per machine</b>, started by the machine above it: an ssh ControlMaster to a host from <code>~/.ssh/config</code>, opened only after you click Connect on the agent list. Every 30 s (10 s while the list is open) it runs <code>DirAI list --json</code> there.</li>
+<li><b>One tunnel and one forwarder per running tree.</b> The tunnel goes to the tree server's own 127.0.0.1 port. The forwarder (127.0.0.1 on the laptop) is what the browser opens. It passes on only requests with your owner cookie, swapped for the next machine's key, and gives a 404 for anything else.</li>
+<li><b>Compute nodes:</b> a tree served on another node than the one ssh lands on (<code>DirAI start --job</code>) is reached with an <code>ssh -W</code> hop through the login node.</li>
+<li><b>Chains:</b> a machine reached through another one (laptop → <code>oracle-vm</code> → <code>hpc-gpu</code>) is linked by the middle machine's server and relayed upward. Each hop checks its own key and adds the next one.</li>
+<li><b>No install step downstream:</b> when a machine has no DirAI, or an outdated one, the server above it copies its own DirAI there (into <code>~/.local/share/dirai</code>) over the same ssh link. That machine needs no GitHub access.</li>
+<li id="usage-control"><b>Token usage, tracked and capped per machine:</b> each machine uses its own Claude login, and its server reads that plan's 5-hour and weekly usage (at most once a minute; <code>lib/claude_usage.py</code>). The laptop's Machines section shows every machine's usage. You set each machine's <b>pause level</b> there by dragging the black mark on its bar. The request is relayed down the chain (<code>usage_stop</code>). At or above a level no new runs start, and they resume after the reset. Weekly auto (on by default) sets the weekly level to n/7 on day n of the week, so a week's budget isn't spent on day 1. A usage history chart and each reply's $ cost are shown too. The bar lengths in the figure are examples, not readings.</li>
+<li id="schedules"><b>Scheduled tasks:</b> the Schedule… button on an agent's page sends it a message once, daily, weekly on chosen days, or every hour (<code>web/panel.js</code>). The agent's own tree server keeps the schedule and checks it every minute (<code>lib/server.py</code>). A schedule for an agent on <code>hpc-gpu</code> therefore fires with the laptop closed, and it waits if the agent is busy. On a cluster it fires only while that tree's server runs, e.g. while its SLURM job lasts.</li>
+<li><b>Security:</b> owner actions (chat, runs) are accepted only from 127.0.0.1 with the key, so from another machine they arrive only through these tunnels. Tree servers bind 0.0.0.0 by default, so their pages are readable on the network unless <code>www/dirai.json</code> sets <code>"bind": "127.0.0.1"</code>.</li>
+</ul>
+
+<h2 id="ssh-config">Teaching it: add a machine with <code>~/.ssh/config</code></h2>
+<p>The Connect list on a machine's box is that machine's <code>~/.ssh/config</code>, so adding a machine means adding a <code>Host</code> entry there. Many users have never written one. This is a proposed README / tutorial section, checked against <code>lib/remotes.py</code>. A short version with the animation below is in <code>README.md</code>, as its own section right after "Start in one minute". <span id="section-title">On 2026-11-11 that section was renamed from "## Add a machine" to <b>"## Run agents on another machine"</b>, because it now ends with starting agents there (New tree…), not only with adding the machine. The one link to it in Use ("From a laptop") now points to <code>#run-agents-on-another-machine</code>. No other file links to the old anchor (checked with grep over the repo's .md, .html, .py and .js files).</span> It has 3 GIFs: the terminal steps above the 4 commands (<code>ssh-keygen</code>, <code>vim ~/.ssh/config</code> with a <code>Host</code> example, <code>ssh-copy-id</code>, the BatchMode check), then Connect, then New tree….</p>
+<p id="gif-split"><b>Split into 3 GIFs on 2026-11-11</b> (your D6 answer). Each one replays quickly on its own, and the 2nd and 3rd show only the browser. One script, <code>ssh_config_demo.py</code>, still draws all three from the same steps, so they stay consistent. The caption bar now wraps to 2 lines on the 500 px width. Checked: one frame of each, as PNGs.</p>
+<p id="gif-row"><b>In one row</b> (asked 2026-11-11). In <code>README.md</code>, "Add a machine" now opens with the 3 GIFs on one line, followed by the steps 1. ssh, 2. Connect, 3. New tree. To make them fit:</p>
+<ul>
+<li>The browser GIFs are cut to the machine column: 340 × 550 px, from 500 × 560. Their captions wrap to 2–3 lines in a 13 px font.</li>
+<li id="gif-height"><b>Same height</b> (asked 2026-11-11). All three GIFs are now 616 px tall as drawn (407 px after the <a href="#gif-scale">scaling</a>), captions included: the terminal is 500 × 616 and Connect and New tree… are 340 × 616. That way their tops and bottoms line up in a row. The browser crop was 520 px, and <code>ssh_config_demo.py</code> now sets it from the terminal's height (<code>BH = H + CAPH − BCAPH</code> = 550), so the heights stay equal if either changes. The extra 30 px is white space under the Machines box. Checked with <code>file</code> on the 3 GIFs, and by looking at the last New tree… frame.</li>
+<li>The terminal GIF stays 500 px wide, because its longest line (the host-key fingerprint) needs about 440 px.</li>
+</ul>
+<p id="gif-scale"><b>Scaled to fit GitHub's one row</b> (2026-11-11, after you saw them wrap to 2 rows on github.com). At full size they were 1180 px wide together, more than GitHub's README column (about 830 px on a wide window). Now <code>ssh_config_demo.py</code> draws each frame at full size, then scales it to 66 % (<code>SCALE = 0.66</code>, LANCZOS). The results:</p>
+<ul>
+<li>Sizes: terminal 330 × 407, Connect and New tree… 224 × 407 each. That is 778 px together, so 3 in one row with about 50 px to spare. All three are still the same height.</li>
+<li>Text: the 14 px terminal font becomes about 9 px, and the 13 px browser font about 8.6 px. It is smaller but still readable. I checked a terminal frame and a one-row preview of all three by eye.</li>
+<li id="gif-sharp"><b>Sharpness fixed</b> (2026-11-11, you saw it blurred). In <code>4d0da57</code>, frames were drawn at full size and then shrunk, which smeared the text, and the 64-colour palette made it worse. Now <code>Draw</code> in <code>ssh_config_demo.py</code> scales every coordinate, line width and font size itself. Each frame is therefore drawn directly at 66 %, with hinted text rendered at its final size (about 9 px), and the palette has 128 colours. Checked by eye on a terminal frame and the last New tree… frame. The pixel sizes are unchanged. On a retina screen, GitHub still enlarges the GIFs by 2×, so they look somewhat soft there. Being sharp there too would need full-size files shown with an HTML <code>&lt;img width&gt;</code>, which this page shows as text in a <code>.md</code>.</li>
+<li>Files: 682, 73 and 199 KB.</li>
+<li>No HTML <code>&lt;img width&gt;</code> is needed, so <code>README.md</code> is unchanged and still shows here.</li>
+<li>Below about 800 px of page width (a narrow window or a phone), they still wrap.</li>
+</ul>
+<figure id="ssh-demo">
+  <img src="ssh_config_demo.gif" alt="Animation, 28 s, a terminal starting with no ~/.ssh/config: ssh-keygen -t ed25519 makes a key with an empty passphrase; vim ~/.ssh/config opens a new, empty file; a Host hpc-gpu block (HostName, User, IdentityFile) is typed and saved with :wq; ssh-copy-id hpc-gpu asks to trust the new host key, the user types yes, then the password, and the key is added; then ssh -o BatchMode=yes hpc-gpu hostname prints login1 with no questions.">
+  <figcaption>1 of 3, the terminal (steps 1–6): make a key, write <code>~/.ssh/config</code> with one <code>Host</code> in vim, log in once by hand with <code>ssh-copy-id</code> (answer <b>yes</b> to the new host key, type the password), and check it. 28 s, 1.0 MB. Script: <code>ssh_config_demo.py</code></figcaption>
+</figure>
+<figure id="connect-demo"><!-- 340 × 586 px since the one-row layout -->
+  <img src="connect_demo.gif" alt="Animation, 13 s, the agent list only: under Connect from ~/.ssh/config it first says no Host entries there; after the redraw the dropdown lists hpc-gpu (marked new). Connect is clicked; a new hpc-gpu box appears below, connecting… with a red dashed arrow, then copying DirAI there…, then connected (ssh on login1) with a green arrow.">
+  <figcaption>2 of 3, the browser (steps 7–10): the list re-reads <code>~/.ssh/config</code>, hpc-gpu is offered, and Connect goes through connecting… and copying DirAI there… to connected. 13 s, 0.1 MB. Script: <code>ssh_config_demo.py</code></figcaption>
+</figure>
+<figure id="new-tree-demo">
+  <img src="new_tree_demo.gif" alt="Animation, 14 s, the agent list only: New tree… opens on the hpc-gpu box; the path ~/proj/sim is typed, the node is left empty, Init and start is clicked; the tree shows starting…, then alive · login1 · 8765 with 0 agents and Open / Restart / Stop….">
+  <figcaption id="gif-newtree">3 of 3, the browser (steps 11–13): <b>New tree…</b> on the new machine. You type a folder (made if missing) and leave the node empty, or give a node name or <code>--job</code>. Init and start shows "starting…", then the tree is alive with Open / Restart / Stop…. The form and the tree box follow <code>newTree()</code> and <code>treeNode()</code> in <code>web/agent_list.js</code>. 14 s, 0.3 MB. Script: <code>ssh_config_demo.py</code></figcaption>
+</figure>
+<div class="note" id="why-check">Is the <code>ssh -o BatchMode=yes hpc-gpu hostname</code> line needed? Not for the dropdown: the host is listed as soon as the file is saved, because the list re-reads <code>~/.ssh/config</code> each time. But on a <b>new</b> host, Connect fails unless ssh has already logged in there once. DirAI's link to a login host uses <code>BatchMode=yes</code> and no <code>accept-new</code> (<code>lib/remotes.py</code> lines 44 and 382), so it can't answer "trust this host key?" and can't type a passphrase. Logging in once by hand stores the host key, and the check confirms nothing will be asked. One step can do both: a plain <code>ssh hpc-gpu hostname</code> that you answer "yes" to the first time. <b>Decided (2026-11-10): DirAI stays as it is (no <code>accept-new</code>), and the animation shows these steps.</b> It now has the key (<code>ssh-keygen</code>, step 1) and the one manual login (<code>ssh-copy-id hpc-gpu</code>, step 5). In that login the host-key question is answered with a yellow <b>yes</b> and the password is typed one last time. The BatchMode check (step 6) then shows nothing is asked any more. <code>ssh-copy-id</code> was picked over a plain <code>ssh</code> because it does the key copy and the first "yes" in one command.
+<p id="accept-new"><b>Could DirAI trust the key itself?</b> Yes, with a one-line change: add <code>"-o", "StrictHostKeyChecking=accept-new"</code> to the master connection in <code>lib/remotes.py</code> line 382, as the compute-node hop already does (line 426). ssh then stores the key of a host it has never seen and carries on. It still refuses a host whose stored key has <i>changed</i>, so it never overrides a "REMOTE HOST IDENTIFICATION HAS CHANGED" warning. The risk is only on the first connection: someone who can intercept that first login can pose as the host. That is what most users do anyway when they type "yes" without checking the fingerprint. Clicking Connect on a named host is a deliberate act, which makes it reasonable consent. A stricter version could show the stored fingerprint in the new machine box. Needs OpenSSH 7.6 or later (2017). It does not help with key passphrases or 2FA: those still need an ssh-agent or keys that skip 2FA. With the change, the one manual login becomes optional, and the GIF can drop its check line. That change belongs to <code>lib/</code>, not this folder. Not made: you chose to keep things as they are.</p>
+<p id="accept-new-risks"><b>Safety concerns with <code>accept-new</code></b>, from worst to mildest:</p>
+<ol>
+<li><b>Someone between you and the host on the first connection</b> (hotel Wi-Fi, a spoofed DNS answer, a mistyped <code>HostName</code>) is trusted from then on, and nothing warns you. With a key login they can't get your private key, and they can't log in to the real host as you. But DirAI would copy itself to their machine and show it in your list as a normal tree. Anything you then type to agents "there", and any files they write, go to that machine. Typing "yes" by hand has the same hole. The difference is that the user at least <i>could</i> have compared the fingerprint.</li>
+<li><b><code>ForwardAgent yes</code></b> in that <code>Host</code> entry makes it much worse: a fake host could use your ssh-agent to log in anywhere your keys work, for as long as the link stays up. DirAI sets nothing about agent forwarding (no match in <code>lib/</code>), so this follows the user's config. The how-to should say not to set it for DirAI hosts.</li>
+<li><b>It happens without anyone watching.</b> A background process writes to <code>~/.ssh/known_hosts</code>. That is fine for the hosts you clicked Connect on, but it should be limited to them: only the first Connect click, never a host that was merely listed.</li>
+<li><b>Clusters with several login nodes</b> behind one name (e.g. <code>login.hpc…</code> answered by login1 or login2) can have different host keys. accept-new stores the first one, and a connection that lands on another node is refused as "changed". The failure is safe but looks random. The same happens after a manual login, and most centers share one key across login nodes.</li>
+<li><b>A host that is really reinstalled</b> stays refused. That is correct, but DirAI should show the "host key changed" error from its <code>.err</code> file plainly, with the <code>ssh-keygen -R &lt;host&gt;</code> fix.</li>
+</ol>
+<p><b>Safer variants</b>, if plain accept-new feels too loose:</p>
+<ul>
+<li><b>Confirm in the browser.</b> On the first Connect, DirAI runs <code>ssh-keyscan</code> and shows the fingerprint (<code>SHA256:…</code>) in the new machine box, with "Trust" and "Cancel" buttons. Only on Trust does it add the key to <code>known_hosts</code>. Same safety as typing "yes", with no terminal. Most centers publish their fingerprints, so a careful user can compare them.</li>
+<li><code>VerifyHostKeyDNS yes</code> for sites that publish SSHFP records (with DNSSEC). Few do.</li>
+<li>Keep it as it is and document the one manual login (the GIF's <code>ssh-copy-id</code> step).</li>
+</ul>
+<p>Recommendation: the browser confirmation, since it keeps the one human check while dropping the terminal step. If that is too much work, plain accept-new on an explicit Connect click is no worse than what most users do when they type "yes", provided the how-to warns against <code>ForwardAgent</code>.</p></div>
+<p>The animation is drawn, not screen-recorded. The browser side follows <code>web/agent_list.js</code>:</p>
+<ul>
+<li><code>connectPicker</code> lists the <code>Host</code> entries not connected yet.</li>
+<li>The list re-reads <code>~/.ssh/config</code> at every redraw, every 10 s, because <code>report()</code> in <code>lib/remotes.py</code> calls <code>ssh_hosts()</code> each time. That is why no restart is needed.</li>
+<li>After Connect, the new box goes through the states the code has: "connecting…" with a red dashed arrow, "copying DirAI there…" with a grey dashed one, then up with a green arrow and "ssh on login1".</li>
+</ul>
+<p>Machine names, the IP and the values are examples. Rendering it here needed a workaround: this Pillow has no FreeType, so the text is drawn with matplotlib's FT2Font and its bundled DejaVu fonts.</p>
+<p id="beyond-gif"><b>Beyond the animation.</b> The GIF, and the "Add a machine" section of <code>README.md</code>, already cover the basic steps for one cluster login node: make a key, add a <code>Host</code>, run <code>ssh-copy-id</code>, run the BatchMode check, click Connect. They are not repeated here. This part keeps only what they leave out.</p>
+<ul>
+<li><b>The rule behind every step:</b> DirAI runs <code>ssh</code> with <code>BatchMode=yes</code>, so ssh can't ask anything: no password, passphrase, "trust this host?" question or 2FA code. A key with a passphrase works only if it is loaded into <code>ssh-agent</code> or the macOS keychain before DirAI starts.</li>
+<li><b>What Connect lists:</b> named <code>Host</code> lines. Patterns (<code>Host *</code>, <code>*.cluster</code>, <code>!x</code>) aren't offered, but their settings still apply. <code>Include</code> files are followed.</li>
+</ul>
+<p><b>Other kinds of host</b>, added to the same <code>~/.ssh/config</code> next to the GIF's <code>hpc-gpu</code>:</p>
+<pre># a cloud VM (Oracle Cloud and others): its key was given when the instance was created,
+# so no ssh-copy-id; the user is the image's (opc on Oracle Linux, ubuntu on Ubuntu)
+Host oracle-vm
+    HostName 129.146.10.20          # the instance's public IP
+    User ubuntu
+    IdentityFile ~/.ssh/oci_vm.key
+
+# a machine reachable only through another one (jump host)
+Host lab-gpu
+    HostName 10.0.3.17              # private address, seen from the jump host
+    User you
+    ProxyJump hpc-gpu               # ssh first to hpc-gpu, then on to here
+
+# defaults for every host (a pattern: not listed in Connect itself)
+Host *
+    ServerAliveInterval 30
+    AddKeysToAgent yes</pre>
+<p>Without <code>ssh-copy-id</code>, the one manual login that stores the host key is a plain ssh: answer "yes" once.</p>
+<pre>ssh oracle-vm hostname
+ssh lab-gpu hostname               # also records the jump host's key</pre>
+<p><b>Two ways to reach a machine behind another</b> (the chain in the <a href="#connections">figure</a>):</p>
+<div class="tbl"><table>
+<tr><th></th><th>How</th><th>What the Machines section shows</th></tr>
+<tr><td>A. <code>ProxyJump</code> on the laptop (simplest)</td><td>The <code>lab-gpu</code> entry above, in the laptop's config. ssh does the jump.</td><td><code>lab-gpu</code> as its own box, linked straight from the laptop. The jump host needs no DirAI.</td></tr>
+<tr><td>B. A DirAI chain</td><td>Put the entry in the <i>middle</i> machine's <code>~/.ssh/config</code> (and its key there). Then click Connect in <i>that</i> machine's box.</td><td>laptop → oracle-vm → hpc-gpu, as in the figure. Use it when only the middle machine can reach the last one, or the laptop shouldn't hold that key.</td></tr>
+</table></div>
+<p><b>Compute nodes need no entry.</b> For a tree served on a compute node (<code>DirAI start --job</code> or New tree… with a node), DirAI hops there itself through the login node (<code>ssh -W</code>). It accepts a new node's key on first use, but refuses one whose key has changed.</p>
+<p><b>Common failures</b> (shown in red in the machine's box):</p>
+<div class="tbl"><table>
+<tr><th>Message</th><th>Cause</th><th>Fix</th></tr>
+<tr><td><code>Permission denied (publickey…)</code></td><td>The key isn't on the remote machine, or it has a passphrase and isn't in the agent</td><td><code>ssh-copy-id &lt;host&gt;</code>, or <code>ssh-add ~/.ssh/id_ed25519</code></td></tr>
+<tr><td><code>Host key verification failed</code></td><td>Never logged in by hand, or the host's key changed</td><td>Log in once by hand (<code>ssh-copy-id &lt;host&gt;</code> or <code>ssh &lt;host&gt; hostname</code>) and answer "yes". For a changed key, first check with the admin, then <code>ssh-keygen -R &lt;host&gt;</code></td></tr>
+<tr><td>Hangs, then times out</td><td>The cluster asks for 2FA (e.g. Duo) at every login</td><td>BatchMode can't answer that. Ask whether keys bypass 2FA, or connect from a machine inside the network (way B)</td></tr>
+<tr><td>Host not in the Connect list</td><td>It's a pattern, or it's in another machine's config</td><td>Give it a plain <code>Host</code> name, in the config of the machine whose box you click</td></tr>
+</table></div>
+
+<h2 id="night">24/7: one night of an agent</h2>
+<figure>
+  <img src="night.svg" alt="Timeline from 18:00 to 09:00: you send a message, the agent submits SLURM jobs, they finish at 3:30, the agent updates its report, you read it at 8:00">
+  <figcaption>Message 1 (24/7 agents) shown as a story, not a feature list. Script: <code>night.py</code></figcaption>
+</figure>
+
+<h2 id="draft">The new opening, now in README.md</h2>
+<p><b>Merged 2026-11-11 on your request</b> ("replace the current one with the draft"). <code>README.md</code> is now:</p>
+<ol>
+<li>The draft's opening, as it was: headline, intro, <code>hero.svg</code>, 3 benefits, <code>night.svg</code>, "Start in one minute", "Add a machine" (GIF, 4 commands, <code>connections.svg</code>) and "Built for".</li>
+<li>"How it works": the old README's first paragraph ("DirAI serves a git repo…") moved here, with <code>overview.svg</code> and the six steps.</li>
+<li>Setup, Use, Where things live, Agent safety and Tests, unchanged except for:
+<ul>
+<li>The old "Quick start" and the old "### Add a machine" are gone, because the opening covers them.</li>
+<li>Use's "From a laptop" now links to <a href="#ssh-config">Add a machine</a>.</li>
+<li>"Where things live" says <code>docs/</code> holds "this README and its figures".</li>
+<li id="setup-dup">"Setup (once per machine)" repeated the install command from "Start in one minute", which you pointed out. It is now "Install details": it links back to that command, says added machines need no install, and keeps only what isn't said above: GitHub access, what <code>install.sh</code> does, requirements, <code>DirAI pull</code>, other models and the migration note. Not committed.</li>
+</ul></li>
+</ol>
+<p><code>README_draft.md</code> is deleted, since its text is in <code>README.md</code> (still in git history). Edits made to the draft earlier on 2026-11-11, now in <code>README.md</code>:</p>
+<ul>
+<li>Image paths are relative (<code>hero.svg</code>, <code>night.svg</code>, <code>ssh_config_demo.gif</code>), as in D5, so the pictures show both here and on GitHub. Before, <code>docs/hero.svg</code> pointed to <code>docs/docs/</code>.</li>
+<li>"Add a machine" now matches the GIF and <code>README.md</code>. It adds the <code>ssh-keygen</code> step and puts the 4 commands in the GIF's order in one code block. The <code>Host</code> sample sits inside the <code>vim</code> step instead of in a separate block.</li>
+<li>"Agents can read each other's results" became "Agents you make colleagues can…", as the <a href="#claims">claims table</a> says: read-only, and only for colleagues you add.</li>
+</ul>
+<p>In short:</p>
+<div class="note">
+<p><b>DirAI: Your own AI agents, working 24/7 in your folders, on every machine you have.</b></p>
+<p>Turn any folder into an agent. Tell it what you want, close your laptop, and it keeps going. It runs your scripts,
+sends long jobs to the cluster, waits for them and writes up the results. In the morning you read one page per agent,
+with what changed marked in yellow.</p>
+<ul>
+<li>🌙 <b>Works while you sleep.</b> Agents run in the background, waiting for cluster jobs for free, and they can run on a schedule.</li>
+<li>🖥️ <b>All your machines, one list.</b> Laptop, lab workstation and HPC cluster in one browser tab, over ssh.</li>
+<li>📁 <b>Every folder is an agent with a memory.</b> Its report and chat carry over from one run to the next, and agents can read each other's results.</li>
+<li>🔑 <b>Yours to keep.</b> The agents live in your folders and run on your machines, with your own Claude plan. There is no hosted service and no account.</li>
+</ul>
+</div>
+
+<h2 id="sharing">Agent sharing in README.md (2026-11-19)</h2>
+<p>You asked for the agent-sharing feature (proposal 72, <code>improvement/share-agents</code>) to be added to the README. It is on GitHub in 5 commits, <code>8e59ffe</code> to <code>56eafff</code>. The text was first written from <code>git show origin/main:…</code> while the pull was denied. After you granted it, <code>git pull --ff-only</code> fast-forwarded the checkout to <code>56eafff</code> (28 files, with no conflict with the uncommitted work). The sources are <code>lib/shares.py</code>, <code>web/share.js</code> and that agent's page. The changes:</p>
+<ul>
+<li>A fifth benefit in the opening: <b>"🤝 Share agents with your group"</b>.</li>
+<li>A new section, <b>"Share agents with other people"</b>, after "Run agents on another machine". It covers:
+<ul>
+<li>what is shared (the folder, not the chat or grants);</li>
+<li>the one-time org <code>&lt;login&gt;-dirai</code> and why it is needed (GitHub's Read role);</li>
+<li>Share pill → checklist → Share as → readers → Publish (and <i>after each run</i>, Unshare…);</li>
+<li>one repo per audience;</li>
+<li>the reader side: Connect from GitHub, read-only rows, fetched every 10 min, Use as colleague, Copy to my tree.</li>
+</ul></li>
+<li>Where things live: <code>www/shares.json</code>, <code>www/shares/</code>, <code>~/.config/dirai/share_account.json</code>.</li>
+</ul>
+<p>Checked against the code:</p>
+<ul>
+<li>the readers' Read role (<code>permission=pull</code>, shares.py line 835);</li>
+<li>the 10-min fetch (docstring, <code>CACHE_S = 600</code>);</li>
+<li>the "run" mode;</li>
+<li>Unshare's confirm text;</li>
+<li>what is left out ("hidden files, tmp/, *.log, and files over 1 MB", share.js line 174);</li>
+<li>Copy to my tree and Use as colleague (share.js lines 54–56).</li>
+</ul>
+<p>Not claimed in the README, because they are still open on the proposal: the "Ask owner" mail link (not built), D7 (Purdue's GitHub server), and the reader side, which is still untried with a real second person.</p>
+
+<p id="sharing-short"><b>Shortened to a diagram</b> (note 2, 2026-11-19). The section now has a figure and 3 bullets (Once, Share, Read), down from about 25 lines. Dropped from the text: Share as, the publish mode, Unshare, one repo per audience, and the 10-minute fetch. Some of these are now in the figure; the rest show in the Share popover itself.</p>
+<figure id="share-fig">
+  <img src="share.svg" alt="You: an agent folder with a Share pill; Publish a snapshot to GitHub: <login>-dirai/<login>_agent_repo, private, readers have the Read role; Connect from GitHub to your friend Mary, who sees it read-only and can use it as a colleague or copy it to their tree">
+  <figcaption>Sharing, as in <code>README.md</code>. Rendered with cairosvg (2026-11-19) and checked by eye: no text overflows its box. Script: <code>share.py</code></figcaption>
+</figure>
+
+<h2 id="install">Install: one curl line (2026-11-19)</h2>
+<p id="install-curl">The repo is public now (notes 1 and 3), so "Start in one minute" uses <code>curl -fsSL https://raw.githubusercontent.com/wang2366/DirAI/main/install.sh | bash</code>. <code>install.sh</code> already handled being piped. With no checkout beside it, it clones <code>https://github.com/wang2366/DirAI.git</code> (its default <code>DIRAI_REPO</code>) into <code>~/.local/share/dirai</code>. Run again, it updates (lines 29–45). Checked: <code>curl -sI</code> on that URL answers HTTP 200 without login (3700 bytes, the same as <code>install.sh</code> here).</p>
+<p>"Install details" is gone. What it had:</p>
+<ul>
+<li>The requirements and how to update are now one line under the commands.</li>
+<li>"Other models" is its own short section.</li>
+<li>Dropped: the private-repo/SSH-key line, <code>DIRAI_BIN</code>, moving the checkout, and the note for versions before 2026-10.</li>
+</ul>
+<p>Not changed: <code>install.sh</code>'s header comment (lines 2–3, 43) still says the repo is private. That file belongs to the root agent.</p>
+
+<h2 id="engines">Engines: Claude Code, Codex and Ollama (2026-11-19)</h2>
+<p>You asked that the README stop naming Claude alone. Checked in the code:</p>
+<ul>
+<li><code>lib/codex_engine.py</code>: <code>ENGINES = ("claude", "codex")</code>, one engine per machine. The owner switches it by clicking the title of the machine's usage widget, "Claude usage ⇄" or "Codex usage ⇄" (<code>web/agent_list.js</code> line 267). A machine with Codex and no Claude Code starts on Codex. Codex runs only in allow-list mode. Its usage windows get pause levels too.</li>
+<li><code>lib/agents.py</code>: Ollama's gpt-oss and GenAI Studio models run through Claude Code (<code>ANTHROPIC_BASE_URL</code>).</li>
+</ul>
+<p>Changes in <code>README.md</code>:</p>
+<ul>
+<li>"Yours to keep": "your own Claude Code or Codex plan, or a local model on Ollama".</li>
+<li>The sharing benefit: "on their own plan".</li>
+<li>The requirements: "an agent engine: Claude Code or Codex CLI".</li>
+<li>The machine boxes: "Claude or Codex usage".</li>
+<li>"Built for": now also names Codex and local models.</li>
+<li>How it works: "a Claude Code or Codex agent", and <code>claude -p</code> (or <code>codex exec</code>).</li>
+<li>"Other models" became <b>"Engines and models"</b>: Claude Code, Codex (and how to switch), then Ollama and GenAI Studio.</li>
+<li>Agent safety: a line on Codex's sandbox (writes confined, reads not, never asks).</li>
+<li>Usage pauses: Codex's windows.</li>
+</ul>
+<p>Left as they are:</p>
+<ul>
+<li>Claude-only facts, such as <code>claude -p --restricted</code>, "Claude Code permission rules" (<code>allow</code>) and claude.ai connectors.</li>
+<li>The figures <code>overview.svg</code> and <code>connections.svg</code>, which still draw "Claude Code runs" and "Claude usage".</li>
+<li><code>install.sh</code> (the root agent's file), which only looks for Claude Code: on a Codex-only machine it says Claude Code is missing.</li>
+</ul>
+
+<h2 id="no-how">"How it works" removed, and SLURM not named (2026-11-19)</h2>
+<p>On your request, <code>README.md</code> no longer has "How it works". That takes out its intro, <code>overview.svg</code>, the 6 numbered steps (<code>claude -p</code>, the 5-run limit, <code>sbatch</code>, <code>sacct</code>, the 5 automatic messages) and the "What the page gives you" table (summary card, Files, Schedule…, Colleagues, New chat / TaskDone).</p>
+<p>SLURM, <code>sbatch</code> and <code>sacct</code> are no longer named in the README or its figures:</p>
+<ul>
+<li>The "Works while you sleep" benefit now says "cluster jobs".</li>
+<li>In Use, <code>--job</code> is "as a batch job".</li>
+<li><code>hero.svg</code> says "waits on jobs".</li>
+<li><code>night.svg</code> says "200 cluster jobs", and its footer says "checked every 10 min" instead of "sacct every 10 min".</li>
+</ul>
+<p>Both figures were redrawn by their scripts and checked by eye in a cairosvg render.</p>
+<p><b>One mention is left:</b> the <code>dirai.json</code> key is literally named <code>"slurm"</code>. It appears in the config example and in its table row, now described as "batch-job options for <code>--job</code>". Removing it would leave that setting undocumented. If you want it gone anyway, say so.</p>
+<p><code>overview.svg</code> and <code>overview.py</code> are kept, because other agents' pages link to them (<code>improvement/inline-svg</code>, <code>improvement/sticky-notes</code>, the root page).</p>
+
+<p id="no-genai"><b>Purdue GenAI Studio taken out of the README for now</b> (2026-11-19, on your request). "Engines and models" now lists Claude Code, Codex and gpt-oss on Ollama only. The relay and its settings are still in DirAI (<code>lib/genai_relay.py</code>), just not documented in the README. Checked: "GenAI" and "Purdue" no longer appear anywhere in <code>README.md</code>. <code>install.sh</code> (the root agent's file) still prints a GenAI Studio line when it runs.</p>
+
+<h2 id="no-use">"Use (per tree)" removed (2026-11-19)</h2>
+<p>You asked whether it was still needed. It wasn't, so it is gone:</p>
+<ul>
+<li><code>cd ~/my-project &amp;&amp; DirAI start</code> is already in "Start in one minute".</li>
+<li>Updating is in the agent list: the "Pull, restart when idle" box (<code>pullBox()</code>, <code>web/agent_list.js</code> line 743), and Update on a machine whose DirAI differs (line 731).</li>
+<li>Starting a tree on another machine or node is "New tree…" in "Run agents on another machine".</li>
+</ul>
+<p>Dropped with it:</p>
+<ul>
+<li>the <code>DirAI status | restart | stop | build | list</code> line;</li>
+<li>what the first start writes (<code>www/dirai.json</code>, <code>.gitignore</code>, the <code>CLAUDE.md</code> import);</li>
+<li>the refusals (<code>/</code>, home, overlapping trees);</li>
+<li>one server per tree;</li>
+<li><code>DIRAI_BROWSER</code>;</li>
+<li>the ssh-tunnel recipe for a laptop without DirAI.</li>
+</ul>
+<p><code>DirAI help</code> and the agent list still cover these. No link pointed to <code>#use-per-tree</code>.</p>
+
+<h2 id="claims">Every claim, checked</h2>
+<p>Marketing text must not promise what DirAI doesn't do. Each claim in the draft, and where it holds:</p>
+<div class="tbl"><table>
+<tr><th>Claim</th><th>True because</th><th>Limit to keep honest</th></tr>
+<tr><td>Works 24/7, after you close the laptop</td><td>Runs are background <code>claude -p</code> processes started by the tree's server; the browser is only a viewer</td><td>Only while the server runs: run it on an always-on machine, or as a job (<code>DirAI start --job</code>), whose wall time limits it</td></tr>
+<tr><td>Waits for cluster jobs for free</td><td>The server polls <code>sacct</code> every 10 min with no tokens, then messages the agent</td><td>At most 5 automatic messages in a row</td></tr>
+<tr><td>"Every day at 8 am", "Friday 3 pm"</td><td>Schedule… box: once / daily / weekly on chosen days / hourly, at a clock time (<code>web/panel.js</code>)</td><td>none</td></tr>
+<tr><td>All machines in one list, over ssh</td><td>Machines on the agent list reads remote trees over the hosts in <code>~/.ssh/config</code></td><td>Needs passwordless ssh keys. DirAI need not be installed by hand: the server above copies it there (<a href="#connections">map</a>)</td></tr>
+<tr><td>Memory</td><td>Each agent's <code>index.html</code> (in the folder) and its chat session carry over between runs; New chat re-reads <code>index.html</code></td><td>The chat thread is in the tree's <code>www/</code>, not in the folder</td></tr>
+<tr><td>Agents read each other's results</td><td>Colleagues: their summary cards go into the agent's instructions, and their folders become readable</td><td>Read-only, and only for colleagues you add</td></tr>
+<tr><td>Yours to keep: your folders, your machines, no hosted service or account</td><td>The server is <code>lib/server.py</code> on your machine. Agents are folders in your tree, and their reports are files there. Runs are your own <code>claude</code> (or Ollama / GenAI Studio through it). Remote machines are reached over your own ssh.</td><td>The model calls still send prompts and file content to the model's provider (Anthropic, or Purdue GenAI Studio); only Ollama stays on the node. The chat thread lives in the tree's <code>www/</code>, which is gitignored.</td></tr>
+<tr><td>Usage stays in check</td><td>New runs pause at your 5-hour / weekly usage levels</td><td>It uses your own Claude plan</td></tr>
+</table></div>
+
+<h2 id="decisions">Your decisions</h2>
+<div class="tbl"><table>
+<tr><th></th><th>Question</th><th>Options (recommended first)</th></tr>
+<tr><td>D1</td><td>Headline</td><td><b>Decided 2026-11-11:</b> (a), plus the point that the user owns the agents. In <code>README.md</code>:
+<ul>
+<li>The headline is "<b>Your own</b> AI agents, working 24/7 in your folders, on every machine you have."</li>
+<li>A fourth benefit, "🔑 Yours to keep", says where the agents live and run: in your folders, on your machines, with your Claude plan or a local model. Their memory is a plain <code>index.html</code> you can edit and commit. DirAI is not a hosted service and has no account (claim checked <a href="#claims">below</a>).</li>
+</ul></td></tr>
+<tr><td>D2</td><td>Apply it now?</td><td><b>Decided 2026-11-11: (a).</b> The draft went on top of README, and the old text stays below as "How it works" (<a href="#draft">merge</a>).</td></tr>
+<tr><td>D3</td><td>Add a screen recording?</td><td><b>Decided 2026-11-11: (b), no screen recording.</b> The drawn figures and the ssh GIF stay.</td></tr>
+<tr><td>D4</td><td>Where the Machines / Schedule figure goes</td><td><b>Settled by the merge:</b> at the end of "Add a machine", which you chose on 2026-11-11 when the figure went into the draft.</td></tr>
+<tr><td>D5</td><td>Image paths in <code>README.md</code></td><td><b>Decided and done 2026-11-11: (a).</b> The root symlink is deleted and the image paths are relative, so GitHub shows <code>docs/README.md</code> on its front page and the pictures show both there and here (<a href="#history">history</a>).</td></tr>
+<tr><td>D6</td><td>A play bar for the animation?</td><td><b>Decided and done 2026-11-11: (a).</b> A GIF can't have one, so it was split into 3 short GIFs (<a href="#gif-split">split</a>).</td></tr>
+</table></div>
+<h2 id="remove-readme-pitch">Removing <code>improvement/readme-pitch</code></h2>
+<p>What is left there: <code>index.html</code> (11 kB, the only tracked file) and an untracked <code>tmp/</code> (GIF test frames <code>frame_*.png</code> and one-off scripts used for the move). Everything else is in this folder now.</p>
+<p>A search of the repo for <code>readme-pitch</code> outside that folder found no link into it:</p>
+<ul>
+<li><b>Root <code>index.html</code> line 393</b> (§12 row <code>todo-readme-pitch</code>): its link already goes to <code>docs/index.html</code>, and it names the folder only in the text "is to be removed (a <code>docs/</code> to-do)". After the removal, the root agent should drop that sentence.</li>
+<li><b><code>improvement/inline-svg</code></b> (<code>check_expand.txt</code>, <code>decisions.svg</code>, <code>page_sizes.svg</code>, <code>check_pages.svg</code>, its <code>index.html</code>): the folder appears only as a data label in measurements already taken. These aren't links, and they stay valid as a record.</li>
+<li>This page: Inputs and History name it as the source of this work. That stays true.</li>
+</ul>
+<p><b>Done 2026-11-11:</b> <code>git rm -r</code> deleted <code>improvement/readme-pitch/index.html</code> and staged the deletion. The folder has no <code>index.html</code> now, so it is no longer an agent. Still to do:</p>
+<ul>
+<li><b>Commit:</b> done on your go. <code>752e186</code> "Remove improvement/readme-pitch: proposal 64 moved to docs/" was pushed to <code>origin/main</code> (<code>2af9f4c..752e186</code>).</li>
+<li><b>The untracked <code>tmp/</code>:</b> deleted on your go. That took 6 scripts with <code>rm</code>, then 31 <code>frame_*.png</code> and the empty folders with <code>tmp/rm_readme_pitch_tmp.py</code>. The folder <code>improvement/readme-pitch</code> no longer exists.</li>
+</ul>
+
+<h2 id="history">History</h2>
+<ul>
+<li>2026-11-08 to 11-10: proposal 64 in <code>improvement/readme-pitch</code> drafted the opening and the figures, then the <code>~/.ssh/config</code> how-to and animation; the animation went into <code>README.md</code>.</li>
+<li>2026-11-11: you chose to keep all README work here, with <code>docs/</code> as its agent. The figures, their scripts and <code>README_draft.md</code> moved here, and the image paths in <code>README.md</code> and the draft now point to <code>docs/</code>.</li>
+<li>Not done at first (done later the same day, next item): moving <code>README.md</code> to <code>docs/README.md</code> with a link at the root. <code>lib/remotes.py</code> ships the root <code>README.md</code> to every remote machine in a tar (<code>SHIP</code>, line 75; <code>tar.add</code> at line 168, which stores a symlink as a link). A link would arrive there broken. The remote would then leave README out of its build id while the laptop counts it, so the two ids would never match and DirAI would copy itself again at every poll. Fixes: drop <code>"README.md"</code> from <code>SHIP</code> (remote machines don't need it), or add the link only after such a change. Until then the root <code>README.md</code> stays a real file. It shows here only through the root agent's page. Committed as <code>faa856f</code>.</li>
+<li>2026-11-11, on your go: <code>"README.md"</code> dropped from <code>SHIP</code> in <code>lib/remotes.py</code>. <code>tests/test_remotes.py</code> and <code>tests/test_self_update.py</code> pass, 14 tests. <code>README.md</code> moved to <code>docs/README.md</code>, and the root <code>README.md</code> became the link <code>README.md → docs/README.md</code>. Its image paths became repo-rooted (<code>/docs/overview.svg</code>, <code>/docs/ssh_config_demo.gif</code>), so they work through the link and in the file itself. Checked on test branch <code>readme-docs-test</code>, then merged into main (<code>dd20266</code>).</li>
+<li>2026-11-11: <code>improvement/readme-pitch</code> removed (<code>752e186</code>). Then D5 (a): the root <code>README.md</code> link was deleted, and the image paths in <code>docs/README.md</code> became relative (<code>overview.svg</code>, <code>ssh_config_demo.gif</code>), so they show both on this page and on GitHub, which now shows <code>docs/README.md</code> on its front page. The comment at <code>lib/remotes.py</code> line 75 was updated to match.</li>
+</ul>
+
+</main>
+</body>
+</html>

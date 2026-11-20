@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="330" viewBox="0 0 900 330" font-family="Helvetica, Arial, sans-serif">
+<rect width="900" height="330" fill="#fff"/>
+<text x="450" y="30" font-size="19" fill="#222" text-anchor="middle" font-weight="bold">Share an agent: you publish, they read</text>
+<rect x="20" y="60" width="230" height="250" rx="10" fill="#f4f8ff" stroke="#3d6fae" stroke-width="1.5"/>
+<text x="135" y="84" font-size="15" fill="#3d6fae" text-anchor="middle" font-weight="bold">You</text>
+<rect x="40" y="98" width="190" height="92" rx="6" fill="#fff" stroke="#999" stroke-width="1"/>
+<text x="135" y="118" font-size="12" fill="#222" text-anchor="middle" font-family="monospace">~/proj/fit/  (an agent)</text>
+<text x="135" y="140" font-size="12" fill="#555" text-anchor="middle">page · scripts · results</text>
+<rect x="68" y="156" width="53" height="22" rx="11" fill="#3d6fae" stroke="#3d6fae" stroke-width="1"/>
+<text x="94" y="171" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold">Share</text>
+<rect x="142" y="156" width="46" height="22" rx="11" fill="#ddd" stroke="#ddd" stroke-width="1"/>
+<text x="165" y="171" font-size="12" fill="#555" text-anchor="middle" font-weight="bold">Chat</text>
+<text x="135" y="216" font-size="12" fill="#777" text-anchor="middle">stays with you:</text>
+<text x="135" y="234" font-size="12" fill="#777" text-anchor="middle">chat, Claude session, grants</text>
+<text x="135" y="268" font-size="12" fill="#3d6fae" text-anchor="middle">one click, or after each run</text>
+<line x1="252" y1="150" x2="332" y2="150" stroke="#555" stroke-width="2"/>
+<polygon points="340,150 330,144 330,156" fill="#555"/>
+<text x="296" y="140" font-size="13" fill="#222" text-anchor="middle" font-weight="bold">Publish</text>
+<text x="296" y="170" font-size="11" fill="#777" text-anchor="middle">a snapshot</text>
+<rect x="340" y="60" width="220" height="250" rx="10" fill="#f6f6f6" stroke="#444" stroke-width="1.5"/>
+<text x="450" y="84" font-size="15" fill="#222" text-anchor="middle" font-weight="bold">GitHub</text>
+<rect x="358" y="98" width="184" height="92" rx="6" fill="#fff" stroke="#999" stroke-width="1"/>
+<text x="450" y="118" font-size="12" fill="#222" text-anchor="middle" font-family="monospace">&lt;login&gt;-dirai /</text>
+<text x="450" y="136" font-size="12" fill="#222" text-anchor="middle" font-family="monospace">&lt;login&gt;_agent_repo</text>
+<text x="450" y="158" font-size="12" fill="#555" text-anchor="middle">private · agents/fit/</text>
+<text x="450" y="178" font-size="11" fill="#777" text-anchor="middle">your free org</text>
+<text x="450" y="216" font-size="12" fill="#222" text-anchor="middle" font-weight="bold">readers: Read role</text>
+<text x="450" y="234" font-size="12" fill="#777" text-anchor="middle">so they can&#x27;t push</text>
+<text x="450" y="268" font-size="12" fill="#444" text-anchor="middle">one repo per audience</text>
+<line x1="562" y1="150" x2="642" y2="150" stroke="#555" stroke-width="2"/>
+<polygon points="650,150 640,144 640,156" fill="#555"/>
+<text x="606" y="140" font-size="13" fill="#222" text-anchor="middle" font-weight="bold">Connect</text>
+<text x="606" y="170" font-size="11" fill="#777" text-anchor="middle">from GitHub</text>
+<rect x="650" y="60" width="230" height="250" rx="10" fill="#f2faf4" stroke="#2f7d4a" stroke-width="1.5"/>
+<text x="765" y="84" font-size="15" fill="#2f7d4a" text-anchor="middle" font-weight="bold">Your friend Mary</text>
+<rect x="668" y="98" width="194" height="92" rx="6" fill="#fff" stroke="#2f7d4a" stroke-width="1" stroke-dasharray="5 4"/>
+<text x="765" y="118" font-size="12" fill="#222" text-anchor="middle">fit  (in their agent list)</text>
+<text x="765" y="140" font-size="12" fill="#2f7d4a" text-anchor="middle" font-weight="bold">From you · read-only</text>
+<text x="765" y="160" font-size="12" fill="#555" text-anchor="middle">new versions marked</text>
+<text x="765" y="178" font-size="11" fill="#777" text-anchor="middle">every 10 min</text>
+<text x="765" y="222" font-size="13" fill="#222" text-anchor="middle" font-weight="bold">Use as colleague</text>
+<text x="765" y="240" font-size="12" fill="#777" text-anchor="middle">their agents read it</text>
+<text x="765" y="268" font-size="13" fill="#222" text-anchor="middle" font-weight="bold">Copy to my tree</text>
+<text x="765" y="286" font-size="12" fill="#777" text-anchor="middle">run it on their own Claude</text>
+</svg>

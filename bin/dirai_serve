@@ -1,0 +1,62 @@
+#!/bin/bash
+# Long-running server for ONE tree (a git repo): serves its agents' .html files and their images
+# (only) on the tree's port, open to the network: http://<node>:<port>/www/index.html
+# Builds the tree's www/index.html at start (server.py rebuilds it every 10 min, along with
+# its other housekeeping) and records itself in <tree>/www/server_host.txt
+# (read by `DirAI status|restart|stop`).
+#
+#   dirai_serve TREE          normally started by `DirAI start` (on your devnode, or as a job)
+# Reload (restart the Python server with the current code, same job/node/port): kill -USR1 <pid>,
+# i.e. `DirAI restart`. Stop: `DirAI stop`.
+set -u
+
+TOOL=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+ROOT=$(cd "${1:?usage: dirai_serve TREE}" && pwd -P)
+DATA=$ROOT/www
+HOST_FILE=$DATA/server_host.txt
+PORT=$(python3 -c "import sys; sys.path.insert(0, '$TOOL/lib'); import dirai_config as c; print(c.tree_config('$ROOT')['port'] or '')")
+[[ -n "$PORT" ]] || { echo "no port in $DATA/dirai.json (run: DirAI start)" >&2; exit 1; }
+# dirai.json "bind": "127.0.0.1" keeps the pages off the network (reached only through ssh tunnels)
+BIND=$(python3 -c "import sys; sys.path.insert(0, '$TOOL/lib'); import dirai_config as c; print(c.tree_config('$ROOT').get('bind') or '0.0.0.0')")
+mkdir -p "$DATA"
+SERVER_PID=
+# Its output goes to a file (serve_node.log). Python before 3.9 (e.g. 3.6 on RHEL 8 clusters) fully buffers
+# stderr to a file, so request lines came late and in bursts, out of order with this script's lines,
+# and the unwritten part was lost when a reload killed the server. Unbuffered, each line lands at once.
+export PYTHONUNBUFFERED=1
+
+# On exit: drop the host file only if it still describes this instance, then take the
+# server down with us (trap reset first so kill 0 doesn't re-enter it).
+cleanup() {
+    trap - EXIT HUP INT TERM
+    [[ "$(awk '{print $5}' "$HOST_FILE" 2>/dev/null)" == "$$" ]] && rm -f "$HOST_FILE"
+    kill 0
+}
+
+start_server() {
+    python3 "$TOOL/lib/agent_list.py" "$ROOT"
+    python3 "$TOOL/lib/server.py" "$ROOT" "$PORT" "$BIND" &
+    SERVER_PID=$!
+}
+
+# SIGUSR1: restart the Python server in place (picks up server.py/agents.py changes)
+reload() {
+    echo "$(date '+%F %T') reload"
+    kill "$SERVER_PID" 2>/dev/null
+    wait "$SERVER_PID" 2>/dev/null
+    start_server
+}
+
+trap cleanup EXIT INT TERM
+trap reload USR1
+
+start_server
+# fields: node job date time pid reload-capable port
+echo "$(hostname -s) ${SLURM_JOB_ID:-nojob} $(date '+%F %T') $$ reload $PORT" > "$HOST_FILE"
+echo "Serving $ROOT on $(hostname -s):$PORT"
+
+# wait returns whenever a trapped signal (USR1) arrives; keep waiting after a reload
+while true; do
+    wait
+    sleep 1
+done

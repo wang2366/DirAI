@@ -1,0 +1,202 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 840" width="1060" height="840" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+<rect width="100%" height="100%" fill="#fff"/>
+<defs><marker id="ah" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2e7d32"/></marker></defs>
+<text x="20" y="26" font-size="17" fill="#1d1d1f" font-weight="600" text-anchor="start">Every machine in one list: ssh links, Claude usage limits and schedules</text>
+<text x="20" y="44" font-size="12" fill="#77777a" text-anchor="start">The agent list&#x27;s Machines section and one agent&#x27;s panel (example values)</text>
+<text x="20" y="72" font-size="13" xml:space="preserve"><tspan fill="#77777a">▾ </tspan><tspan fill="#1d1d1f" font-weight="600">Machines — 4 servers on 3 machines · </tspan><tspan fill="#1d1d1f" font-weight="600">1 needs you</tspan></text>
+<path d="M350,108 C378,108 378,108 406,108" fill="none" stroke="#2e7d32" stroke-width="2" marker-end="url(#ah)"/>
+<path d="M696,108 C724,108 724,108 752,108" fill="none" stroke="#2e7d32" stroke-width="2" marker-end="url(#ah)"/>
+<circle cx="378" cy="96" r="8" fill="#b8640f"/>
+<text x="378" y="100" font-size="11" fill="#fff" font-weight="600" text-anchor="middle">1</text>
+<rect x="20" y="84" width="330" height="232" rx="8" fill="#fff" stroke="#888888" stroke-width="1"/>
+<text x="28" y="103" font-size="13" xml:space="preserve"><tspan fill="#77777a">▾ </tspan><tspan fill="#1d1d1f" font-weight="600">MacBook</tspan><tspan fill="#77777a">  this server</tspan></text>
+<text x="28" y="126" font-size="12" fill="#1d1d1f" font-weight="600" text-anchor="start">Claude usage</text>
+<rect x="120" y="115" width="45" height="16" rx="9" fill="none" stroke="#888888" stroke-width="1"/>
+<text x="128" y="126" font-size="11" fill="#1d1d1f" font-weight="600" text-anchor="start">Chart</text>
+<rect x="170" y="115" width="39" height="16" rx="9" fill="#0b63ce" stroke="#0b63ce" stroke-width="1"/>
+<text x="178" y="126" font-size="11" fill="#fff" font-weight="600" text-anchor="start">Auto</text>
+<text x="28" y="145" font-size="12" fill="#1d1d1f" font-weight="600" text-anchor="start">5-hour</text>
+<rect x="77" y="137" width="40" height="8" rx="4" fill="#dcdcdc" stroke="none" stroke-width="1"/>
+<rect x="77" y="137" width="13" height="8" rx="4" fill="#2e7d32" stroke="none" stroke-width="1"/>
+<rect x="107" y="133" width="4" height="16" fill="#1d1d1f"/>
+<text x="123" y="145" font-size="12" xml:space="preserve"><tspan fill="#1d1d1f">34%</tspan><tspan fill="#77777a"> · 15:10 · pause 80%</tspan></text>
+<text x="28" y="163" font-size="12" fill="#1d1d1f" font-weight="600" text-anchor="start">Weekly</text>
+<rect x="77" y="155" width="40" height="8" rx="4" fill="#dcdcdc" stroke="none" stroke-width="1"/>
+<rect x="77" y="155" width="19" height="8" rx="4" fill="#b26b00" stroke="none" stroke-width="1"/>
+<rect x="97" y="151" width="4" height="16" fill="#1d1d1f"/>
+<text x="123" y="163" font-size="12" xml:space="preserve"><tspan fill="#1d1d1f">48%</tspan><tspan fill="#77777a"> · Sat 9 AM · pause 57%</tspan></text>
+<circle cx="336" cy="122" r="8" fill="#b8640f"/>
+<text x="336" y="126" font-size="11" fill="#fff" font-weight="600" text-anchor="middle">2</text>
+<circle cx="336" cy="142" r="8" fill="#b8640f"/>
+<text x="336" y="146" font-size="11" fill="#fff" font-weight="600" text-anchor="middle">3</text>
+<circle cx="246" cy="122" r="8" fill="#b8640f"/>
+<text x="246" y="126" font-size="11" fill="#fff" font-weight="600" text-anchor="middle">4</text>
+<rect x="28" y="175" width="314" height="40" rx="6" fill="#fff" stroke="#2e7d32" stroke-width="1"/>
+<rect x="323" y="181" width="12" height="12" rx="2" fill="#0b63ce" stroke="#767676" stroke-width="1"/>
+<path d="M326 187 l3 3 l5 -6" fill="none" stroke="#fff" stroke-width="2"/>
+<text x="34" y="192" font-size="12" xml:space="preserve"><tspan fill="#1d1d1f" font-weight="600">~/work</tspan></text>
+<text x="34" y="208" font-size="12" xml:space="preserve"><tspan fill="#2e7d32">alive · this list</tspan></text>
+<rect x="150" y="195" width="61" height="18" rx="4" fill="none" stroke="#888888" stroke-width="1"/>
+<text x="158" y="208" font-size="12" fill="#1d1d1f" text-anchor="start">Restart</text>
+<text x="28" y="233" font-size="12" fill="#77777a" text-anchor="start">DirAI main @ 52a5d4e</text>
+<text x="28" y="249" font-size="12" fill="#77777a" text-anchor="start">up to date with origin/main · fetched 4 min ago</text>
+<text x="28" y="271" font-size="12" fill="#77777a" text-anchor="start">Connect from ~/.ssh/config:</text>
+<rect x="28" y="278" width="110" height="18" rx="3" fill="#fff" stroke="#767676" stroke-width="1"/>
+<text x="34" y="291" font-size="12" fill="#1d1d1f" text-anchor="start">hpc-gpu</text>
+<text x="130" y="291" font-size="10" fill="#1d1d1f" text-anchor="end">▾</text>
+<rect x="144" y="278" width="61" height="18" rx="4" fill="#0b63ce" stroke="#0b63ce" stroke-width="1"/>
+<text x="152" y="291" font-size="12" fill="#fff" text-anchor="start">Connect</text>
+<rect x="406" y="84" width="290" height="232" rx="8" fill="#fff" stroke="#888888" stroke-width="1"/>
+<text x="414" y="103" font-size="13" xml:space="preserve"><tspan fill="#77777a">▾ </tspan><tspan fill="#1d1d1f" font-weight="600">oracle-vm</tspan><tspan fill="#77777a">  ssh on instance-oci1</tspan></text>
+<text x="684" y="102" font-size="16" fill="#888888" text-anchor="middle">×</text>
+<text x="414" y="126" font-size="12" fill="#1d1d1f" font-weight="600" text-anchor="start">Claude usage</text>
+<rect x="506" y="115" width="45" height="16" rx="9" fill="none" stroke="#888888" stroke-width="1"/>
+<text x="514" y="126" font-size="11" fill="#1d1d1f" font-weight="600" text-anchor="start">Chart</text>
+<rect x="556" y="115" width="39" height="16" rx="9" fill="#0b63ce" stroke="#0b63ce" stroke-width="1"/>
+<text x="564" y="126" font-size="11" fill="#fff" font-weight="600" text-anchor="start">Auto</text>
+<text x="414" y="145" font-size="12" fill="#1d1d1f" font-weight="600" text-anchor="start">5-hour</text>
+<rect x="463" y="137" width="40" height="8" rx="4" fill="#dcdcdc" stroke="none" stroke-width="1"/>
+<rect x="463" y="137" width="4" height="8" rx="4" fill="#2e7d32" stroke="none" stroke-width="1"/>
+<rect x="501" y="133" width="4" height="16" fill="#1d1d1f"/>
+<text x="509" y="145" font-size="12" xml:space="preserve"><tspan fill="#1d1d1f">12%</tspan><tspan fill="#77777a"> · 18:40 · pause 100%</tspan></text>
+<text x="414" y="163" font-size="12" fill="#1d1d1f" font-weight="600" text-anchor="start">Weekly</text>
+<rect x="463" y="155" width="40" height="8" rx="4" fill="#dcdcdc" stroke="none" stroke-width="1"/>
+<rect x="463" y="155" width="12" height="8" rx="4" fill="#2e7d32" stroke="none" stroke-width="1"/>
+<rect x="483" y="151" width="4" height="16" fill="#1d1d1f"/>
+<text x="509" y="163" font-size="12" xml:space="preserve"><tspan fill="#1d1d1f">30%</tspan><tspan fill="#77777a"> · Sat 9 AM · pause 57%</tspan></text>
+<rect x="414" y="175" width="274" height="56" rx="6" fill="#fff" stroke="#2e7d32" stroke-width="1"/>
+<rect x="669" y="181" width="12" height="12" rx="2" fill="#0b63ce" stroke="#767676" stroke-width="1"/>
+<path d="M672 187 l3 3 l5 -6" fill="none" stroke="#fff" stroke-width="2"/>
+<text x="420" y="192" font-size="12" xml:space="preserve"><tspan fill="#1d1d1f" font-weight="600">~/webapp</tspan></text>
+<text x="420" y="208" font-size="12" xml:space="preserve"><tspan fill="#2e7d32">alive</tspan><tspan fill="#77777a"> · instance-oci1 · 8765</tspan></text>
+<text x="420" y="224" font-size="12" fill="#1d1d1f" text-anchor="start">4 agents</text>
+<rect x="477" y="211" width="41" height="18" rx="4" fill="#0b63ce" stroke="#0b63ce" stroke-width="1"/>
+<text x="485" y="224" font-size="12" fill="#fff" text-anchor="start">Open</text>
+<rect x="523" y="211" width="61" height="18" rx="4" fill="none" stroke="#888888" stroke-width="1"/>
+<text x="531" y="224" font-size="12" fill="#1d1d1f" text-anchor="start">Restart</text>
+<rect x="589" y="211" width="48" height="18" rx="4" fill="none" stroke="#888888" stroke-width="1"/>
+<text x="597" y="224" font-size="12" fill="#1d1d1f" text-anchor="start">Stop…</text>
+<text x="414" y="251" font-size="12" fill="#77777a" text-anchor="start">New tree…</text>
+<text x="414" y="273" font-size="12" fill="#77777a" text-anchor="start">Connect from ~/.ssh/config:</text>
+<text x="414" y="289" font-size="12" fill="#77777a" text-anchor="start">its one host is connected</text>
+<rect x="752" y="84" width="290" height="332" rx="8" fill="#fff" stroke="#888888" stroke-width="1"/>
+<text x="760" y="103" font-size="13" xml:space="preserve"><tspan fill="#77777a">▾ </tspan><tspan fill="#1d1d1f" font-weight="600">hpc-gpu</tspan><tspan fill="#77777a">  ssh on login1</tspan></text>
+<text x="1030" y="102" font-size="16" fill="#888888" text-anchor="middle">×</text>
+<text x="760" y="126" font-size="12" fill="#1d1d1f" font-weight="600" text-anchor="start">Claude usage</text>
+<rect x="852" y="115" width="45" height="16" rx="9" fill="none" stroke="#888888" stroke-width="1"/>
+<text x="860" y="126" font-size="11" fill="#1d1d1f" font-weight="600" text-anchor="start">Chart</text>
+<rect x="902" y="115" width="39" height="16" rx="9" fill="#0b63ce" stroke="#0b63ce" stroke-width="1"/>
+<text x="910" y="126" font-size="11" fill="#fff" font-weight="600" text-anchor="start">Auto</text>
+<text x="760" y="145" font-size="12" fill="#1d1d1f" font-weight="600" text-anchor="start">5-hour</text>
+<rect x="809" y="137" width="40" height="8" rx="4" fill="#dcdcdc" stroke="none" stroke-width="1"/>
+<rect x="809" y="137" width="28" height="8" rx="4" fill="#b26b00" stroke="none" stroke-width="1"/>
+<rect x="839" y="133" width="4" height="16" fill="#1d1d1f"/>
+<text x="855" y="145" font-size="12" xml:space="preserve"><tspan fill="#1d1d1f">71%</tspan><tspan fill="#77777a"> · 16:25 · pause 80%</tspan></text>
+<text x="760" y="163" font-size="12" fill="#1d1d1f" font-weight="600" text-anchor="start">Weekly</text>
+<rect x="809" y="155" width="40" height="8" rx="4" fill="#dcdcdc" stroke="none" stroke-width="1"/>
+<rect x="809" y="155" width="20" height="8" rx="4" fill="#b26b00" stroke="none" stroke-width="1"/>
+<rect x="829" y="151" width="4" height="16" fill="#1d1d1f"/>
+<text x="855" y="163" font-size="12" xml:space="preserve"><tspan fill="#1d1d1f">52%</tspan><tspan fill="#77777a"> · Sat 9 AM · pause 57%</tspan></text>
+<rect x="760" y="175" width="274" height="72" rx="6" fill="#fff" stroke="#2e7d32" stroke-width="1"/>
+<rect x="1015" y="181" width="12" height="12" rx="2" fill="#0b63ce" stroke="#767676" stroke-width="1"/>
+<path d="M1018 187 l3 3 l5 -6" fill="none" stroke="#fff" stroke-width="2"/>
+<text x="766" y="192" font-size="12" xml:space="preserve"><tspan fill="#1d1d1f" font-weight="600">~/proj/sim</tspan></text>
+<text x="766" y="208" font-size="12" xml:space="preserve"><tspan fill="#2e7d32">alive</tspan><tspan fill="#77777a"> · gpu-a07 · 8765</tspan></text>
+<text x="766" y="224" font-size="12" xml:space="preserve"><tspan fill="#1d1d1f">12 agents · </tspan><tspan fill="#c62828" font-weight="600">1 needs you</tspan></text>
+<rect x="766" y="227" width="41" height="18" rx="4" fill="#0b63ce" stroke="#0b63ce" stroke-width="1"/>
+<text x="774" y="240" font-size="12" fill="#fff" text-anchor="start">Open</text>
+<rect x="812" y="227" width="61" height="18" rx="4" fill="none" stroke="#888888" stroke-width="1"/>
+<text x="820" y="240" font-size="12" fill="#1d1d1f" text-anchor="start">Restart</text>
+<rect x="878" y="227" width="48" height="18" rx="4" fill="none" stroke="#888888" stroke-width="1"/>
+<text x="886" y="240" font-size="12" fill="#1d1d1f" text-anchor="start">Stop…</text>
+<circle cx="902" cy="204" r="8" fill="#b8640f"/>
+<text x="902" y="208" font-size="11" fill="#fff" font-weight="600" text-anchor="middle">5</text>
+<circle cx="918" cy="220" r="8" fill="#b8640f"/>
+<text x="918" y="224" font-size="11" fill="#fff" font-weight="600" text-anchor="middle">6</text>
+<rect x="760" y="255" width="274" height="88" rx="6" fill="#fff" stroke="#888888" stroke-width="1" stroke-dasharray="4 3"/>
+<rect x="1015" y="261" width="12" height="12" rx="2" fill="#fff" stroke="#767676" stroke-width="1"/>
+<text x="766" y="272" font-size="12" xml:space="preserve"><tspan fill="#1d1d1f" font-weight="600">/scratch/…/train</tspan></text>
+<text x="766" y="288" font-size="12" xml:space="preserve"><tspan fill="#888888">down</tspan><tspan fill="#77777a"> · – · 8766</tspan></text>
+<text x="766" y="304" font-size="12" fill="#1d1d1f" text-anchor="start">0 agents</text>
+<rect x="823" y="291" width="48" height="18" rx="4" fill="#0b63ce" stroke="#0b63ce" stroke-width="1"/>
+<text x="831" y="304" font-size="12" fill="#fff" text-anchor="start">Start</text>
+<text x="766" y="320" font-size="12" xml:space="preserve"><tspan fill="#77777a">last server gpu-a03: job 812345</tspan></text>
+<text x="766" y="336" font-size="12" xml:space="preserve"><tspan fill="#77777a">ended (TIMEOUT)</tspan></text>
+<text x="760" y="363" font-size="12" fill="#77777a" text-anchor="start">New tree…</text>
+<text x="760" y="385" font-size="12" fill="#77777a" text-anchor="start">Connect from ~/.ssh/config:</text>
+<text x="760" y="401" font-size="12" fill="#77777a" text-anchor="start">no Host entries there</text>
+<rect x="20" y="432" width="500" height="346" rx="10" fill="#fff" stroke="#bbbbbb" stroke-width="1"/>
+<text x="32" y="456" font-size="14" fill="#1d1d1f" font-weight="600" text-anchor="start">hpc-gpu:~/proj/sim</text>
+<rect x="438" y="443" width="70" height="18" rx="9" fill="#b26b00" stroke="none" stroke-width="1"/>
+<text x="473" y="456" font-size="12" fill="#fff" font-weight="600" text-anchor="middle">working</text>
+<line x1="20" y1="470" x2="520" y2="470" stroke="#ddd"/>
+<rect x="32" y="480" width="476" height="38" rx="8" fill="#eef4ff" stroke="none" stroke-width="1"/>
+<text x="42" y="494" font-size="11" fill="#777" text-anchor="start">you (scheduled, every day) · 08:00</text>
+<text x="42" y="510" font-size="13" fill="#1d1d1f" text-anchor="start">Rerun the fit with last night&#x27;s data and update the plots</text>
+<rect x="32" y="524" width="476" height="38" rx="8" fill="#f3f3f3" stroke="none" stroke-width="1"/>
+<text x="42" y="538" font-size="11" fill="#777" text-anchor="start">claude · 08:41 · $0.38</text>
+<text x="42" y="554" font-size="13" fill="#1d1d1f" text-anchor="start">Submitted 3 GPU jobs; I&#x27;ll update the plots when they finish.</text>
+<circle cx="186" cy="534" r="8" fill="#b8640f"/>
+<text x="186" y="538" font-size="11" fill="#fff" font-weight="600" text-anchor="middle">8</text>
+<line x1="20" y1="572" x2="520" y2="572" stroke="#ddd"/>
+<rect x="32" y="577" width="27" height="24" rx="6" fill="#fafafa" stroke="#999" stroke-width="1"/>
+<text x="42" y="596" font-size="13" fill="#1d1d1f" text-anchor="start">📎</text>
+<rect x="65" y="577" width="83" height="24" rx="6" fill="#fafafa" stroke="#999" stroke-width="1"/>
+<text x="75" y="596" font-size="13" fill="#1d1d1f" text-anchor="start">Schedule…</text>
+<circle cx="149" cy="578" r="8" fill="#b8640f"/>
+<text x="149" y="582" font-size="11" fill="#fff" font-weight="600" text-anchor="middle">7</text>
+<rect x="154" y="577" width="76" height="24" rx="6" fill="#fafafa" stroke="#999" stroke-width="1"/>
+<text x="164" y="596" font-size="13" fill="#1d1d1f" text-anchor="start">New chat</text>
+<rect x="236" y="577" width="76" height="24" rx="6" fill="#fafafa" stroke="#999" stroke-width="1"/>
+<text x="246" y="596" font-size="13" fill="#1d1d1f" text-anchor="start">TaskDone</text>
+<rect x="32" y="610" width="476" height="124" rx="6" fill="#f3f3f3" stroke="none" stroke-width="1"/>
+<text x="40" y="630" font-size="12.5" fill="#1d1d1f" text-anchor="start">Send</text>
+<rect x="98" y="615" width="47" height="20" rx="12" fill="#fff" stroke="#0b63ce" stroke-width="1"/>
+<text x="108" y="630" font-size="12.5" fill="#0b63ce" text-anchor="start">Once</text>
+<rect x="150" y="615" width="53" height="20" rx="12" fill="#0b63ce" stroke="#0b63ce" stroke-width="1"/>
+<text x="160" y="630" font-size="12.5" fill="#fff" font-weight="600" text-anchor="start">Daily</text>
+<rect x="208" y="615" width="60" height="20" rx="12" fill="#fff" stroke="#0b63ce" stroke-width="1"/>
+<text x="218" y="630" font-size="12.5" fill="#0b63ce" text-anchor="start">Weekly</text>
+<rect x="273" y="615" width="87" height="20" rx="12" fill="#fff" stroke="#0b63ce" stroke-width="1"/>
+<text x="283" y="630" font-size="12.5" fill="#0b63ce" text-anchor="start">Every hour</text>
+<text x="40" y="656" font-size="12.5" fill="#1d1d1f" text-anchor="start">at</text>
+<rect x="98" y="642" width="64" height="20" rx="4" fill="#fff" stroke="#999" stroke-width="1"/>
+<text x="104" y="656" font-size="13" fill="#1d1d1f" text-anchor="start">08:00</text>
+<rect x="40" y="668" width="460" height="24" rx="2" fill="#fff" stroke="#999" stroke-width="1"/>
+<text x="46" y="684" font-size="13" fill="#1d1d1f" text-anchor="start">Rerun the fit with last night&#x27;s data and update the plots</text>
+<text x="40" y="710" font-size="12.5" fill="#1d1d1f" text-anchor="start">Each run</text>
+<circle cx="104" cy="706" r="5" fill="#fff" stroke="#767676"/>
+<text x="114" y="710" font-size="12.5" fill="#1d1d1f" text-anchor="start">fresh chat (re-reads index.html)</text>
+<circle cx="366" cy="706" r="5" fill="#fff" stroke="#0b63ce" stroke-width="3"/>
+<text x="376" y="710" font-size="12.5" fill="#1d1d1f" text-anchor="start">continue this chat</text>
+<rect x="32" y="739" width="111" height="24" rx="6" fill="#0b63ce" stroke="#0b63ce" stroke-width="1"/>
+<text x="42" y="758" font-size="13" fill="#fff" text-anchor="start">Save schedule</text>
+<rect x="149" y="739" width="62" height="24" rx="6" fill="#fafafa" stroke="#999" stroke-width="1"/>
+<text x="159" y="758" font-size="13" fill="#1d1d1f" text-anchor="start">Cancel</text>
+<text x="548" y="446" font-size="14" fill="#1d1d1f" font-weight="600" text-anchor="start">What the numbers point at</text>
+<circle cx="556" cy="466" r="8" fill="#b8640f"/>
+<text x="556" y="470" font-size="11" fill="#fff" font-weight="600" text-anchor="middle">1</text>
+<text x="572" y="470" font-size="12" fill="#1d1d1f" text-anchor="start">ssh link to the next machine. Chains work.</text>
+<circle cx="556" cy="489" r="8" fill="#b8640f"/>
+<text x="556" y="493" font-size="11" fill="#fff" font-weight="600" text-anchor="middle">2</text>
+<text x="572" y="493" font-size="12" fill="#1d1d1f" text-anchor="start">That machine&#x27;s Claude usage.</text>
+<circle cx="556" cy="512" r="8" fill="#b8640f"/>
+<text x="556" y="516" font-size="11" fill="#fff" font-weight="600" text-anchor="middle">3</text>
+<text x="572" y="516" font-size="12" fill="#1d1d1f" text-anchor="start">Pause level: drag it. No new runs above it.</text>
+<circle cx="556" cy="535" r="8" fill="#b8640f"/>
+<text x="556" y="539" font-size="11" fill="#fff" font-weight="600" text-anchor="middle">4</text>
+<text x="572" y="539" font-size="12" fill="#1d1d1f" text-anchor="start">Auto: weekly level grows 1/7 a day.</text>
+<circle cx="556" cy="558" r="8" fill="#b8640f"/>
+<text x="556" y="562" font-size="11" fill="#fff" font-weight="600" text-anchor="middle">5</text>
+<text x="572" y="562" font-size="12" fill="#1d1d1f" text-anchor="start">Compute node serving the tree.</text>
+<circle cx="556" cy="581" r="8" fill="#b8640f"/>
+<text x="556" y="585" font-size="11" fill="#fff" font-weight="600" text-anchor="middle">6</text>
+<text x="572" y="585" font-size="12" fill="#1d1d1f" text-anchor="start">An agent waits for you.</text>
+<circle cx="556" cy="604" r="8" fill="#b8640f"/>
+<text x="556" y="608" font-size="11" fill="#fff" font-weight="600" text-anchor="middle">7</text>
+<text x="572" y="608" font-size="12" fill="#1d1d1f" text-anchor="start">Schedule: runs with the laptop closed.</text>
+<circle cx="556" cy="627" r="8" fill="#b8640f"/>
+<text x="556" y="631" font-size="11" fill="#fff" font-weight="600" text-anchor="middle">8</text>
+<text x="572" y="631" font-size="12" fill="#1d1d1f" text-anchor="start">What the reply cost.</text>
+<text x="548" y="660" font-size="12" fill="#77777a" font-style="italic" text-anchor="start">Agents run on their own machines; the laptop only shows them.</text>
+</svg>
