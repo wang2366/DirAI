@@ -663,18 +663,21 @@
   // the machine has more than one tree
   // The repos connected in one server's tree: inside that server's node, folded by default ("shared repos (N)"),
   // so a machine's box stays as short as before. tid: that tree ("" for this server).
-  function sharesBox(sh, tid) {
+  // off: that tree is unticked, so none of its agents are listed, its repos' included (their ticks wait, disabled)
+  function sharesBox(sh, tid, off) {
     const list = (sh && sh.connected) || [];
     if (!sh) return "";
     // the Connect from GitHub row (and its "no one else has shared…" line) is in the fold too
     return `<details class="tshares" data-sid="${esc(tid)}"><summary class="dim">shared repos (${list.length})` +
-      `${list.some(g => g.updated) ? " · <b>updated</b>" : ""}</summary>${ghPicker(sh, tid)}${list.map(g => gitNode(g, tid)).join("")}</details>`;
+      `${list.some(g => g.updated) ? " · <b>updated</b>" : ""}</summary>${ghPicker(sh, tid)}${list.map(g => gitNode(g, tid, off)).join("")}</details>`;
   }
-  function gitNode(g, tid) {
+  function gitNode(g, tid, off) {
     tid = esc(tid || "");
     return `<div class="tnode git${g.listed === false ? " hid" : ""}" title="${esc(g.full)}: a shared agent repo, cloned into this server's www/shares/">` +
       `<button class="x" data-sop="disconnect" data-stree="${tid}" data-repo="${esc(g.full)}" title="Disconnect: delete the clone (your access stays)">×</button>` +
-      `<input type="checkbox" data-slist="${tid}" data-repo="${esc(g.full)}" ${g.listed === false ? "" : "checked"} title="Show this repo's agents in this list (unticked: they stay connected and fetched, and agents can still find them as colleagues)">` +
+      `<input type="checkbox" data-slist="${tid}" data-repo="${esc(g.full)}" ${g.listed === false ? "" : "checked"}${off ? " disabled" : ""} title="${off ?
+        "Its tree is unticked, so its agents aren't listed, this repo's included: tick the tree to use this box" :
+        "Show this repo's agents in this list (unticked: they stay connected and fetched, and agents can still find them as colleagues)"}">` +
       `<a href="${esc((g.web || "https://github.com/" + g.full) + "/tree/HEAD/agents")}" target="_blank" rel="noopener" title="Its agents/ folder on GitHub, in a new tab"><b>${esc(g.owner)}${g.name !== g.owner ? " · " + esc(g.name) : ""}</b></a>${g.host && g.host !== "github.com" ? ` <span class="dim">@ ${esc(g.host)}</span>` : ""}<br>` +
       `<span class="dim">shared · read-only</span><br>` +
       `${g.agents.length} agent${g.agents.length === 1 ? "" : "s"}${g.updated ? ` · <b>${g.updated} updated</b>` : ""} <span class="dim">· fetched ${esc(g.fetched.slice(5, 16).replace("T", " "))}</span>
@@ -726,7 +729,7 @@
       <b>${esc(short(t.root))}</b><br><span class="st-${alive ? "alive" : bad ? "bad" : "off"}">${esc(t.state)}${t.stale ? " (stale)" : ""}</span>
       <span class="dim"> · ${esc(t.node || "–")} · ${esc(t.port || "–")}</span><br>
       ${(t.agents || []).length} agent${(t.agents || []).length === 1 ? "" : "s"}${asking ? ` · <b class="st-bad">${asking} needs you</b>` : ""} ${act}
-      ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}${t.note ? `<div class="dim">${esc(t.note)}</div>` : ""}${t.last && !alive ? `<div class="dim">last server ${esc(t.last)}</div>` : ""}${same}${alive ? sharesBox(t.shares, t.id) : ""}${
+      ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}${t.note ? `<div class="dim">${esc(t.note)}</div>` : ""}${t.last && !alive ? `<div class="dim">last server ${esc(t.last)}</div>` : ""}${same}${alive ? sharesBox(t.shares, t.id, t.hidden) : ""}${
       stopAsk === t.id ? `<div class="ask">${stopText(t).split("\n").map(l => `<div>${esc(l)}</div>`).join("")}<button data-op="stopyes" data-tree="${esc(t.id)}">Stop</button> <button class="gray" data-op="stopno">Cancel</button></div>` : ""}${
       forgetAsk === t.id ? `<div class="ask">${forgetText(t).split("\n").map(l => `<div>${esc(l)}</div>`).join("")}<button data-op="forgetyes" data-tree="${esc(t.id)}">Forget</button> <button class="gray" data-op="stopno">Cancel</button></div>` : ""}</div>`;
   }
@@ -818,12 +821,26 @@
   // ~240 MB. curRep: the last reply, for the handlers of a map that was kept. uSig: each remote usage
   // widget's last data, so a kept map redraws only the widgets whose usage changed. ro: the one ResizeObserver.
   let lastMap = "", curRep = null, ro = null, lastPoll = 0;
+  // a shared repo's tick, as clicked, until a report agrees (or 60 s): a reply already on its way, or a
+  // server upstream that hasn't polled that tree since, would otherwise put the old tick back for a while
+  const ticks = {};      // "<tree id>|<repo>" -> [listed, until]
+  function keepTicks(rep) {
+    const now = Date.now();
+    [["", rep.shares]].concat((rep.trees || []).map(t => [t.id, t.shares])).forEach(([tid, sh]) =>
+      ((sh && sh.connected) || []).forEach(g => {
+        const k = tid + "|" + g.full, w = ticks[k];
+        if (!w) return;
+        if (now > w[1] || (g.listed !== false) === w[0]) delete ticks[k];
+        else g.listed = w[0];
+      }));
+  }
   const uSig = {};
   function machines() {
     lastPoll = Date.now();
     fetch("/_review/remotes").then(r => r.ok ? r.json() : null).then(rep => {
       if (!rep || dragging) return;      // a server from before Machines; or a usage slider is held
       curRep = rep;
+      keepTicks(rep);
       let el = document.getElementById("rv-machines");
       if (!el) {
         el = document.createElement("details"); el.id = "rv-machines"; el.open = mOpen;
@@ -892,7 +909,7 @@
         s += m.local ? `<div class="tnode${rep.hidden ? " hid" : ""}">
           <input type="checkbox" data-tree="" ${rep.hidden ? "" : "checked"} title="Show this tree's agents in this list"><b>${esc(short(rep.root))}</b><br>
           <span class="st-alive">alive · this list</span> <button class="gray" data-op="restart" data-tree=""
-          title="DirAI restart here: reloads this server with the current code (e.g. after a DirAI update), then this page. Running agent runs are stopped.">Restart</button>${sharesBox(rep.shares, "")}</div>` + pullBox(rep.self_update)
+          title="DirAI restart here: reloads this server with the current code (e.g. after a DirAI update), then this page. Running agent runs are stopped.">Restart</button>${sharesBox(rep.shares, "", rep.hidden)}</div>` + pullBox(rep.self_update)
           : m.trees.map(t => treeNode(t, rep)).join("") || (reached ? '<div class="dim">no DirAI trees there yet</div>' : "");
         if (!m.local && linked && m.at != null) s += newTree(m.alias, m.at, m.trees);
         if (linked) s += connectPicker(m.local ? "this machine" : m.name, m.hosts, m.pickAt);
@@ -1025,14 +1042,21 @@
         const tid = c.dataset.slist, t = tid && curRep.trees.find(x => x.id === tid);
         const sh = tid ? t && t.shares : curRep.shares;
         ((sh && sh.connected) || []).forEach(g => { if (g.full === c.dataset.repo) g.listed = c.checked; });
+        ticks[tid + "|" + c.dataset.repo] = [c.checked, Date.now() + 60000];
         c.parentElement.classList.toggle("hid", !c.checked);
         lastMap = "";
         syncRemote(curRep);
-        const body = {op: c.checked ? "list" : "unlist", repo: c.dataset.repo};
-        if (tid) return remoteAct({op: "call", tree: tid, path: "share", data: body});
-        fetch("/_review/share", {method: "POST", headers: {"Content-Type": "application/json", "X-Review": "1"}, body: JSON.stringify(body)})
+        const k = tid + "|" + c.dataset.repo, body = {op: c.checked ? "list" : "unlist", repo: c.dataset.repo};
+        // saved by the tree holding the clone (this server's, or another through op call); a refusal puts the tick back
+        fetch(tid ? "/_review/remotes" : "/_review/share", {method: "POST", headers: {"Content-Type": "application/json", "X-Review": "1"},
+          body: JSON.stringify(tid ? {op: "call", tree: tid, path: "share", data: body} : body)})
           .then(r => r.json()).catch(err => ({error: String(err)}))
-          .then(r => { if (r.error) actMsg = "GitHub: " + r.error; });
+          .then(r => {
+            if (!r.error) return;
+            actMsg = hhmm() + " " + (tid || "this server") + ": " + r.error +
+              (r.error === "no such agent" ? " (its server runs DirAI from before this tick box: Update or Restart it)" : "");
+            delete ticks[k]; lastMap = ""; machines();
+          });
       });
       // a tree's tick: its agents in the list (both tabs); shown at once, then saved on the server
       // (curRep, not rep: the handlers of a kept map act on the latest reply)
@@ -1041,6 +1065,9 @@
         if (tid) curRep.trees.forEach(t => { if (t.id === tid) t.hidden = !c.checked; });
         else curRep.hidden = !c.checked;
         c.parentElement.classList.toggle("hid", !c.checked);
+        c.parentElement.querySelectorAll("input[data-slist]").forEach(x => {     // its shared repos wait with it
+          x.disabled = !c.checked;      // (the tree's node, greyed, holds them: they're greyed with it)
+        });
         lastMap = "";      // the box was changed by hand: the next poll draws the map again
         syncRemote(curRep);
         remoteAct({op: c.checked ? "show" : "hide", tree: tid});
