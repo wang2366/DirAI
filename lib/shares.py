@@ -440,13 +440,20 @@ class Shares:
         return me
 
     def readers(self, full):
-        """[{login, role}] of the people added to one of your repos by name: outside collaborators, and members
-        of its org added by hand (a group org such as KubisGroup); not you, nor the org's owners."""
+        """[{login, role, pending}] of the people added to one of your repos by name: outside collaborators, and
+        members of its org added by hand (a group org such as KubisGroup); not you, nor the org's owners. Then the
+        invitations not yet accepted (pending: True; expired: True once GitHub's 7 days have passed)."""
         host, nwo = split_full(full)
         got = gh_json("api", "repos/%s/collaborators?affiliation=direct" % nwo, host=host) or []
         me = auth(host=host)["login"]
-        return [{"login": c["login"], "role": c.get("role_name", "")} for c in got
-                if isinstance(c, dict) and c.get("login") != me]
+        out = [{"login": c["login"], "role": c.get("role_name", ""), "pending": False} for c in got
+               if isinstance(c, dict) and c.get("login") != me]
+        for i in gh_json("api", "repos/%s/invitations" % nwo, host=host) or []:
+            who = (i.get("invitee") or {}).get("login") if isinstance(i, dict) else None
+            if who:
+                out.append({"login": who, "role": i.get("permissions", ""), "pending": True,
+                            "expired": bool(i.get("expired")), "since": (i.get("created_at") or "")[:10]})
+        return out
 
     # --- publishing ---------------------------------------------------------------------------------
     def folder(self, agent):

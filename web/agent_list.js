@@ -675,7 +675,7 @@
     return `<div class="tnode git" title="${esc(g.full)}: a shared agent repo, cloned into this server's www/shares/">` +
       `<button class="x" data-sop="disconnect" data-stree="${tid}" data-repo="${esc(g.full)}" title="Disconnect: delete the clone (your access stays)">×</button>` +
       `<b>${esc(g.owner)}${g.name !== g.owner ? " · " + esc(g.name) : ""}</b>${g.host && g.host !== "github.com" ? ` <span class="dim">@ ${esc(g.host)}</span>` : ""}<br>` +
-      `<span class="dim">shared · read-only</span><br>` +
+      `<span class="dim">shared · read-only · <a href="${esc((g.web || "https://github.com/" + g.full) + "/tree/HEAD/agents")}" target="_blank" rel="noopener" title="Its agents/ folder on GitHub, in a new tab">agents on GitHub ↗</a></span><br>` +
       `${g.agents.length} agent${g.agents.length === 1 ? "" : "s"}${g.updated ? ` · <b>${g.updated} updated</b>` : ""} <span class="dim">· fetched ${esc(g.fetched.slice(5, 16).replace("T", " "))}</span>
         <button class="gray" data-sop="fetch" data-stree="${tid}" data-repo="${esc(g.full)}" title="Fetch now">⟳</button></div>`;
   }
