@@ -228,6 +228,7 @@ class Shares:
         self._checks = (0, None)
         self._found = (0, None)
         self._refreshing = False
+        self._dates = {}                    # "<owner>/<repo>" -> (its "fetched" stamp, {slug: publish date})
 
     # --- state ------------------------------------------------------------------------------------
     def state(self):
@@ -678,6 +679,12 @@ class Shares:
         c = self.state()["connected"].get(full, {})
         agents = []
         top = os.path.join(path, "agents")
+        # the publish dates come from one git call per agent: asked again only after a fetch (the Machines
+        # report calls box() every few seconds, per tree)
+        stamp, dates = self._dates.get(full, (None, {}))
+        if stamp != c.get("fetched"):
+            stamp, dates = c.get("fetched"), {}
+            self._dates[full] = (stamp, dates)
         for d, dirs, names in os.walk(top):     # top-down, sorted: a parent comes before its children
             dirs[:] = sorted(n for n in dirs if not n.startswith("."))
             if d == top or "index.html" not in names:
@@ -691,7 +698,7 @@ class Shares:
                 parent = slug.rsplit("--", 1)[0]
             agents.append({"slug": slug, "title": page_title(page),
                            "parent": parent or None,
-                           "published": self.published(full, slug),
+                           "published": dates[slug] if slug in dates else dates.setdefault(slug, self.published(full, slug)),
                            "updated": slug in c.get("updated", []),
                            "url": "/%s/shares/%s/agents/%s/" % (dirai_config.DATA, full, slug)})
         owner, repo = full.split("/")

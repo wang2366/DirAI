@@ -659,12 +659,20 @@
   // 2026-11-18: "like a server inside the machine", not a machine box of its own); its agents are rows of
   // the list below (syncRemote), not listed here. tid: that tree ("" for this server); into: its path, when
   // the machine has more than one tree
-  function gitNode(g, tid, into, off) {
+  // The repos connected in one server's tree: inside that server's node, folded by default ("shared repos (N)"),
+  // so a machine's box stays as short as before. tid: that tree ("" for this server).
+  function sharesBox(sh, tid) {
+    const list = (sh && sh.connected) || [];
+    if (!list.length) return "";
+    return `<details class="tshares" data-sid="${esc(tid)}"><summary class="dim">shared repos (${list.length})` +
+      `${list.some(g => g.updated) ? " · <b>updated</b>" : ""}</summary>${list.map(g => gitNode(g, tid)).join("")}</details>`;
+  }
+  function gitNode(g, tid) {
     tid = esc(tid || "");
-    return `<div class="tnode git${off ? " hid" : ""}" title="${esc(g.full)}: a shared agent repo, cloned into ${esc(into || "this tree")}'s www/shares/">` +
+    return `<div class="tnode git" title="${esc(g.full)}: a shared agent repo, cloned into this server's www/shares/">` +
       `<button class="x" data-sop="disconnect" data-stree="${tid}" data-repo="${esc(g.full)}" title="Disconnect: delete the clone (your access stays)">×</button>` +
       `<b>${esc(g.owner)}${g.name !== g.owner ? " · " + esc(g.name) : ""}</b><br>` +
-      `<span class="dim">shared · read-only${into ? " · in " + esc(into) : ""}</span><br>` +
+      `<span class="dim">shared · read-only</span><br>` +
       `${g.agents.length} agent${g.agents.length === 1 ? "" : "s"}${g.updated ? ` · <b>${g.updated} updated</b>` : ""} <span class="dim">· fetched ${esc(g.fetched.slice(5, 16).replace("T", " "))}</span>
         <button class="gray" data-sop="fetch" data-stree="${tid}" data-repo="${esc(g.full)}" title="Fetch now">⟳</button></div>`;
   }
@@ -714,7 +722,7 @@
       <b>${esc(short(t.root))}</b><br><span class="st-${alive ? "alive" : bad ? "bad" : "off"}">${esc(t.state)}${t.stale ? " (stale)" : ""}</span>
       <span class="dim"> · ${esc(t.node || "–")} · ${esc(t.port || "–")}</span><br>
       ${(t.agents || []).length} agent${(t.agents || []).length === 1 ? "" : "s"}${asking ? ` · <b class="st-bad">${asking} needs you</b>` : ""} ${act}
-      ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}${t.note ? `<div class="dim">${esc(t.note)}</div>` : ""}${t.last && !alive ? `<div class="dim">last server ${esc(t.last)}</div>` : ""}${same}${
+      ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}${t.note ? `<div class="dim">${esc(t.note)}</div>` : ""}${t.last && !alive ? `<div class="dim">last server ${esc(t.last)}</div>` : ""}${same}${sharesBox(t.shares, t.id)}${
       stopAsk === t.id ? `<div class="ask">${stopText(t).split("\n").map(l => `<div>${esc(l)}</div>`).join("")}<button data-op="stopyes" data-tree="${esc(t.id)}">Stop</button> <button class="gray" data-op="stopno">Cancel</button></div>` : ""}${
       forgetAsk === t.id ? `<div class="ask">${forgetText(t).split("\n").map(l => `<div>${esc(l)}</div>`).join("")}<button data-op="forgetyes" data-tree="${esc(t.id)}">Forget</button> <button class="gray" data-op="stopno">Cancel</button></div>` : ""}</div>`;
   }
@@ -880,12 +888,8 @@
         s += m.local ? `<div class="tnode${rep.hidden ? " hid" : ""}">
           <input type="checkbox" data-tree="" ${rep.hidden ? "" : "checked"} title="Show this tree's agents in this list"><b>${esc(short(rep.root))}</b><br>
           <span class="st-alive">alive · this list</span> <button class="gray" data-op="restart" data-tree=""
-          title="DirAI restart here: reloads this server with the current code (e.g. after a DirAI update), then this page. Running agent runs are stopped.">Restart</button></div>` + pullBox(rep.self_update)
+          title="DirAI restart here: reloads this server with the current code (e.g. after a DirAI update), then this page. Running agent runs are stopped.">Restart</button>${sharesBox(rep.shares, "")}</div>` + pullBox(rep.self_update)
           : m.trees.map(t => treeNode(t, rep)).join("") || (reached ? '<div class="dim">no DirAI trees there yet</div>' : "");
-        // connected shared repos (proposal 72): a server-like node each, under the trees, in this machine's box
-        s += m.local ? (rep.shares && rep.shares.connected || []).map(g => gitNode(g, "", "", rep.hidden)).join("")
-          : (m.trees || []).map(t => (t.shares && t.shares.connected || [])
-              .map(g => gitNode(g, t.id, m.trees.length > 1 ? short(t.root) : "", t.hidden)).join("")).join("");
         if (!m.local && linked && m.at != null) s += newTree(m.alias, m.at, m.trees);
         if (linked) s += connectPicker(m.local ? "this machine" : m.name, m.hosts, m.pickAt);
         if (m.local) s += ghPicker(rep.shares, "");
@@ -915,6 +919,7 @@
         node: f.querySelector("[data-node]").value, focus: f.contains(document.activeElement) && document.activeElement.hasAttribute("data-path") ? "path" : f.contains(document.activeElement) && document.activeElement.hasAttribute("data-node") ? "node" : ""});
       el.querySelectorAll("select[data-at]").forEach(s => keep["pick|" + s.dataset.at] = s.value);   // a host picked, not yet Connected
       el.querySelectorAll("details.mbody").forEach(d => keep["mb|" + d.dataset.mkey] = d.open);
+      el.querySelectorAll("details.tshares").forEach(d => keep["sh|" + d.dataset.sid] = d.open);    // folded unless opened
       // the usage row (sliders, chart) lives in this server's box: take it out before the redraw, put it back after
       // and so does the load row
       const usageEl = document.getElementById("rv-usage"), loadEl = document.getElementById("rv-load");
@@ -937,6 +942,10 @@
         d.addEventListener("toggle", () => drawArrows(el));       // folding moves the boxes under it
         // a click on the title is the owner's choice (not the redraw's own open/close): kept per machine
         d.querySelector("summary").addEventListener("click", () => machSave(d.dataset.mkey, !d.open, d.dataset.def === "1"));
+      });
+      el.querySelectorAll("details.tshares").forEach(d => {
+        if (keep["sh|" + d.dataset.sid]) d.open = true;
+        d.addEventListener("toggle", () => drawArrows(el));       // opening it moves the boxes under it
       });
       el.querySelectorAll(".newtree").forEach(f => {
         const k = keep[fk(f)]; if (!k) return;
