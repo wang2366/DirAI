@@ -649,7 +649,7 @@
     const mine = (sh.mine || []).filter(r => !conn.has(r.full));
     opts.push(...mine.map(r => `<option value="${esc(r.full)}">${esc(r.full.split("/")[1])} · yours · ${r.agents} agents</option>`));
     const none = sh.me ? `no one else has shared an agent repo with ${esc(sh.me)} yet` +
-      (conn.size && !mine.length && (sh.mine || []).length ? " (yours is connected: it is in this machine's box)" : "") +
+      (conn.size && !mine.length && (sh.mine || []).length ? " (yours is connected, below)" : "") +
       ((sh.mine || []).length ? "" : "; yours isn't made yet (the Share pill on any of your pages sets it up)") : "searching…";
     if (!opts.length) return s + `<div class="dim">${none}</div>`;
     return s + `<select data-gh="${esc(tid)}">${opts.join("")}</select> <button data-sop="connect" data-stree="${esc(tid)}" title="Clone it into that tree's www/shares/ (read-only) and fetch it every 10 min; an invitation is accepted first">Connect</button>` +
@@ -663,9 +663,10 @@
   // so a machine's box stays as short as before. tid: that tree ("" for this server).
   function sharesBox(sh, tid) {
     const list = (sh && sh.connected) || [];
-    if (!list.length) return "";
+    if (!sh) return "";
+    // the Connect from GitHub row (and its "no one else has shared…" line) is in the fold too
     return `<details class="tshares" data-sid="${esc(tid)}"><summary class="dim">shared repos (${list.length})` +
-      `${list.some(g => g.updated) ? " · <b>updated</b>" : ""}</summary>${list.map(g => gitNode(g, tid)).join("")}</details>`;
+      `${list.some(g => g.updated) ? " · <b>updated</b>" : ""}</summary>${ghPicker(sh, tid)}${list.map(g => gitNode(g, tid)).join("")}</details>`;
   }
   function gitNode(g, tid) {
     tid = esc(tid || "");
@@ -722,7 +723,7 @@
       <b>${esc(short(t.root))}</b><br><span class="st-${alive ? "alive" : bad ? "bad" : "off"}">${esc(t.state)}${t.stale ? " (stale)" : ""}</span>
       <span class="dim"> · ${esc(t.node || "–")} · ${esc(t.port || "–")}</span><br>
       ${(t.agents || []).length} agent${(t.agents || []).length === 1 ? "" : "s"}${asking ? ` · <b class="st-bad">${asking} needs you</b>` : ""} ${act}
-      ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}${t.note ? `<div class="dim">${esc(t.note)}</div>` : ""}${t.last && !alive ? `<div class="dim">last server ${esc(t.last)}</div>` : ""}${same}${sharesBox(t.shares, t.id)}${
+      ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}${t.note ? `<div class="dim">${esc(t.note)}</div>` : ""}${t.last && !alive ? `<div class="dim">last server ${esc(t.last)}</div>` : ""}${same}${alive ? sharesBox(t.shares, t.id) : ""}${
       stopAsk === t.id ? `<div class="ask">${stopText(t).split("\n").map(l => `<div>${esc(l)}</div>`).join("")}<button data-op="stopyes" data-tree="${esc(t.id)}">Stop</button> <button class="gray" data-op="stopno">Cancel</button></div>` : ""}${
       forgetAsk === t.id ? `<div class="ask">${forgetText(t).split("\n").map(l => `<div>${esc(l)}</div>`).join("")}<button data-op="forgetyes" data-tree="${esc(t.id)}">Forget</button> <button class="gray" data-op="stopno">Cancel</button></div>` : ""}</div>`;
   }
@@ -892,9 +893,6 @@
           : m.trees.map(t => treeNode(t, rep)).join("") || (reached ? '<div class="dim">no DirAI trees there yet</div>' : "");
         if (!m.local && linked && m.at != null) s += newTree(m.alias, m.at, m.trees);
         if (linked) s += connectPicker(m.local ? "this machine" : m.name, m.hosts, m.pickAt);
-        if (m.local) s += ghPicker(rep.shares, "");
-        else (m.trees || []).filter(t => t.state === "alive" && t.shares)      // D8: each tree there connects its own
-          .forEach(t => s += ghPicker(t.shares, t.id, m.trees.length > 1 ? short(t.root) : ""));
         return s + "</details></div>";
       }
       ntSeq = 0;      // New tree… datalist ids: the same on every poll, so an unchanged map gives the same HTML
