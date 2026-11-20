@@ -182,8 +182,21 @@
         `<button class="gray" data-close>Cancel</button></div>`;
       h += jobBox(st.job, "create_repo") + jobBox(st.job, "add_reader");
     }
+    if (st.copy) h += `<div class="sec"><b>A copy</b> <span class="dim">made by Copy to my tree (inside copies/)</span><br>
+      <button class="gray" data-rmcopy>Remove this copy…</button> <span class="dim">the owner's repo is untouched</span></div>`;
     h += `<div class="sec"><button class="gray" data-check>Check again</button><span class="err" data-msg>${esc(msg)}</span></div>`;
     pop.innerHTML = h;
+    const rm = pop.querySelector("[data-rmcopy]");
+    if (rm) rm.onclick = () => {       // what goes, from the server's own look at the folder (copy_info)
+      const c = st.copy, kb = (c.bytes / 1000).toFixed(0);
+      if (c.running) { msg = "A run is going in this agent: stop it first."; draw(); return; }
+      const lines = [`Remove ${agent}/ from this tree: ${c.files} files, ${kb} kB` + (c.children.length ? `, and ${c.children.length} agent(s) inside it` : "") + ".",
+        "It is moved to www/trash/, not deleted."];
+      if (c.edited && c.edited.length) lines.push(`! You changed ${c.edited.length} file(s) since the copy: ${c.edited.slice(0, 5).join(", ")}${c.edited.length > 5 ? ", …" : ""}`);
+      if (c.published_to.length) lines.push("! You published it: it is unshared from " + c.published_to.join(", ") + " first.");
+      if (c.used_by.length) lines.push("! Used as a colleague by: " + c.used_by.join(", ") + " (removed from theirs).");
+      if (confirm(lines.join("\n"))) post({op: "remove_copy"}).then(r => { if (r.error) { msg = r.error; draw(); } else location.href = r.url; });
+    };
     pop.querySelectorAll("[data-open]").forEach(b => { if (!b.dataset.fix) b.onclick = () => window.open(b.dataset.open, "_blank", "noopener"); });
     pop.querySelectorAll("[data-copycode]").forEach(b => b.onclick = () => navigator.clipboard && navigator.clipboard.writeText(b.dataset.copycode));
     pop.querySelectorAll("[data-fix]").forEach(b => b.onclick = () => {

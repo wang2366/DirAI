@@ -239,6 +239,28 @@ class TestShares(unittest.TestCase):
             if os.path.exists(shares.ACCOUNT_FILE):
                 os.remove(shares.ACCOUNT_FILE)
 
+    def test_remove_copy_only_inside_copies(self):
+        origin = '{"repo": "x/y", "slug": "fit", "commit": "abc"}'
+        for rel in ("copies/fit", "elsewhere/fit", "copies/plain"):
+            util.write(os.path.join(self.root, rel, "index.html"), "<h1>C</h1>")
+            util.write(os.path.join(self.root, rel, "a.py"), "1\n")
+        for rel in ("copies/fit", "elsewhere/fit"):          # a copy by name; and one moved out of copies/
+            util.write(os.path.join(self.root, rel, ".dirai-origin"), origin)
+        self.assertTrue(self.s.removable("copies/fit"))
+        self.assertFalse(self.s.removable("elsewhere/fit"))   # outside copies/
+        self.assertFalse(self.s.removable("copies/plain"))    # no .dirai-origin
+        self.assertFalse(self.s.removable("copies"))
+        self.assertFalse(self.s.removable("copies/../elsewhere/fit"))
+        self.assertFalse(self.s.removable(""))
+        self.assertIn("only an agent inside copies/", self.s.remove_copy("elsewhere/fit"))
+        self.assertTrue(os.path.isdir(os.path.join(self.root, "elsewhere/fit")))
+        self.assertEqual(self.s.copy_info("copies/fit")["files"], 2)     # index.html, a.py (.dirai-origin is hidden)
+        self.assertIsNone(self.s.remove_copy("copies/fit"))
+        self.assertFalse(os.path.exists(os.path.join(self.root, "copies/fit")))
+        trash = os.path.join(self.root, "www", "trash")
+        self.assertEqual(len(os.listdir(trash)), 1)                      # moved there, not deleted
+        self.assertTrue(os.path.isfile(os.path.join(trash, os.listdir(trash)[0], "a.py")))
+
     def test_org_name(self):
         self.assertEqual(shares.org_name("wang2366", "-dirai"), "wang2366-dirai")
         self.assertEqual(len(shares.org_name("a" * 39, "-dirai-agents")), 39)

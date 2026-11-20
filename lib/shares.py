@@ -761,6 +761,60 @@ class Shares:
         pre = "agents/%s/" % o["slug"]
         return dict(o, new=new, files=[n[len(pre):] for n in names.splitlines() if n.startswith(pre)] if rc == 0 else [])
 
+    def removable(self, agent):
+        """A copy that may be removed from its Share pill: a folder inside <tree>/copies/ (not copies/ itself,
+        whatever links or .. its name holds) that has .dirai-origin, so it came from Copy to my tree."""
+        if not agent or os.path.normpath(agent).split(os.sep)[0] != "copies":
+            return False
+        top = os.path.realpath(os.path.join(self.root, "copies"))
+        path = os.path.realpath(os.path.join(self.root, agent))
+        return path != top and dirai_config.within(path, top) and os.path.isfile(os.path.join(path, ".dirai-origin"))
+
+    def copy_info(self, agent):
+        """For the confirm of Remove this copy: None if it isn't removable, else {files, bytes, children,
+        edited (files that differ from the owner's version it was copied from; None if unknown), published_to}."""
+        if not self.removable(agent):
+            return None
+        files, _, children = self.folder(agent)
+        edited, o = None, dirai_config.load_json(os.path.join(self.root, agent, ".dirai-origin"), None)
+        if isinstance(o, dict) and o.get("repo") in self.state()["connected"] and o.get("commit"):
+            clone, edited = self.clone_dir(o["repo"]), []
+            for rel, _ in files[:300]:
+                p = subprocess.run(["git", "show", "%s:agents/%s/%s" % (o["commit"], o.get("slug"), rel)], cwd=clone,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                try:
+                    with open(os.path.join(self.root, agent, rel), "rb") as f:
+                        if p.returncode or f.read() != p.stdout:
+                            edited.append(rel)
+                except OSError:
+                    pass
+        return {"files": len(files), "bytes": sum(n for _, n in files), "children": children, "edited": edited,
+                "published_to": sorted(self.state()["targets"].get(agent, {}))}
+
+    def remove_copy(self, agent):
+        """Take a copy out of the tree: unshare it where you published it, then move its folder to
+        www/trash/<name>-<time>/ (kept, not deleted). None, or why not. The caller checks that no run is
+        going there and takes the agent out of the agent states."""
+        if not self.removable(agent):
+            return "only an agent inside copies/ that was made by Copy to my tree can be removed here"
+        with self.lock:
+            s = self.state()
+            for r in sorted(s["targets"].get(agent, {})):
+                why = self.unshare(agent, r)
+                if why:
+                    return "unshare from %s first: %s" % (r, why)
+            s = self.state()
+            dest = os.path.join(dirai_config.data_dir(self.root), "trash",
+                                "%s-%s" % (clean_name(os.path.basename(agent)), time.strftime("%Y%m%d-%H%M%S")))
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.move(os.path.join(self.root, agent), dest)
+            for a in [a for a in s["targets"] if a == agent or a.startswith(agent + "/")]:
+                del s["targets"][a]
+            for a in [a for a in s["mode"] if a == agent or a.startswith(agent + "/")]:
+                del s["mode"][a]
+            self.save(s)
+        return None
+
     def update_copy(self, agent):
         """Take the owner's newer version: files you didn't change are replaced; where you did, yours stay
         and theirs go next to them as <file>.theirs. Returns (updated, kept) file lists."""

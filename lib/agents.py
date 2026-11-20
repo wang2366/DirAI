@@ -1149,6 +1149,25 @@ class Agents:
                     len(gone), ", ".join(gone[:5]), ", …" if len(gone) > 5 else ""))
         return len(gone)
 
+    def removal_check(self, agent):
+        """(a run is going there, the agents that list it as a colleague) for Remove this copy."""
+        with self.lock:
+            data = self._load()
+            running = (data.get(agent) or {}).get("status") in ("working", "queued")
+            used = sorted(a for a, st in data.items() if a != agent and agent in (st.get("colleagues") or []))
+        return running, used
+
+    def drop(self, agent):
+        """Forget a removed agent: its state, and its place in other agents' colleagues."""
+        with self.lock:
+            data = self._load()
+            data.pop(agent, None)
+            for st in data.values():
+                if agent in (st.get("colleagues") or []):
+                    st["colleagues"] = [c for c in st["colleagues"] if c != agent]
+                    (st.get("coll_mode") or {}).pop(agent, None)
+            self._save(data)
+
     def colleagues(self, agent):
         """The agents this one may read (colleagues.py), as paths relative to the tree."""
         with self.lock:

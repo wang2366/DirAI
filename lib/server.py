@@ -341,6 +341,17 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
                 if not why:
                     threading.Thread(target=rebuild_agent_list, daemon=True).start()
                 return self.send_json({"error": why} if why else {"ok": True, "url": "/%s/" % dest})
+            if body.get("op") == "remove_copy":     # a copy inside copies/ (Copy to my tree) leaves the tree
+                if page is None or not SHARES.removable(page):
+                    return self.send_json({"error": "only an agent inside copies/ made by Copy to my tree can be removed"})
+                running, _ = AGENTS.removal_check(page)
+                if running:
+                    return self.send_json({"error": "a run is going in this agent: stop it first"})
+                why = SHARES.remove_copy(page)
+                if not why:
+                    AGENTS.drop(page)
+                    threading.Thread(target=rebuild_agent_list, daemon=True).start()
+                return self.send_json({"error": why} if why else {"ok": True, "url": "/%s/index.html" % dirai_config.DATA})
             return self.send_json(SHARES.act(body, page))
         agent = self.agent_key(agent_param(body))
         # no chat, schedule or grants on someone else's agent (a star in the agent list is fine)
@@ -500,7 +511,10 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
             if q.get("quick"):    # the pill's look only: no gh or ssh calls unless cached
                 return self.send_json({"origin": SHARES.origin(agent), "ready": SHARES.cached_ready(),
                                        "shared": sorted(SHARES.state()["targets"].get(agent, {}))})
-            return self.send_json(dict(SHARES.page_state(agent), origin=SHARES.origin(agent)))
+            info = SHARES.copy_info(agent)
+            if info:
+                info["running"], info["used_by"] = AGENTS.removal_check(agent)
+            return self.send_json(dict(SHARES.page_state(agent), origin=SHARES.origin(agent), copy=info))
         if action == "favorites":     # starred agents, for the agent list's Favorites tab
             return self.send_json(dirai_config.load_json(FAVORITES, []))
         if action == "card":      # an agent's summary card, for the hover in the agent list's Tree tab
