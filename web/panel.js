@@ -231,6 +231,9 @@
   const LABEL = {closed: "TaskDone"};   // shown name for a stored status
   const esc = s => s.replace(/[&<>]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"}[c]));
   const attr = s => esc(s).replace(/"/g, "&quot;");   // for a value in an attribute
+  // another agent's name (its folder, relative to the tree) as a link to its page, in a new tab
+  const agentLink = rel => `<a class="rv-alink" href="${attr("/" + rel.split("/").map(encodeURIComponent).join("/") + "/index.html")}" ` +
+    `target="_blank" rel="noopener" title="Open ${attr(rel)}'s page in a new tab">${esc(rel)}</a>`;
 
   // An open panel stays open across a reload, at the same place in the thread
   function keepOpen() {
@@ -281,7 +284,7 @@
       const box = $("rv-thread"), top = box.scrollTop, wasAtEnd = atEnd(box);
       const opened = [...box.querySelectorAll(".rv-sel")].map(d => d.open);   // keep expanded quotes expanded
       box.innerHTML = (st.thread.map(m => m.role === "ask" ? askHtml(m) :
-        `<div class="rv-msg rv-${m.role}"><div class="rv-meta">${m.from ? "from " + esc(m.from) + ", sent by you" : m.role}${m.scheduled ? " (scheduled" + (/^(hour|day|week)$/.test(m.scheduled) ? ", every " : ": ") + m.scheduled + ")" : ""}${m.later ? " (sent later, held for " + m.later + ")" : ""}${m.model ? " (" + m.model + ")" : ""} · ${m.time}${m.cost != null ? " · $" + m.cost : ""}</div>${m.selection ? selHtml(m.selection) : ""}${m.notes ? notesHtml(m.notes) : ""}${m.notes_result ? notesResultHtml(m.notes_result) : ""}${m.requests ? requestLinksHtml(m.requests) : ""}${m.role === "claude" ? replyHtml(m) : esc(m.text)}</div>`
+        `<div class="rv-msg rv-${m.role}"><div class="rv-meta">${m.from ? "from " + agentLink(m.from) + ", sent by you" : m.role}${m.scheduled ? " (scheduled" + (/^(hour|day|week)$/.test(m.scheduled) ? ", every " : ": ") + m.scheduled + ")" : ""}${m.later ? " (sent later, held for " + m.later + ")" : ""}${m.model ? " (" + m.model + ")" : ""} · ${m.time}${m.cost != null ? " · $" + m.cost : ""}</div>${m.selection ? selHtml(m.selection) : ""}${m.notes ? notesHtml(m.notes) : ""}${m.notes_result ? notesResultHtml(m.notes_result) : ""}${m.requests ? requestLinksHtml(m.requests) : ""}${m.role === "claude" ? replyHtml(m) : esc(m.text)}</div>`
       ).join("") || (inbox.length ? "" : '<div class="rv-meta">No comments yet.</div>')) + inboxHtml(inbox, busy);
       box.querySelectorAll(".rv-sel").forEach((d, i) => d.open = !!opened[i]);
       markBroken(box);
@@ -1569,17 +1572,17 @@
     const drafts = reqs.filter(n => n.to && n.state === "draft");
     bar.innerHTML = `<b title="Requests between this agent and others: hover or tap one">Requests</b>` + Object.keys(pairs).sort().map(o => {
       const last = pairs[o][pairs[o].length - 1];
-      return `<span class="rv-rchip ${last.state}" data-pair="${attr(o)}">${last.to ? "→" : "←"} ${esc(o)} · ${esc(reqSays(last))}</span>`;
+      return `<span class="rv-rchip ${last.state}" data-pair="${attr(o)}">${last.to ? "→" : "←"} ${agentLink(o)} · ${esc(reqSays(last))}</span>`;
     }).join("") + (drafts.length > 1 ? `<button data-rop="sendall" title="Send all drafts; their answers come back together, when all are in">Send all (${drafts.length})</button>` : "");
   }
   function entryHtml(n) {
     const g = groupOf(n), k = g.filter(x => x.arrived).length, info = n.to && n.state === "draft" && (reqInfo[n.to] || []);
     const thread = n.thread && n.thread.length ? n.thread : n.answer ? [{who: n.to, text: n.answer, at: n.at}] : [];
-    return `<div class="rv-rentry ${n.state}" data-rid="${attr(n.id)}"><div class="rv-meta">${n.to ? "To" : "From"} ${esc(other(n))} · #${n.n} · ${esc(reqSays(n))} · ${esc(n.created || "")}</div>` +
+    return `<div class="rv-rentry ${n.state}" data-rid="${attr(n.id)}"><div class="rv-meta">${n.to ? "To" : "From"} ${agentLink(other(n))} · #${n.n} · ${esc(reqSays(n))} · ${esc(n.created || "")}</div>` +
       esc(n.note) + (n.about ? `<div class="rv-meta">about ${esc(n.about)}${n.text ? ": “" + esc(noteQuote(n, 80)) + "”" : ""}</div>` : "") +
       (n.reason ? `<div class="rv-meta">Your reason: ${esc(n.reason)}</div>` : "") +
-      thread.map(e => `<div class="rv-nans ${e.who === "owner" ? "owner" : "agent"}"><b>${e.who === "owner" ? "You" : e.who === "agent" ? "This agent" : esc(e.who)}${e.state ? " (" + esc(e.state) + ")" : ""}:</b> ${jumpLinks(e.text)}</div>`).join("") +
-      (info && info.length ? `<div class="rv-meta">${esc(n.to)} also has open requests from ${esc(info.join(", "))}: check they don't clash.</div>` : "") +
+      thread.map(e => `<div class="rv-nans ${e.who === "owner" ? "owner" : "agent"}"><b>${e.who === "owner" ? "You" : e.who === "agent" ? "This agent" : agentLink(e.who)}${e.state ? " (" + esc(e.state) + ")" : ""}:</b> ${jumpLinks(e.text)}</div>`).join("") +
+      (info && info.length ? `<div class="rv-meta">${agentLink(n.to)} also has open requests from ${info.map(agentLink).join(", ")}: check they don't clash.</div>` : "") +
       (n.to && n.state === "draft" ? `<div class="rv-row"><button data-rop="send" class="primary" title="Send it to ${attr(n.to)}: one message starts its run (queued if it is busy)">Send ▸ ${esc(n.to)}</button>` +
         `<button data-rop="edit">Edit</button><button data-rop="reject" title="Don't send it; the agent is told, with your reason">Reject</button></div>` : "") +
       (n.to && g.length && k < g.length && g.some(x => x.arrived && !x.delivered) ? `<div class="rv-row"><span class="rv-meta">${k} of ${g.length} in</span>` +
@@ -1591,7 +1594,7 @@
     if (!list.length || editing) return;
     clearTimeout(popTimer);
     pop.dataset.nid = "", pop.dataset.pair = o;
-    pop.innerHTML = `<div class="rv-meta"><b>${list[0].to ? "This agent ↔ " : ""}${esc(o)}${list[0].to ? "" : " ↔ this agent"}</b> · ${list.length} request${list.length === 1 ? "" : "s"}</div>` +
+    pop.innerHTML = `<div class="rv-meta"><b>${list[0].to ? "This agent ↔ " : ""}${agentLink(o)}${list[0].to ? "" : " ↔ this agent"}</b> · ${list.length} request${list.length === 1 ? "" : "s"}</div>` +
       list.slice(-5).map(entryHtml).join("");
     const r = el.getBoundingClientRect();
     pop.style.left = Math.max(scrollX + 4, Math.min(r.left + scrollX, scrollX + innerWidth - 330)) + "px";
@@ -1631,8 +1634,8 @@
     if (row) reqOp(b.dataset.rop, row.dataset.rid);
   });
   // a reply of a run that drafted requests: "Request to B drafted ▸", which opens it in the Requests bar
-  const requestLinksHtml = list => `<div class="rv-npoint">${list.map(r => `<a class="rv-rlink" href="#" data-rpair="${attr(r.to)}" data-rid="${attr(r.id)}" ` +
-    `title="Read it, then send, edit or reject it">Request to ${esc(r.to)} drafted ▸</a>`).join(" ")}</div>`;
+  const requestLinksHtml = list => `<div class="rv-npoint">${list.map(r => `Request to ${agentLink(r.to)} <a class="rv-rlink" href="#" data-rpair="${attr(r.to)}" data-rid="${attr(r.id)}" ` +
+    `title="Read it, then send, edit or reject it">drafted ▸</a>`).join(" · ")}</div>`;
   $("rv-thread").addEventListener("click", e => {
     const a = e.target.closest(".rv-rlink");
     if (!a) return;
