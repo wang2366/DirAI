@@ -4,4 +4,5 @@ __pycache__/
 tmp/
 # sticky notes on an agent's page (lib/notes.py): the owner's drafts, kept by the server
 .notes.json
+.notes.json.lock
 improvement/

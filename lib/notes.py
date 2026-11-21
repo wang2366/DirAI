@@ -18,6 +18,8 @@ answer yet), "done". thread: [{"who": "agent"|"owner", "text", "time", ["state",
 THREAD_MAX entries. answered: answered in the run it was sent in; noanswer: that run left it unanswered.
 A done note stays (greyed), with its answers, until the owner deletes it or clears the done notes.
 """
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -33,7 +35,26 @@ CTX_MAX = 40         # characters of page text kept before and after the quote (
 STATES = ("open", "sent", "done")
 THREAD_MAX = 10      # entries of a note's exchange kept
 ANSWER_MAX = 2000    # characters of one answer or reply
-_LOCK = threading.Lock()     # within the server; dirai_note.py (another process) relies on the atomic save
+_LOCK = threading.Lock()     # within the server; _locked() adds a file lock for dirai_note.py (another process)
+
+
+@contextlib.contextmanager
+def _locked(agent_dir):
+    """Around every read-change-write of <agent>/.notes.json: the server's threads (_LOCK) and other
+    processes (dirai_note.py) wait for each other, so no write is lost (R10, improvement/agent-notes).
+    The flock is on a separate <agent>/.notes.json.lock, since _save() replaces .notes.json by another
+    file. If the lock file can't be opened (folder not writable), only _LOCK."""
+    with _LOCK:
+        try:
+            f = open(path(agent_dir) + ".lock", "a")
+        except OSError:
+            f = None
+        if f is None:
+            yield
+            return
+        with f:
+            fcntl.flock(f, fcntl.LOCK_EX)     # released when f closes
+            yield
 
 
 def _now():
@@ -94,7 +115,7 @@ def _clean(raw):
 def act(agent_dir, body):
     """POST /_review/notes: op add / edit / delete / state / reply / clear. Returns (notes, error or None)."""
     op = body.get("op")
-    with _LOCK:
+    with _locked(agent_dir):
         notes = load(agent_dir)
         if op == "add":
             if len(notes) >= MAX_NOTES:
@@ -134,7 +155,7 @@ def act(agent_dir, body):
 def take(agent_dir, ids):
     """The notes ids that can be sent (not done), by number, now marked "sent"; [] if none."""
     want = {str(i) for i in ids or []}
-    with _LOCK:
+    with _locked(agent_dir):
         notes = load(agent_dir)
         out = [x for x in notes if x["id"] in want and x.get("state") != "done"]
         for x in out:
@@ -149,7 +170,7 @@ def take(agent_dir, ids):
 def unsend(agent_dir, ids):
     """Back to "open": the message that carried them wasn't sent after all."""
     want = set(ids)
-    with _LOCK:
+    with _locked(agent_dir):
         notes = load(agent_dir)
         for x in notes:
             if x["id"] in want and x.get("state") == "sent":
@@ -186,7 +207,7 @@ def answer(agent_dir, n, state, text, at=""):
     text = (text or "").strip()
     if not text:
         return None, "give an answer: what you did and where, or your question"
-    with _LOCK:
+    with _locked(agent_dir):
         notes = load(agent_dir)
         hit = next((x for x in notes if x.get("n") == n), None)
         if hit is None:
@@ -225,7 +246,7 @@ def finish_run(agent_dir, nums, reply, replied):
         return []
     if replied and reply:
         close_from_reply(agent_dir, reply, nums)
-    with _LOCK:
+    with _locked(agent_dir):
         notes = load(agent_dir)
         if not notes:
             return []
@@ -250,7 +271,7 @@ def close_from_reply(agent_dir, reply, nums=None):
     said = parse_reply(reply)
     if not said:
         return 0
-    with _LOCK:
+    with _locked(agent_dir):
         notes = load(agent_dir)
         marked = 0
         for x in notes:

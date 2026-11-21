@@ -48,6 +48,24 @@ class NotesFileTest(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.dir, ".notes.json")))
         self.assertEqual(notes.load(self.dir), [])
 
+    def test_two_processes_lose_no_write(self):
+        """The server and dirai_note.py are two processes writing one .notes.json: the flock in _locked()
+        makes them wait for each other (without it, about 40 of these 90 adds were lost)."""
+        import multiprocessing
+        each = 45
+
+        def writer(tag):
+            for i in range(each):
+                notes.act(self.dir, {"op": "add", "note": {"text": "%s %d" % (tag, i)}})
+        ps = [multiprocessing.get_context("fork").Process(target=writer, args=(t,)) for t in "AB"]
+        for p in ps:
+            p.start()
+        for p in ps:
+            p.join()
+        got = notes.load(self.dir)
+        self.assertEqual(len(got), 2 * each)
+        self.assertEqual(sorted(x["n"] for x in got), list(range(1, 2 * each + 1)))
+
     def test_parse_reply(self):
         reply = ("Fixed both.\n1: done\n**2:** open, which deck do you mean?\n- 3: done (moved to Results)\n"
                  "Note 4 - open: needs the job\nThe 5 decks: done\n")
