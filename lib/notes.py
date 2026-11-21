@@ -127,7 +127,7 @@ def act(agent_dir, body):
                         state="open", created=time.strftime("%Y-%m-%d %H:%M"))
             notes.append(note)
         elif op == "clear":     # the owner removes the done notes (they stay, with answers, until then)
-            notes = [x for x in notes if x.get("state") != "done"]
+            notes = [x for x in notes if x.get("state") != "done" or x.get("to") or x.get("from")]   # requests fold by themselves
         else:
             hit = next((x for x in notes if x["id"] == str(body.get("id") or "")), None)
             if hit is None:
@@ -153,11 +153,12 @@ def act(agent_dir, body):
 
 
 def take(agent_dir, ids):
-    """The notes ids that can be sent (not done), by number, now marked "sent"; [] if none."""
+    """The notes ids that can be sent (not done, and not a request of this agent to another: R4), by
+    number, now marked "sent"; [] if none."""
     want = {str(i) for i in ids or []}
     with _locked(agent_dir):
         notes = load(agent_dir)
-        out = [x for x in notes if x["id"] in want and x.get("state") != "done"]
+        out = [x for x in notes if x["id"] in want and x.get("state") != "done" and not x.get("to")]
         for x in out:
             x["state"] = "sent"
             for k in ("answered", "noanswer"):
@@ -290,3 +291,102 @@ def strip_reply(reply, nums):
         return reply
     out = [l for l in (reply or "").split("\n") if not ((lambda m: m and int(m.group(1)) in nums)(REPLY_RE.match(l)))]
     return "\n".join(out).strip()
+
+
+# --- requests between agents (proposal 77, improvement/agent-notes) ----------------------------------
+# Agent A asks agent B with dirai_note.py ask B "<request>": a draft entry in A's notes, {"to": B}. Only the
+# owner sends it (agents.send_request): the server copies it into B's notes as {"from": A} (same "link")
+# and messages B; B answers it like any note (answer()); when B's run ends the server copies the answer
+# onto A's entry and gives it to A (agents._requests_answered). All of A's entries with B make the note
+# "A ↔ B" (the panel's Requests bar); each entry has its own state:
+#   A's entry ("to"): draft -> sent -> done | open (B asked back or didn't answer) | rejected (by the owner)
+#   B's entry ("from"): open -> sent (in B's message) -> done | open, as any note
+PAIR_KEEP = 5       # finished entries kept per pair (older ones fold away, R7)
+
+
+def tree_root(agent_dir):
+    """The tree an agent's folder is in: the nearest folder up with www/dirai.json; None if none."""
+    d = os.path.abspath(agent_dir)
+    while True:
+        if os.path.isfile(os.path.join(d, "www", "dirai.json")):
+            return d
+        up = os.path.dirname(d)
+        if up == d:
+            return None
+        d = up
+
+
+def _fold(notes, key, other):
+    """Keep PAIR_KEEP finished entries of the pair (key "to" or "from" == other), dropping the oldest."""
+    done = [x for x in notes if x.get(key) == other and x.get("state") in ("done", "rejected")]
+    drop = {x["id"] for x in done[:-PAIR_KEEP]} if len(done) > PAIR_KEEP else set()
+    return [x for x in notes if x["id"] not in drop]
+
+
+def _new(notes, fields):
+    return dict(fields, id=secrets.token_hex(4), n=max([x.get("n", 0) for x in notes] + [0]) + 1,
+                before="", after="", heading="", created=time.strftime("%Y-%m-%d %H:%M"))
+
+
+def ask(agent_dir, tos, text, about="", quote=""):
+    """The agent's drafts to the agents tos (dirai_note.py ask): one entry each, state "draft"; nothing is
+    sent. A pair has one request in flight at a time (draft or sent). Returns (entries, error or None)."""
+    text = (text or "").strip()[:NOTE_MAX]
+    if not text:
+        return [], "say what you ask for"
+    with _locked(agent_dir):
+        notes = load(agent_dir)
+        busy = [t for t in tos if any(x.get("to") == t and x.get("state") in ("draft", "sent") for x in notes)]
+        if busy:
+            return [], ("a request to %s is still waiting (drafted or sent, not answered yet): wait for its "
+                        "answer, or ask the owner to send or reject it" % ", ".join(busy))
+        if len(notes) + len(tos) > MAX_NOTES:
+            return [], "too many notes on this page (at most %d)" % MAX_NOTES
+        out = []
+        for t in tos:
+            notes = _fold(notes, "to", t)
+            x = _new(notes, {"to": t, "note": text, "text": (quote or "").strip()[:TEXT_MAX],
+                             "about": (about or "").strip()[:300], "state": "draft", "link": secrets.token_hex(6)})
+            notes.append(x)
+            out.append(x)
+        _save(agent_dir, notes)
+        return out, None
+
+
+def receive(agent_dir, frm, src):
+    """The server copies A's entry src into B's notes (agent_dir), from frm, as an open note, with the
+    pair's previous request and its answer, so a follow-up has its context (R7). Returns the new entry."""
+    with _locked(agent_dir):
+        notes = _fold(load(agent_dir), "from", frm)
+        prev = [x for x in notes if x.get("from") == frm and x.get("answer")]
+        x = _new(notes, {"from": frm, "note": src["note"], "text": src.get("text", ""),
+                         "about": src.get("about", ""), "state": "open", "link": src["link"]})
+        if prev:
+            x["prev"] = {"note": prev[-1]["note"][:ANSWER_MAX], "answer": prev[-1]["answer"]}
+        notes.append(x)
+        _save(agent_dir, notes)
+        return x
+
+
+def update(agent_dir, match, **fields):
+    """Set fields on the first note match(note) picks (a value None removes the field). The note, or None."""
+    with _locked(agent_dir):
+        notes = load(agent_dir)
+        hit = next((x for x in notes if match(x)), None)
+        if hit is not None:
+            for k, v in fields.items():
+                if v is None:
+                    hit.pop(k, None)
+                else:
+                    hit[k] = v
+            _save(agent_dir, notes)
+        return hit
+
+
+def remove(agent_dir, note_id):
+    """Delete one note (a copy that couldn't be sent)."""
+    with _locked(agent_dir):
+        notes = load(agent_dir)
+        left = [x for x in notes if x["id"] != note_id]
+        if len(left) != len(notes):
+            _save(agent_dir, left)

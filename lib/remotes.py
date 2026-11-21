@@ -65,7 +65,7 @@ TR_RE = re.compile(r"<tr><td data-v=.*?</tr>")
 ROW_FULL_RE = re.compile(r'<tr><td data-v="[^"<>]*"><a href="[^"<>]*">[^<>]*</a>(?:<div class="sub">[^<>]*</div>)?</td>'
                          r'(?:<td class="num" data-v="-?\d+(?:\.\d+)?"(?: title="[^"<>]*")?>[^<>]*</td>)+</tr>')
 # what the list shows of an agent's chat (agents.all_status)
-STATUS_KEYS = ("status", "asking", "denied", "inbox", "schedule", "schedules", "card", "context")
+STATUS_KEYS = ("status", "asking", "denied", "inbox", "requests", "schedule", "schedules", "card", "context")
 
 
 # DirAI on every downstream machine lives in one fixed place, INSTALL_DIR, never a git checkout: the

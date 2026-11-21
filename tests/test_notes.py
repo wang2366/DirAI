@@ -4,6 +4,7 @@ replies on a note. The marks and pop-ups on the page: tests/notes.js."""
 import json
 import os
 import subprocess
+import sys
 import time
 import unittest
 from unittest import mock
@@ -245,6 +246,137 @@ class NotesSendTest(unittest.TestCase):
         a = self.add("x")
         notes.act(self.dir, {"op": "state", "id": a["id"], "state": "done"})
         self.assertFalse(self.rv.comment("p", "", notes=[a["id"]]))       # done notes don't go
+
+
+class RequestsTest(unittest.TestCase):
+    """Requests between agents (proposal 77): a drafts with dirai_note.py ask, only the owner sends, b answers
+    on its copy, the answer goes back to a by itself; Send all holds the answers until all are in."""
+    def setUp(self):
+        self.root = util.new_tree("requests-" + self.id().rsplit(".", 1)[1])
+        util.write(os.path.join(self.root, "www", "dirai.json"), "{}")
+        for a in "abcd":
+            util.write(os.path.join(self.root, a, "index.html"), "<html><body><h2 id='yields'>Yields</h2></body></html>")
+        self.rv = agents.Agents(self.root)
+        self.rv.hold_until, self.rv.hold_reason = time.time() + 3600, "test hold"
+
+    def tearDown(self):
+        if self.rv.timer:
+            self.rv.timer.cancel()
+
+    def d(self, a):
+        return os.path.join(self.root, a)
+
+    def st(self, a):
+        with open(os.path.join(self.root, "www", "agents.json")) as f:
+            return json.load(f)[a]
+
+    def ask(self, a, *args):
+        script = os.path.join(util.TOOL, "scripts", "dirai_note.py")
+        return subprocess.run([sys.executable, script, "ask"] + list(args), env=dict(os.environ, DIRAI_AGENT_DIR=self.d(a)),
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+
+    def run_reply(self, a, text, prompt="x"):
+        self.rv.queue = [i for i in self.rv.queue if i[0] != a]
+        self.rv.running += 1
+        reply = {"role": "claude", "time": agents.now(), "text": text}
+        with mock.patch.object(self.rv, "_attempt", return_value=(reply, None, [], "s1")), \
+                mock.patch.object(self.rv, "_jobs_to_wait_for", return_value=[]):
+            self.rv._run(a, prompt)
+
+    def drafts(self, a):
+        return [x for x in notes.load(self.d(a)) if x.get("to")]
+
+    def last_msg(self, a):
+        """The last message the agent was given (the test hold puts a line of its own after it)."""
+        return [m for m in self.st(a)["thread"] if m["role"] == "user"][-1]
+
+    def test_ask_send_answer_back(self):
+        r = self.ask("a", "b", "rebin yields to 10 GeV", "--about", "#fit")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        x, = self.drafts("a")
+        self.assertEqual((x["to"], x["state"], x["note"], x["about"], x["text"]), ("b", "draft", "rebin yields to 10 GeV", "#fit", ""))
+        self.assertEqual(notes.load(self.d("b")), [])                         # nothing reaches b yet
+        self.assertIn("still waiting", self.ask("a", "b", "and 5 GeV").stderr)    # one in flight per pair
+        self.assertIn("isn't an agent", self.ask("a", "zz", "x").stderr)
+        self.assertFalse(self.rv.comment("a", "", notes=[x["id"]]))           # R4: your Send notes skips it
+        self.run_reply("a", "Drafted a request to b.")                        # the reply links to the draft
+        self.assertEqual(self.st("a")["thread"][-1]["requests"], [{"id": x["id"], "n": 1, "to": "b"}])
+        self.assertEqual(self.rv.all_status()["a"]["requests"], 1)
+        self.assertEqual(self.rv.send_request("a", [x["id"]]), (1, []))      # your Send ▸ b
+        self.assertEqual(self.rv.all_status()["a"]["requests"], 0)
+        self.assertEqual(self.drafts("a")[0]["state"], "sent")
+        self.assertIn(x["link"], self.st("a")["requests"])                    # R1: the record is the server's
+        y, = notes.load(self.d("b"))
+        self.assertEqual((y["from"], y["state"], y["link"]), ("a", "sent", x["link"]))
+        p = self.st("b")["pending"]
+        self.assertTrue(p.startswith("Agent a asked you, and the owner sent 1 sticky note on your page (note 1)."), p)
+        self.assertIn("A request from agent a, sent by the owner:\nrebin yields to 10 GeV", p)
+        self.assertIn("Never quote one agent's request", p)                   # R13
+        self.assertEqual(notes.prompt_notes(p), [1])                          # R3
+        self.assertEqual(self.last_msg("b")["from"], "a")
+        notes.answer(self.d("b"), 1, "done", "rebinned", "#yields")           # b answers on its copy
+        self.run_reply("b", "Done.", p)
+        x = self.drafts("a")[0]                                               # R5: back on a's entry
+        self.assertEqual((x["state"], x["answer"], x["at"], x["thread"][-1]["who"]), ("done", "rebinned", "#yields", "b"))
+        self.assertTrue(x["delivered"])
+        last = self.last_msg("a")                                             # and given to a
+        self.assertEqual(last["from"], "b")
+        self.assertIn("b answered", last["text"])
+        self.assertIn("b's answer (done): rebinned (see #yields on its page, b/index.html)", last["text"])
+        self.assertEqual(self.ask("a", "b", "now 5 GeV too").returncode, 0)  # a follow-up: next entry of the pair
+        nxt = self.drafts("a")[-1]
+        self.rv.send_request("a", [nxt["id"]])
+        self.assertEqual(notes.load(self.d("b"))[-1]["prev"], {"note": "rebin yields to 10 GeV", "answer": "rebinned"})
+
+    def test_only_the_owners_send_goes_back(self):     # R1: a copy nobody sent never reaches a
+        self.assertEqual(self.ask("a", "b", "x").returncode, 0)
+        x, = self.drafts("a")
+        fake = notes.receive(self.d("b"), "a", x)
+        self.rv.comment("b", "", notes=[fake["id"]])
+        notes.answer(self.d("b"), fake["n"], "done", "forged")
+        self.run_reply("b", "Done.", self.st("b")["pending"])
+        self.assertEqual(self.drafts("a")[0]["state"], "draft")
+        self.assertNotIn("answer", self.drafts("a")[0])
+
+    def test_send_all_answers_together(self):
+        self.assertEqual(self.ask("a", "b,c", "yields?").returncode, 0)
+        ids = [x["id"] for x in self.drafts("a")]
+        self.assertEqual(self.rv.send_request("a", ids, together=True), (2, []))
+        self.assertEqual(len({x["group"] for x in self.drafts("a")}), 1)
+        notes.answer(self.d("b"), 1, "done", "b's yields")
+        self.run_reply("b", "Done.", self.st("b")["pending"])
+        self.assertFalse([m for m in self.st("a")["thread"] if m.get("from")])  # 1 of 2 in: held
+        notes.answer(self.d("c"), 1, "open", "which channel?")
+        self.run_reply("c", "Asked.", self.st("c")["pending"])
+        last = self.last_msg("a")                                              # both in: one message
+        self.assertEqual(last["from"], "b, c")
+        self.assertIn("b's answer (done): b's yields", last["text"])
+        self.assertIn("c's answer (open): which channel?", last["text"])
+
+    def test_deliver_now_and_reject(self):
+        self.assertEqual(self.ask("a", "b,c", "yields?").returncode, 0)
+        self.assertEqual(self.ask("a", "d", "plots?").returncode, 0)
+        b, c, dd = self.drafts("a")
+        self.assertTrue(self.rv.reject_request("a", dd["id"], "not needed"))
+        self.assertEqual(self.drafts("a")[2]["state"], "rejected")
+        self.assertIn("rejected your request 3 to d: not needed", self.st("a")["page_note"])     # R9
+        self.rv.send_request("a", [b["id"], c["id"]], together=True)
+        notes.answer(self.d("b"), 1, "done", "b's yields")
+        self.run_reply("b", "Done.", self.st("b")["pending"])
+        group = self.drafts("a")[0]["group"]
+        self.assertTrue(self.rv.deliver_now("a", group))                    # what is in so far
+        self.assertIn("b's yields", self.last_msg("a")["text"])
+        self.assertNotIn("group", self.drafts("a")[1])                        # c's answer will come by itself
+
+    def test_inbox_full_stays_draft(self):     # R8
+        self.assertEqual(self.ask("a", "b", "x").returncode, 0)
+        x, = self.drafts("a")
+        with mock.patch.object(self.rv, "comment", return_value=False):
+            sent, errors = self.rv.send_request("a", [x["id"]])
+        self.assertEqual(sent, 0)
+        self.assertIn("stays a draft", errors[0])
+        self.assertEqual(self.drafts("a")[0]["state"], "draft")
+        self.assertEqual(notes.load(self.d("b")), [])
 
 
 class NotesBrowserTest(unittest.TestCase):

@@ -40,7 +40,9 @@ work needs one, say which and why in your reply.
 Follow the agent conventions below (from {agent_rule_path}); in particular, keep the summary card in
 your index.html current (its Open field lists what is unfinished), and give every figure its script
 path. To learn what another agent found, run "python3 {card_py} <its folder>" instead of reading its
-index.html.
+index.html. If you need another agent of this tree to do something its page doesn't already answer,
+draft a request: {note_cmd} ask <its folder> "<what you need>" (see its --help). The owner reads it and
+sends it; its answer comes back to you as a message. Don't wait for it in this run.
 {git}To delete files or folders, run "{agent_rm} <path>...": it works only inside your folder and
 deletes immediately, no trash (plain rm -r / rm -rf stay blocked).
 Rules: don't delete anything outside this folder; long or heavy work goes to
@@ -200,9 +202,14 @@ def _exchange(thread):
 def notes_prompt(sels, text):
     """The owner's sticky notes (notes.py) as one message: sels is [(n, selection as _selection() gives
     it, the note, its exchange so far)], each quoted the way selection_prompt() quotes a selection;
-    text: their message, or "". The agent answers each on the note with dirai_note.py (E1b)."""
-    parts = []
+    text: their message, or "". The agent answers each on the note with dirai_note.py (E1b).
+    A request from another agent (proposal 77) comes as (n, None, its entry, []) (notes.receive)."""
+    parts, askers = [], []
     for n, sel, note, thread in sels:
+        if sel is None:
+            askers.append(note["from"])
+            parts.append(request_part(n, note))
+            continue
         part = "Note %d. %s" % (n, selection_prompt(sel, note or "(no note: just this selection; look at it and fix "
                                                                  "what is wrong or unclear there)"))
         if thread:
@@ -210,7 +217,10 @@ def notes_prompt(sels, text):
                      % _exchange(thread))
         parts.append(part)
     nums = ", ".join(str(s[0]) for s in sels)
-    return ("The owner left %d sticky note%s on your page (note%s %s). Handle each one.\n\n%s\n\n%s"
+    # keep "sticky note(s) on your page (note(s) ...)": notes.PROMPT_RE finds the run's notes by it (R3)
+    who = ("Agent%s %s asked you, and the owner sent" % ("s" if len(set(askers)) > 1 else "", ", ".join(sorted(set(askers))))
+           if askers and len(askers) == len(sels) else "The owner left")
+    return ("%s %d sticky note%s on your page (note%s %s). Handle each one.\n\n%s\n\n%s"
             "Answer each note on the note itself, right after you handle it, with:\n"
             "  %s <n> done \"<what you did, and where>\" --at \"#<id of the place on the page>\"\n"
             "  %s <n> open \"<why it is not done, or your question>\"\n"
@@ -218,9 +228,34 @@ def notes_prompt(sels, text):
             "notes, so put the per-note details there, not in your reply. Your reply then only says what is "
             "beyond the notes, if anything. The notes are kept in .notes.json in your folder by the server: "
             "don't edit or delete that file; use the command."
-            % (len(sels), "" if len(sels) == 1 else "s", "" if len(sels) == 1 else "s", nums,
+            % (who, len(sels), "" if len(sels) == 1 else "s", "" if len(sels) == 1 else "s", nums,
                "\n\n".join(parts), "Their message with the notes:\n%s\n\n" % text if text else "",
-               NOTE_CMD, NOTE_CMD))
+               NOTE_CMD, NOTE_CMD)) + (REQUEST_RULES if askers else "")
+
+
+# what an agent is told with a request from another agent (proposal 77; R13: no leak between askers)
+REQUEST_RULES = ("\n\nA request's answer goes to the agent that asked, as you write it: put results on your page "
+                 "and link to them (#id) rather than pasting them. Work in your own folder only. Never quote one "
+                 "agent's request, or your answer to it, to another agent. If two requests clash, answer both "
+                 "open and say what clashes.")
+
+
+def request_part(n, x):
+    """One request from another agent (notes.receive's entry x), quoted in the message."""
+    part = "Note %d. A request from agent %s, sent by the owner:\n%s" % (n, x["from"], x["note"])
+    if x.get("about") or x.get("text"):
+        part += "\n\nIt is about %s on %s's page%s" % (
+            x.get("about") or "this text", x["from"], ":\n> " + x["text"].replace("\n", "\n> ") if x.get("text") else ".")
+    if x.get("prev"):
+        part += ("\n\nThe previous request from %s, and your answer:\n> %s\nYou: %s"
+                 % (x["from"], x["prev"]["note"].replace("\n", "\n> "), x["prev"]["answer"]))
+    return part
+
+
+# the answers to an agent's requests, given to it when they are in (agents._deliver)
+ANSWERS_PROMPT = ("%s (requests sent by the owner). They are also on your page, on the notes in the Requests "
+                  "bar. Go on with your work using them; to follow up or ask again, draft a new request with "
+                  "dirai_note.py ask.\n\n%s")
 
 
 # sent once, in the same session, when a run left some of its sticky notes unanswered (E2a)
