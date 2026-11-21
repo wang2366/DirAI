@@ -111,6 +111,14 @@ class TestShares(unittest.TestCase):
                          [("fit", None, "Fit results"), ("fit/demo", "fit", "Demo")])
         self.assertEqual(reader.shared_page("www/shares/%s/agents/fit/demo" % FULL)["slug"], "fit/demo")
         self.assertEqual(box["owner"], "wang-dirai")
+        # its tick in the Machines map: out of the agent list and back; the clone stays connected
+        self.assertTrue(box["listed"])
+        self.assertEqual(reader.act({"op": "unlist", "repo": FULL}), {"ok": True})
+        self.assertFalse(reader.box(FULL)["listed"])
+        self.assertEqual(len(reader.box(FULL)["agents"]), 2)
+        self.assertIn("error", reader.act({"op": "unlist", "repo": "someone/else_agent_repo"}))
+        self.assertEqual(reader.act({"op": "list", "repo": FULL}), {"ok": True})
+        self.assertTrue(reader.box(FULL)["listed"])
 
         # the reader copies it into their tree
         page = "www/shares/%s/agents/fit" % FULL
@@ -319,6 +327,24 @@ class TestShares(unittest.TestCase):
         self.assertEqual(self.s.act({"op": "unhide", "repo": FULL}, "proj/fit"), {"ok": True})
         p = self.s.page_state("proj/fit")
         self.assertEqual(([r["full"] for r in p["repos"]], p["hidden"]), ([FULL], []))
+
+    def test_readers_with_pending_invitations(self):
+        # readers: the collaborators (not you), then the invitations not yet accepted
+        api = {"repos/%s/collaborators?affiliation=direct" % FULL: [{"login": "wang", "role_name": "admin"},
+                                                                     {"login": "ann", "role_name": "read"}],
+               "repos/%s/invitations" % FULL: [{"invitee": {"login": "bob"}, "permissions": "read",
+                                                "created_at": "2026-11-19T10:00:00Z", "expired": False},
+                                               {"invitee": {"login": "cy"}, "permissions": "read", "expired": True},
+                                               {"invitee": None}]}       # an invitation by email: no login
+        old = shares.gh_json, shares.auth
+        shares.gh_json = lambda *a, host=None: api.get(a[1])
+        shares.auth = lambda host=None, force=False: {"login": "wang", "token": "t"}
+        try:
+            got = self.s.readers(FULL)
+        finally:
+            shares.gh_json, shares.auth = old
+        self.assertEqual([(r["login"], r["pending"]) for r in got], [("ann", False), ("bob", True), ("cy", True)])
+        self.assertEqual((got[1]["since"], got[1]["expired"], got[2]["expired"]), ("2026-11-19", False, True))
 
     def test_remove_copy_only_inside_copies(self):
         origin = '{"repo": "x/y", "slug": "fit", "commit": "abc"}'

@@ -1125,6 +1125,11 @@ class Remotes:
                     rec["usage"]["stop"] = out.get("stop", rec["usage"].get("stop"))
             if path == "engine" and out.get("ok") and isinstance(rec.get("usage"), dict):
                 rec["usage"]["engine"] = out.get("engine")
+            if path == "share" and out.get("ok") and data.get("op") in ("list", "unlist"):    # a repo's tick: now
+                with self.lock:
+                    for g in (rec.get("shares") or {}).get("connected") or []:
+                        if isinstance(g, dict) and g.get("full") == data.get("repo"):
+                            g["listed"] = data["op"] == "list"
             return out
         if op in ("hide", "show"):
             tid = body.get("tree", "")     # "" is this server's own agents

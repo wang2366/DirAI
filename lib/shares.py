@@ -23,7 +23,8 @@ pill (1-2 make it usable, 3-4 set up your own repo); each failed one has a fix t
 Kept in www/shares.json:
   {"targets": {"<agent>": {"<owner>/<repo>": {"slug", "commit", "published"}}},
    "mode": {"<agent>": "run"},              (absent: by hand; "run": republished when it changed, per pass)
-   "connected": {"<owner>/<repo>": {"fetched", "updated": [slugs not opened since the fetch]}}}
+   "connected": {"<owner>/<repo>": {"fetched", "updated": [slugs not opened since the fetch],
+                                    "unlisted": true when its agents are kept out of the agent list}}}
 Clones: www/shares/<owner>/<repo>/ (others' repos), www/shares/.mine/<owner>/<repo>/ (yours, to publish).
 """
 import json
@@ -440,13 +441,20 @@ class Shares:
         return me
 
     def readers(self, full):
-        """[{login, role}] of the people added to one of your repos by name: outside collaborators, and members
-        of its org added by hand (a group org such as KubisGroup); not you, nor the org's owners."""
+        """[{login, role, pending}] of the people added to one of your repos by name: outside collaborators, and
+        members of its org added by hand (a group org such as KubisGroup); not you, nor the org's owners. Then the
+        invitations not yet accepted (pending: True; expired: True once GitHub's 7 days have passed)."""
         host, nwo = split_full(full)
         got = gh_json("api", "repos/%s/collaborators?affiliation=direct" % nwo, host=host) or []
         me = auth(host=host)["login"]
-        return [{"login": c["login"], "role": c.get("role_name", "")} for c in got
-                if isinstance(c, dict) and c.get("login") != me]
+        out = [{"login": c["login"], "role": c.get("role_name", ""), "pending": False} for c in got
+               if isinstance(c, dict) and c.get("login") != me]
+        for i in gh_json("api", "repos/%s/invitations" % nwo, host=host) or []:
+            who = (i.get("invitee") or {}).get("login") if isinstance(i, dict) else None
+            if who:
+                out.append({"login": who, "role": i.get("permissions", ""), "pending": True,
+                            "expired": bool(i.get("expired")), "since": (i.get("created_at") or "")[:10]})
+        return out
 
     # --- publishing ---------------------------------------------------------------------------------
     def folder(self, agent):
@@ -773,6 +781,21 @@ class Shares:
             self.found(force=True)
             self.checks(force=True)
 
+    def list_agents(self, full, listed=True):
+        """A connected repo's agents in this tree's agent list (rows of the home page), or not; the clone,
+        its fetches and the colleague search stay as they are."""
+        with self.lock:
+            s = self.state()
+            c = s["connected"].get(full)
+            if c is None:
+                return "not connected"
+            if listed:
+                c.pop("unlisted", None)
+            else:
+                c["unlisted"] = True
+            self.save(s)
+        return None
+
     def seen(self, full, slug):
         with self.lock:
             s = self.state()
@@ -817,7 +840,7 @@ class Shares:
         host, nwo = split_full(full)
         owner, repo = nwo.split("/")
         return {"full": full, "name": repo[:-len(SUFFIX)] if repo.endswith(SUFFIX) else repo, "owner": owner,
-                "repo": repo, "host": host, "web": web_url(full),
+                "repo": repo, "host": host, "web": web_url(full), "listed": not c.get("unlisted"),
                 "fetched": c.get("fetched", ""), "updated": len(c.get("updated", [])), "agents": agents}
 
     def report(self):
@@ -1140,6 +1163,9 @@ class Shares:
             return {"error": why} if why else {"ok": True}
         if op == "disconnect":
             why = self.disconnect(str(body.get("repo") or ""))
+            return {"error": why} if why else {"ok": True}
+        if op in ("list", "unlist"):      # a connected repo's agents in this tree's agent list, or not
+            why = self.list_agents(str(body.get("repo") or ""), op == "list")
             return {"error": why} if why else {"ok": True}
         if op == "fetch":
             full = str(body.get("repo") or "")
