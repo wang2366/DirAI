@@ -284,7 +284,7 @@
       const box = $("rv-thread"), top = box.scrollTop, wasAtEnd = atEnd(box);
       const opened = [...box.querySelectorAll(".rv-sel")].map(d => d.open);   // keep expanded quotes expanded
       box.innerHTML = (st.thread.map(m => m.role === "ask" ? askHtml(m) :
-        `<div class="rv-msg rv-${m.role}"><div class="rv-meta">${m.from ? "from " + agentLink(m.from) + ", sent by you" : m.role}${m.scheduled ? " (scheduled" + (/^(hour|day|week)$/.test(m.scheduled) ? ", every " : ": ") + m.scheduled + ")" : ""}${m.later ? " (sent later, held for " + m.later + ")" : ""}${m.model ? " (" + m.model + ")" : ""} · ${m.time}${m.cost != null ? " · $" + m.cost : ""}</div>${m.selection ? selHtml(m.selection) : ""}${m.notes ? notesHtml(m.notes) : ""}${m.notes_result ? notesResultHtml(m.notes_result) : ""}${m.requests ? requestLinksHtml(m.requests) : ""}${m.role === "claude" ? replyHtml(m) : esc(m.text)}</div>`
+        `<div class="rv-msg rv-${m.role}"><div class="rv-meta">${m.from ? "from " + m.from.split(", ").map(agentLink).join(", ") + ", sent by you" : m.role}${m.scheduled ? " (scheduled" + (/^(hour|day|week)$/.test(m.scheduled) ? ", every " : ": ") + m.scheduled + ")" : ""}${m.later ? " (sent later, held for " + m.later + ")" : ""}${m.model ? " (" + m.model + ")" : ""} · ${m.time}${m.cost != null ? " · $" + m.cost : ""}</div>${m.selection ? selHtml(m.selection) : ""}${m.notes ? notesHtml(m.notes) : ""}${m.notes_result ? notesResultHtml(m.notes_result) : ""}${m.requests ? requestLinksHtml(m.requests) : ""}${m.role === "claude" ? replyHtml(m) : m.from && m.text ? answersHtml(m.text) : esc(m.text)}</div>`
       ).join("") || (inbox.length ? "" : '<div class="rv-meta">No comments yet.</div>')) + inboxHtml(inbox, busy);
       box.querySelectorAll(".rv-sel").forEach((d, i) => d.open = !!opened[i]);
       markBroken(box);
@@ -1607,7 +1607,8 @@
     if (r.error) alert(r.error);
     if (r.notes) renderNotes(r.notes);
     refresh();
-  });
+  }).catch(e => alert("The server didn't take it (" + e.message + "): nothing was sent. " +
+    "If DirAI wasn't restarted since the requests feature came in, restart it (DirAI stop, then DirAI start)."));
   function reqOp(op, id) {
     const n = noteList.find(x => x.id === id), pop = $("rv-notepop"), at = {left: parseFloat(pop.style.left) || scrollX + 20, top: parseFloat(pop.style.top) || scrollY + 80};
     if (op === "sendall") return reqApi({op: "send", all: true, ids: noteList.filter(x => x.to && x.state === "draft").map(x => x.id)});
@@ -1636,6 +1637,19 @@
   // a reply of a run that drafted requests: "Request to B drafted ▸", which opens it in the Requests bar
   const requestLinksHtml = list => `<div class="rv-npoint">${list.map(r => `Request to ${agentLink(r.to)} <a class="rv-rlink" href="#" data-rpair="${attr(r.to)}" data-rid="${attr(r.id)}" ` +
     `title="Read it, then send, edit or reject it">drafted ▸</a>`).join(" · ")}</div>`;
+  // answers to this agent's requests (agents.py _deliver): one line per answering agent, which opens its note
+  // in the Requests bar; the full text the agent got stays folded below (C3, improvement/agent-notes)
+  function answersHtml(text) {
+    const by = {};
+    for (const [, n, to] of text.matchAll(/^Request (\d+) to ([^\s:]+):/gm)) (by[to] = by[to] || []).push(n);
+    const links = Object.keys(by).map(to => {
+      const ns = by[to], x = noteList.find(y => y.to === to && String(y.n) === ns[ns.length - 1]);
+      return `Answers from ${agentLink(to)} to request${ns.length > 1 ? "s" : ""} ${ns.join(", ")} ` +
+        `<a class="rv-rlink" href="#" data-rpair="${attr(to)}" data-rid="${attr(x ? x.id : "")}" title="Open the note in the Requests bar">▸</a>`;
+    });
+    return (links.length ? `<div class="rv-npoint">${links.join(" · ")}</div>` : "") +
+      `<details class="rv-sel"><summary>The full message the agent got</summary><div class="rv-quote">${esc(text)}</div></details>`;
+  }
   $("rv-thread").addEventListener("click", e => {
     const a = e.target.closest(".rv-rlink");
     if (!a) return;
