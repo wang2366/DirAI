@@ -328,7 +328,12 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
             return self.send_json(self_update.status(refresh=True))
         if action == "permissions":   # tree-wide, from the agent list: "allowlist" or "ask"
             ok = AGENTS.set_permissions(body.get("mode"))
-            return self.send_json({"ok": True} if ok else {"error": "unknown mode"})
+            if not ok:
+                return self.send_json({"error": "unknown mode"})
+            # the owner's click on this (top) server: the same mode on every tree of the Machines map; a call
+            # relayed from an upstream server (no "all") sets this tree only
+            errors = REMOTES.push_permissions(body["mode"]) if body.get("all") else {}
+            return self.send_json({"ok": True, "errors": errors})
         if action == "share":         # the Share pill, and shared repos in the Machines map (shares.py)
             page = self.agent_key(agent_param(body)) if "agent" in body else None
             if page is not None and page.startswith(SHARED):     # someone else's agent: only Copy to my tree

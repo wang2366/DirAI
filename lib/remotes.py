@@ -48,7 +48,8 @@ LIST_CMD = 'PATH="$HOME/.local/bin:$PATH" DirAI list --json'
 # dirs/new: New agent in another tree (proposal 68); that tree's own server still checks the folder (clean_rel)
 CALLS = {"favorite": "POST", "usage_stop": "POST", "usage_history": "GET", "card": "GET",
          "dirs": "GET", "new": "POST", "engine": "POST",
-         "share": "POST"}     # proposal 72 (D8): connect, fetch or disconnect a shared repo on that tree
+         "share": "POST",     # proposal 72 (D8): connect, fetch or disconnect a shared repo on that tree
+         "permissions": "POST"}    # the top server's Agent permissions, set on every tree it reaches
 POLL_S = 30
 # while this server's report was asked for lately (an open agent list, or the server upstream polling it,
 # which is itself watched), poll every POLL_WATCHED_S: down a chain each hop adds up to one poll of delay
@@ -684,6 +685,7 @@ class Remotes:
         self.restart_wanted = set()   # tree ids to restart once their agents are idle (after an update)
         self.closed = False
         self.watched = 0       # when report() was last asked for (see POLL_WATCHED_S)
+        self.perm_sent = {}    # id -> the permission mode last pushed to that tree (see sync_permissions)
 
     # choices ------------------------------------------------------------------------------
     def choices(self):
@@ -877,7 +879,8 @@ class Remotes:
                 favs = set()
             # that machine's Claude plan usage and pause levels (its own login; cached 60 s there), and the
             # CPU and memory of the node serving the tree, and the shared repos connected there (proposal 72)
-            for name in ("usage", "load", "shares"):
+            # and its tree's Agent permissions mode (kept in step with this server's: sync_permissions)
+            for name in ("usage", "load", "shares", "permissions"):
                 try:
                     c, body = http_get(lport, "/_review/" + name, key)
                     rec[name] = json.loads(body) if c == 200 else None
@@ -885,6 +888,7 @@ class Remotes:
                     rec[name] = None
             rec.update(state="alive", agents=agent_rows(page.decode("utf-8", "replace"), status, favs),
                        checked=time.time(), owner=code2 == 200)
+            self.sync_permissions(rec)
         except (OSError, ValueError) as e:
             link = self.links.get(rec["host"])     # a failed hop to the node says why, not "Connection refused"
             rec.update(state="not answering", error=(link and link.tunnel_error(lport)) or str(e), stale=True)
@@ -915,6 +919,7 @@ class Remotes:
                     "hosts": d.get("hosts", []), "key": key, "reporter": tid, "remote_id": d["id"],
                     "stale": bool(d.get("stale")), "checked": d.get("checked"), "note": d.get("note", ""),
                     "usage": d.get("usage"), "load": d.get("load"), "shares": d.get("shares"),
+                    "permissions": d.get("permissions"), "perm_error": d.get("perm_error", ""),
                     "tree_id": d.get("tree_id", ""),
                     "error": d.get("error", "")}
             self.forwarder(did, self.tports[did][1], key)
@@ -995,7 +1000,7 @@ class Remotes:
                 f = self.fwd.get(tid)
                 t = {k: r.get(k) for k in ("id", "machine", "ident", "via", "root", "port", "node", "job",
                                            "running", "state", "agents", "hosts", "stale", "checked", "usage", "load",
-                                           "shares", "tree_id", "last")}
+                                           "shares", "tree_id", "last", "permissions", "perm_error")}
                 t.update(idents=r.get("idents", [r.get("ident")]), hidden=tid in c["hidden"],
                          fport=f.port if f and f.target else None, error=r.get("error", ""),
                          note=self.notes.get(tid, r.get("note", "")) if not r.get("reporter") else r.get("note", ""))
@@ -1007,7 +1012,49 @@ class Remotes:
         except Exception:
             mine = None
         return {"machine": self.me, "root": self.root, "tree_id": tree_id(self.key, self.root), "hosts": hosts, "trees": trees, "usage": mine,
-                "hidden": "" in c["hidden"], "build": build_id(), "commit": build_label()}
+                "hidden": "" in c["hidden"], "build": build_id(), "commit": build_label(),
+                "permissions": self.own_permissions()}
+
+    # Agent permissions: the top server's choice holds on every tree it reaches -----------------
+    def own_permissions(self):
+        """This tree's mode (www/dirai.json "permissions"; agents.py's default when unset)."""
+        return dirai_config.tree_config(self.root).get("permissions") or "allowlist"
+
+    def set_tree_permissions(self, rec, mode):
+        """Set mode on tree rec's server; keeps the outcome on rec for the Machines map."""
+        self.perm_sent[rec["id"]] = mode
+        out = self.call_tree(rec, "permissions", {"mode": mode})
+        with self.lock:
+            if out.get("ok"):
+                p = rec.get("permissions") if isinstance(rec.get("permissions"), dict) else {}
+                rec["permissions"], rec["perm_error"] = dict(p, mode=mode), ""
+            else:
+                rec["perm_error"] = "permissions not set: %s" % out.get("error", "no answer")
+        return out
+
+    def sync_permissions(self, rec):
+        """A tree this server links itself, read at a poll: when its mode differs from this server's, set it
+        to this server's (a tree further down is kept in step by the server that links it). Tried once per
+        mode, so a refusal shows on the map instead of being retried at every poll."""
+        p, mode = rec.get("permissions"), self.own_permissions()
+        if not isinstance(p, dict) or p.get("mode") == mode:     # in step (or a server without the mode)
+            self.perm_sent.pop(rec["id"], None)
+            rec["perm_error"] = ""
+            return
+        if self.perm_sent.get(rec["id"]) != mode:
+            self.set_tree_permissions(rec, mode)
+
+    def push_permissions(self, mode):
+        """The owner's click on this server's Agent permissions: the same mode on every running tree it
+        reaches, direct or further down. {tree id: error} for those that refused or didn't answer."""
+        with self.lock:
+            recs = [r for r in self.trees.values() if r.get("state") == "alive"]
+        errors = {}
+        for rec in recs:
+            out = self.set_tree_permissions(rec, mode)
+            if not out.get("ok"):
+                errors[rec["id"]] = out.get("error", "no answer")
+        return errors
 
     # owner actions ----------------------------------------------------------------------
     def act(self, body):

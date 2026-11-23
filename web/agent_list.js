@@ -498,9 +498,12 @@
   const SHOW_LOAD = false;
   if (SHOW_LOAD) { load(); setInterval(load, 10000); }
 
-  // Tree-wide permission mode for the agents' next runs (www/dirai.json "permissions")
+  // Tree-wide permission mode for the agents' next runs (www/dirai.json "permissions"). This server is the top
+  // of the Machines map: a click sets every tree the map reaches too ("all"), and each server keeps the trees
+  // it links in step at its polls (remotes.py sync_permissions); a tree that refused is named below the buttons
   const MODES = {allowlist: ["Allow list", "Only allowed actions run; the rest are refused and listed in the agent's chat, to allow for the next run"],
                  ask: ["Ask in chat", "An action that isn't allowed waits for your Allow / Deny in the agent's chat, and the run carries on"]};
+  let permMsg = "";
   function perms() {
     fetch("/_review/permissions").then(r => r.json()).then(p => {
       let el = document.getElementById("rv-perm");
@@ -510,9 +513,16 @@
       el.innerHTML = "<b>Agent permissions</b>" + p.modes.map(m =>
         `<button data-mode="${m}" title="${MODES[m][1]}" style="padding:2px 10px;border-radius:12px;cursor:pointer;font:13px system-ui;` +
         (m === p.mode ? "background:#0b63ce;color:#fff;border:1px solid #0b63ce" : "background:transparent;color:inherit;border:1px solid #999") +
-        `">${MODES[m][0]}</button>`).join("") + '<span style="opacity:.65">applies from each agent\'s next run</span>';
+        `">${MODES[m][0]}</button>`).join("") +
+        '<span style="opacity:.65">applies from each agent\'s next run, on this machine and every tree under Machines</span>' +
+        (permMsg ? `<span style="color:#c62828;flex-basis:100%">${esc(permMsg)}</span>` : "");
       el.querySelectorAll("button").forEach(b => b.onclick = () => fetch("/_review/permissions", {method: "POST",
-        headers: {"Content-Type": "application/json", "X-Review": "1"}, body: JSON.stringify({mode: b.dataset.mode})}).then(perms));
+        headers: {"Content-Type": "application/json", "X-Review": "1"}, body: JSON.stringify({mode: b.dataset.mode, all: true})})
+        .then(r => r.json()).then(out => {
+          const bad = Object.entries(out.errors || {});
+          permMsg = out.error || (bad.length ? "Not set on: " + bad.map(([t, e]) => t + " (" + e + ")").join("; ") : "");
+          perms(); setTimeout(machines, 300);
+        }).catch(perms));
     }).catch(() => {});
   }
   setTimeout(perms, 300);   // after the usage and load rows, so it lands below them
@@ -711,6 +721,15 @@
       <input data-node placeholder="node: empty, a node name or --job" title="Where the server runs: empty = where ssh lands; a node name (e.g. a019); --job = its own sbatch job">
       <button data-op="new" data-host="${esc(alias)}" data-at="${esc(at)}" title="DirAI init and DirAI start there over ssh">Init and start</button></details>`;
   }
+  // a tree's Agent permissions mode, red when it isn't the top server's (set there at the next poll, or refused)
+  function permLine(t, rep) {
+    const m = t.permissions && t.permissions.mode, top = rep && rep.permissions;
+    if (!m || t.state !== "alive") return "";
+    const name = mm => (MODES[mm] || [mm])[0], off = top && m !== top;
+    return `<div class="${off ? "err" : "dim"}" title="Agent permissions of this tree; the buttons at the top set it on every tree">` +
+      `permissions: ${esc(name(m))}${off ? " · not the top's " + esc(name(top)) : ""}</div>` +
+      (t.perm_error ? `<div class="err">${esc(t.perm_error)}</div>` : "");
+  }
   function treeNode(t, rep) {
     const via = rep && listedRoute(rep)[t.id], from = via && via !== t.id && rep.trees.find(x => x.id === via);
     const same = from ? `<div class="dim">same tree as ${esc(routeLabel(from))}: its agents are listed from there</div>` : "";
@@ -732,7 +751,7 @@
       <b>${esc(short(t.root))}</b><br><span class="st-${alive ? "alive" : bad ? "bad" : "off"}">${esc(t.state)}${t.stale ? " (stale)" : ""}</span>
       <span class="dim"> · ${esc(t.node || "–")} · ${esc(t.port || "–")}</span><br>
       ${(t.agents || []).length} agent${(t.agents || []).length === 1 ? "" : "s"}${asking ? ` · <b class="st-bad">${asking} needs you</b>` : ""} ${act}
-      ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}${t.note ? `<div class="dim">${esc(t.note)}</div>` : ""}${t.last && !alive ? `<div class="dim">last server ${esc(t.last)}</div>` : ""}${same}${alive ? sharesBox(t.shares, t.id, t.hidden) : ""}${
+      ${permLine(t, rep)}${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}${t.note ? `<div class="dim">${esc(t.note)}</div>` : ""}${t.last && !alive ? `<div class="dim">last server ${esc(t.last)}</div>` : ""}${same}${alive ? sharesBox(t.shares, t.id, t.hidden) : ""}${
       stopAsk === t.id ? `<div class="ask">${stopText(t).split("\n").map(l => `<div>${esc(l)}</div>`).join("")}<button data-op="stopyes" data-tree="${esc(t.id)}">Stop</button> <button class="gray" data-op="stopno">Cancel</button></div>` : ""}${
       forgetAsk === t.id ? `<div class="ask">${forgetText(t).split("\n").map(l => `<div>${esc(l)}</div>`).join("")}<button data-op="forgetyes" data-tree="${esc(t.id)}">Forget</button> <button class="gray" data-op="stopno">Cancel</button></div>` : ""}</div>`;
   }

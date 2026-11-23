@@ -138,6 +138,43 @@ class SshConfig(unittest.TestCase):
         self.assertEqual(remotes.relayed_rows([rows[0], dict(rows[0], row=bad)])[1].get("row"), None)
 
 
+class PermissionSync(unittest.TestCase):
+    """The top server's Agent permissions hold on the trees of its Machines map."""
+
+    def setUp(self):
+        self.root = util.new_tree("tree-perm")
+        util.write(os.path.join(self.root, "www", "dirai.json"), json.dumps({"permissions": "ask"}))
+        self.r = remotes.Remotes(self.root, "k", ("review_key",))
+        self.calls = []
+        self.answer = {"ok": True}
+        self.r.call_tree = lambda rec, path, data: self.calls.append((rec["id"], path, data)) or self.answer
+
+    def test_poll_sets_a_tree_that_differs_once(self):
+        rec = {"id": "nas/t", "permissions": {"mode": "allowlist"}}
+        self.r.sync_permissions(rec)
+        self.assertEqual(self.calls, [("nas/t", "permissions", {"mode": "ask"})])
+        self.assertEqual(rec["permissions"]["mode"], "ask")
+        self.r.sync_permissions(dict(rec, permissions={"mode": "ask"}))     # in step: nothing sent
+        self.assertEqual(len(self.calls), 1)
+
+    def test_refusal_shown_not_retried(self):
+        self.answer = {"error": "HTTP 404 from nas/t"}
+        rec = {"id": "nas/t", "permissions": {"mode": "allowlist"}}
+        self.r.sync_permissions(rec)
+        self.r.sync_permissions(rec)
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn("HTTP 404", rec["perm_error"])
+        self.r.sync_permissions({"id": "old", "permissions": None})     # a server without the mode: left alone
+        self.assertEqual(len(self.calls), 1)
+
+    def test_click_sets_every_running_tree(self):
+        self.r.trees = {"a": {"id": "a", "state": "alive"}, "b": {"id": "b", "state": "down"},
+                        "a/c": {"id": "a/c", "state": "alive", "reporter": "a"}}
+        self.assertEqual(self.r.push_permissions("allowlist"), {})
+        self.assertEqual(sorted(c[0] for c in self.calls), ["a", "a/c"])
+        self.assertEqual(self.r.report()["permissions"], "ask")     # this server's own, from dirai.json
+
+
 class DeadServer(unittest.TestCase):
     """A server_host.txt whose server is gone (died without DirAI stop) is reported down, with why."""
 
