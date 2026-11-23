@@ -367,6 +367,20 @@ class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
         if action == "notes":         # sticky notes on the page (notes.py): add / edit / delete / state
             got, why = notes.act(os.path.join(ROOT, agent), body)
             return self.send_json({"error": why, "notes": got} if why else {"ok": True, "notes": got})
+        if action == "request":       # requests between agents (proposal 77): the owner's Send / Reject / Deliver now
+            op, ids = body.get("op"), [str(i) for i in body.get("ids") or [] if isinstance(i, str)][:notes.MAX_NOTES]
+            if op == "send" and ids:
+                sent, errors = AGENTS.send_request(agent, ids, together=bool(body.get("all")))
+                why = "; ".join(errors)
+            elif op == "reject":
+                why = None if AGENTS.reject_request(agent, str(body.get("id") or ""), str(body.get("reason") or "")) \
+                    else "That request is gone or already sent."
+            elif op == "deliver":
+                why = None if AGENTS.deliver_now(agent, str(body.get("group") or "")) else "No answers are in yet."
+            else:
+                return self.send_json({"error": "bad request"})
+            got = notes.load(os.path.join(ROOT, agent))
+            return self.send_json({"error": why, "notes": got} if why else {"ok": True, "notes": got})
         if action == "attach":        # a file dropped on the panel: saved in the agent's pasted/, named in the message
             try:
                 path = attachments.save(os.path.join(ROOT, agent), body.get("name"), body.get("data"))

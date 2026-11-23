@@ -166,6 +166,13 @@
   #rv-notepop textarea{display:block;box-sizing:border-box;width:300px;max-width:100%;min-height:5em;margin:4px 0;padding:4px 6px;
     font:13px/1.4 system-ui,sans-serif;border:1px solid #e0b400;border-radius:4px;resize:vertical}
   #rv-notes{margin-top:6px;font-size:12.5px} #rv-notes summary{cursor:pointer;color:#555}
+  #rv-requests{margin:8px 0;padding:4px 8px;border:1px solid #e0b400;border-radius:6px;background:#fffbe6;font:13px system-ui}
+  #rv-requests button{font-size:12px;margin-left:4px}
+  .rv-rchip{display:inline-block;margin:2px 4px;padding:1px 8px;border-radius:10px;background:#fff3b0;border:1px solid #e0b400;cursor:pointer}
+  .rv-rchip.draft{background:#fdecea;border-color:#c62828;color:#c62828;font-weight:600} .rv-rchip.sent{background:#e8f0fe;border-color:#0b63ce}
+  .rv-rchip.done,.rv-rchip.rejected{opacity:.7}
+  .rv-rentry{margin-top:6px;padding-top:4px;border-top:1px solid #e0b400} .rv-rentry.done,.rv-rentry.rejected{opacity:.75}
+  .rv-rlink{cursor:pointer;color:#c62828;font-weight:600}
   .rv-nitem{display:flex;gap:6px;align-items:baseline;margin-top:3px;line-height:20px}
   #rv-notelist{max-height:92px;overflow-y:auto;overscroll-behavior:contain}   /* 4 rows, then it scrolls */
   .rv-nitem b{min-width:16px;text-align:center;border-radius:8px;background:#e0b400;color:#fff;font-size:11px}
@@ -224,6 +231,9 @@
   const LABEL = {closed: "TaskDone"};   // shown name for a stored status
   const esc = s => s.replace(/[&<>]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"}[c]));
   const attr = s => esc(s).replace(/"/g, "&quot;");   // for a value in an attribute
+  // another agent's name (its folder, relative to the tree) as a link to its page, in a new tab
+  const agentLink = rel => `<a class="rv-alink" href="${attr("/" + rel.split("/").map(encodeURIComponent).join("/") + "/index.html")}" ` +
+    `target="_blank" rel="noopener" title="Open ${attr(rel)}'s page in a new tab">${esc(rel)}</a>`;
 
   // An open panel stays open across a reload, at the same place in the thread
   function keepOpen() {
@@ -274,7 +284,7 @@
       const box = $("rv-thread"), top = box.scrollTop, wasAtEnd = atEnd(box);
       const opened = [...box.querySelectorAll(".rv-sel")].map(d => d.open);   // keep expanded quotes expanded
       box.innerHTML = (st.thread.map(m => m.role === "ask" ? askHtml(m) :
-        `<div class="rv-msg rv-${m.role}"><div class="rv-meta">${m.role}${m.scheduled ? " (scheduled" + (/^(hour|day|week)$/.test(m.scheduled) ? ", every " : ": ") + m.scheduled + ")" : ""}${m.later ? " (sent later, held for " + m.later + ")" : ""}${m.model ? " (" + m.model + ")" : ""} · ${m.time}${m.cost != null ? " · $" + m.cost : ""}</div>${m.selection ? selHtml(m.selection) : ""}${m.notes ? notesHtml(m.notes) : ""}${m.notes_result ? notesResultHtml(m.notes_result) : ""}${m.role === "claude" ? replyHtml(m) : esc(m.text)}</div>`
+        `<div class="rv-msg rv-${m.role}"><div class="rv-meta">${m.from ? "from " + m.from.split(", ").map(agentLink).join(", ") + ", sent by you" : m.role}${m.scheduled ? " (scheduled" + (/^(hour|day|week)$/.test(m.scheduled) ? ", every " : ": ") + m.scheduled + ")" : ""}${m.later ? " (sent later, held for " + m.later + ")" : ""}${m.model ? " (" + m.model + ")" : ""} · ${m.time}${m.cost != null ? " · $" + m.cost : ""}</div>${m.selection ? selHtml(m.selection) : ""}${m.notes ? notesHtml(m.notes) : ""}${m.notes_result ? notesResultHtml(m.notes_result) : ""}${m.requests ? requestLinksHtml(m.requests) : ""}${m.role === "claude" ? replyHtml(m) : m.from && m.text ? answersHtml(m.text) : esc(m.text)}</div>`
       ).join("") || (inbox.length ? "" : '<div class="rv-meta">No comments yet.</div>')) + inboxHtml(inbox, busy);
       box.querySelectorAll(".rv-sel").forEach((d, i) => d.open = !!opened[i]);
       markBroken(box);
@@ -386,6 +396,7 @@
     $("rv-always").style.display = grantable.some(d => (d.keep || d.rules).length) ? "" : "none";
     $("rv-denials").style.display = st.denials.length && !busy ? "block" : "none";
     renderLogin(st.login);
+    reqInfo = st.request_info || {};
     renderNotes(st.notes || []);
     clearTimeout(timer);
     const signingIn = st.login && st.login.proc && ["starting", "waiting"].includes(st.login.proc.state);
@@ -1158,6 +1169,9 @@
   // (× on a chip leaves that note out; the box may stay empty). After the run the server marks each
   // from the agent's "<n>: done|open" lines: blue = sent, grey ✓ = done (gone after the next run).
   let noteList = [], notesShown = null, moved = new Set();
+  // requests between agents (proposal 77) are notes too, but not on the page's text: the Requests bar has them
+  const isReq = n => !!(n.to || n.from);
+  const pageNotes = () => noteList.filter(n => !isReq(n));
   const NOTE_CTX = 32;   // characters (whitespace removed) of page text kept before and after a note's text
   const squash = s => s.replace(/\s+/g, "");
   // compared without case: a selection holds text as shown, which CSS may have capitalised (text-transform)
@@ -1313,7 +1327,7 @@
   function drawNotes() {
     undrawNotes();
     moved = new Set();
-    const onPage = noteList.filter(n => !n.file);
+    const onPage = noteList.filter(n => !n.file && !isReq(n));
     if (onPage.length) {
       // found on one reading of the page text, then wrapped from the last on the page to the first, so
       // splitting a text node leaves the offsets before it right; a note overlapping one already wrapped
@@ -1334,6 +1348,7 @@
     }
     noteList.filter(n => n.svg && n.file).forEach(n => drawSvgNote(n) || moved.add(n.id));
     drawNoteList();
+    renderRequests();
     if (noteObs) noteObs.takeRecords();   // the marks just drawn (and the change highlights before them) aren't page changes
     pageLen = document.body.textContent.length;
   }
@@ -1342,11 +1357,11 @@
   // yet, or whose mark went with the old nodes, is drawn again.
   let pageLen = 0, noteTimer = null;
   const noteObs = window.MutationObserver ? new MutationObserver(recs => {
-    if (!noteList.some(n => !n.file)) return;
+    if (!noteList.some(n => !n.file && !isReq(n))) return;
     if (!recs.some(r => { const el = r.target.nodeType === 1 ? r.target : r.target.parentElement; return el && !el.closest(SKIP + ",#rv-notepop"); })) return;
     clearTimeout(noteTimer);
     noteTimer = setTimeout(() => {
-      const lost = noteList.some(n => !n.file && !moved.has(n.id) && !document.querySelector(`mark.rv-note[data-note="${CSS.escape(n.id)}"]`));
+      const lost = noteList.some(n => !n.file && !isReq(n) && !moved.has(n.id) && !document.querySelector(`mark.rv-note[data-note="${CSS.escape(n.id)}"]`));
       if (lost || moved.size && document.body.textContent.length !== pageLen) drawNotes();
     }, 300);
   }) : null;
@@ -1354,7 +1369,7 @@
   const noteQuote = (n, k) => n.text.replace(/\s+/g, " ").slice(0, k) + (n.text.length > k ? "…" : "");
   const NSTATE = {open: "open", sent: "sent, waiting for the agent", done: "done"};
   function drawNoteList() {
-    const open = noteList.filter(n => n.state === "open");
+    const noteList = pageNotes(), open = noteList.filter(n => n.state === "open");
     $("rv-notessum").textContent = "Sticky notes" + (noteList.length ? ` (${noteList.length}${open.length && open.length !== noteList.length ? ", " + open.length + " open" : ""})` : "");
     $("rv-notesend").textContent = `Send ${open.length || ""} note${open.length === 1 ? "" : "s"}`.replace("  ", " ");
     $("rv-notesend").disabled = !open.length;
@@ -1519,16 +1534,131 @@
     if (b) notePins = notePins.filter(id => id !== b.dataset.unpin), showNotePins();
   });
   $("rv-notesend").onclick = () => {
-    notePins = noteList.filter(n => n.state === "open").sort((x, y) => x.n - y.n).map(n => n.id);
+    notePins = pageNotes().filter(n => n.state === "open").sort((x, y) => x.n - y.n).map(n => n.id);
     showNotePins();
     $("rv-text").focus();
   };
   $("rv-noteclear").onclick = () => {
-    const k = noteList.filter(n => n.state === "done").length;
+    const k = pageNotes().filter(n => n.state === "done").length;
     if (k && confirm(`Delete the ${k} done note${k === 1 ? "" : "s"} and the agent's answers on them?`)) noteApi({op: "clear"});
   };
   const notesHtml = list => `<details class="rv-sel"><summary>📌 Sticky note${list.length === 1 ? "" : "s"} ${list.map(n => n.n).join(", ")}</summary>` +
     list.map(n => `<div class="rv-quote"><b>${n.n}</b> “${esc(n.text)}”${n.note ? "\n→ " + esc(n.note) : ""}</div>`).join("") + "</details>";
+  // Requests between agents (proposal 77; notes.py entries with "to": this agent asks, "from": it is asked).
+  // They aren't on the page's text, so they sit in a Requests bar under the summary card: one chip per
+  // pair of agents, its pop-up listing the pair's entries. On a draft: Send ▸ To (only you send), Edit,
+  // Reject; on a Send all group not all in: "k of n in · Deliver now". The chat links a run's new drafts here.
+  const REQ_SAYS = {draft: "draft: waiting for your Send", sent: "sent, waiting for the answer", done: "answered",
+    open: "answered open", rejected: "rejected by you"};
+  let reqInfo = {};    // state's request_info: {agent: other agents with open requests to it} (R12)
+  const other = n => n.to || n.from;
+  const groupOf = n => n.group ? noteList.filter(x => x.to && x.group === n.group) : [];
+  function reqSays(n) {
+    const g = groupOf(n), k = g.filter(x => x.arrived).length;
+    if (n.to && g.length && n.state !== "draft" && g.some(x => !x.delivered)) return `${k} of ${g.length} in`;
+    return n.noanswer ? "no answer" : (n.from && n.state === "sent" ? "sent to this agent" : REQ_SAYS[n.state] || n.state);
+  }
+  function renderRequests() {
+    const reqs = noteList.filter(isReq);
+    let bar = $("rv-requests");
+    if (!reqs.length) return bar && bar.remove();
+    if (!bar) {
+      bar = document.createElement("div"), bar.id = "rv-requests";
+      const card = document.getElementById("dirai-card");
+      if (card) card.after(bar); else (document.querySelector("main") || document.body).prepend(bar);
+    }
+    const pairs = {};
+    reqs.forEach(n => (pairs[other(n)] = pairs[other(n)] || []).push(n));
+    const drafts = reqs.filter(n => n.to && n.state === "draft");
+    bar.innerHTML = `<b title="Requests between this agent and others: hover or tap one">Requests</b>` + Object.keys(pairs).sort().map(o => {
+      const last = pairs[o][pairs[o].length - 1];
+      return `<span class="rv-rchip ${last.state}" data-pair="${attr(o)}">${last.to ? "→" : "←"} ${agentLink(o)} · ${esc(reqSays(last))}</span>`;
+    }).join("") + (drafts.length > 1 ? `<button data-rop="sendall" title="Send all drafts; their answers come back together, when all are in">Send all (${drafts.length})</button>` : "");
+  }
+  function entryHtml(n) {
+    const g = groupOf(n), k = g.filter(x => x.arrived).length, info = n.to && n.state === "draft" && (reqInfo[n.to] || []);
+    const thread = n.thread && n.thread.length ? n.thread : n.answer ? [{who: n.to, text: n.answer, at: n.at}] : [];
+    return `<div class="rv-rentry ${n.state}" data-rid="${attr(n.id)}"><div class="rv-meta">${n.to ? "To" : "From"} ${agentLink(other(n))} · #${n.n} · ${esc(reqSays(n))} · ${esc(n.created || "")}</div>` +
+      esc(n.note) + (n.about ? `<div class="rv-meta">about ${esc(n.about)}${n.text ? ": “" + esc(noteQuote(n, 80)) + "”" : ""}</div>` : "") +
+      (n.reason ? `<div class="rv-meta">Your reason: ${esc(n.reason)}</div>` : "") +
+      thread.map(e => `<div class="rv-nans ${e.who === "owner" ? "owner" : "agent"}"><b>${e.who === "owner" ? "You" : e.who === "agent" ? "This agent" : agentLink(e.who)}${e.state ? " (" + esc(e.state) + ")" : ""}:</b> ${jumpLinks(e.text)}</div>`).join("") +
+      (info && info.length ? `<div class="rv-meta">${agentLink(n.to)} also has open requests from ${info.map(agentLink).join(", ")}: check they don't clash.</div>` : "") +
+      (n.to && n.state === "draft" ? `<div class="rv-row"><button data-rop="send" class="primary" title="Send it to ${attr(n.to)}: one message starts its run (queued if it is busy)">Send ▸ ${esc(n.to)}</button>` +
+        `<button data-rop="edit">Edit</button><button data-rop="reject" title="Don't send it; the agent is told, with your reason">Reject</button></div>` : "") +
+      (n.to && g.length && k < g.length && g.some(x => x.arrived && !x.delivered) ? `<div class="rv-row"><span class="rv-meta">${k} of ${g.length} in</span>` +
+        `<button data-rop="deliver" title="Give the agent the answers in so far; the rest come one by one">Deliver now</button></div>` : "") +
+      (n.from && n.state === "open" ? `<div class="rv-row"><button data-rop="resend" title="Send it to this agent again">Send again</button></div>` : "") + `</div>`;
+  }
+  function showPair(o, el, rid) {
+    const list = noteList.filter(n => isReq(n) && other(n) === o), pop = $("rv-notepop");
+    if (!list.length || editing) return;
+    clearTimeout(popTimer);
+    pop.dataset.nid = "", pop.dataset.pair = o;
+    pop.innerHTML = `<div class="rv-meta"><b>${list[0].to ? "This agent ↔ " : ""}${agentLink(o)}${list[0].to ? "" : " ↔ this agent"}</b> · ${list.length} request${list.length === 1 ? "" : "s"}</div>` +
+      list.slice(-5).map(entryHtml).join("");
+    const r = el.getBoundingClientRect();
+    pop.style.left = Math.max(scrollX + 4, Math.min(r.left + scrollX, scrollX + innerWidth - 330)) + "px";
+    pop.style.top = r.bottom + scrollY + 4 + "px";
+    pop.style.display = "block";
+    const e = rid && pop.querySelector(`[data-rid="${CSS.escape(rid)}"]`);
+    if (e) e.scrollIntoView({block: "nearest"});
+  }
+  const reqApi = body => api("request", body).then(r => {
+    if (r.error) alert(r.error);
+    if (r.notes) renderNotes(r.notes);
+    refresh();
+  }).catch(e => alert("The server didn't take it (" + e.message + "): nothing was sent. " +
+    "If DirAI wasn't restarted since the requests feature came in, restart it (DirAI stop, then DirAI start)."));
+  function reqOp(op, id) {
+    const n = noteList.find(x => x.id === id), pop = $("rv-notepop"), at = {left: parseFloat(pop.style.left) || scrollX + 20, top: parseFloat(pop.style.top) || scrollY + 80};
+    if (op === "sendall") return reqApi({op: "send", all: true, ids: noteList.filter(x => x.to && x.state === "draft").map(x => x.id)});
+    if (!n) return;
+    hidePop();
+    if (op === "send") reqApi({op: "send", ids: [id]});
+    else if (op === "deliver") reqApi({op: "deliver", group: n.group});
+    else if (op === "edit") noteEditor(`Request ${n.n} to ${n.to}`, n.note || "", at, t => t && noteApi({op: "edit", id, note: t}));
+    else if (op === "reject") noteEditor(`Reject request ${n.n} to ${n.to}: why? (the agent is told)`, "", at, t => reqApi({op: "reject", id, reason: t}));
+    else if (op === "resend") post("comment", {text: "", notes: [id]});
+  }
+  document.addEventListener("mouseover", e => {
+    const c = e.target.closest && e.target.closest(".rv-rchip");
+    if (c) showPair(c.dataset.pair, c);
+  });
+  document.addEventListener("click", e => {
+    const c = e.target.closest && e.target.closest("#rv-requests [data-pair], #rv-requests [data-rop]");
+    if (!c) return;
+    if (c.dataset.rop) reqOp(c.dataset.rop);
+    else showPair(c.dataset.pair, c);
+  });
+  $("rv-notepop").addEventListener("click", e => {
+    const b = e.target.closest("[data-rop]"), row = b && b.closest("[data-rid]");
+    if (row) reqOp(b.dataset.rop, row.dataset.rid);
+  });
+  // a reply of a run that drafted requests: "Request to B drafted ▸", which opens it in the Requests bar
+  const requestLinksHtml = list => `<div class="rv-npoint">${list.map(r => `Request to ${agentLink(r.to)} <a class="rv-rlink" href="#" data-rpair="${attr(r.to)}" data-rid="${attr(r.id)}" ` +
+    `title="Read it, then send, edit or reject it">drafted ▸</a>`).join(" · ")}</div>`;
+  // answers to this agent's requests (agents.py _deliver): one line per answering agent, which opens its note
+  // in the Requests bar; the full text the agent got stays folded below (C3, improvement/agent-notes)
+  function answersHtml(text) {
+    const by = {};
+    for (const [, n, to] of text.matchAll(/^Request (\d+) to ([^\s:]+):/gm)) (by[to] = by[to] || []).push(n);
+    const links = Object.keys(by).map(to => {
+      const ns = by[to], x = noteList.find(y => y.to === to && String(y.n) === ns[ns.length - 1]);
+      return `Answers from ${agentLink(to)} to request${ns.length > 1 ? "s" : ""} ${ns.join(", ")} ` +
+        `<a class="rv-rlink" href="#" data-rpair="${attr(to)}" data-rid="${attr(x ? x.id : "")}" title="Open the note in the Requests bar">▸</a>`;
+    });
+    return (links.length ? `<div class="rv-npoint">${links.join(" · ")}</div>` : "") +
+      `<details class="rv-sel"><summary>The full message the agent got</summary><div class="rv-quote">${esc(text)}</div></details>`;
+  }
+  $("rv-thread").addEventListener("click", e => {
+    const a = e.target.closest(".rv-rlink");
+    if (!a) return;
+    e.preventDefault();
+    const chip = document.querySelector(`#rv-requests [data-pair="${CSS.escape(a.dataset.rpair)}"]`);
+    if (!chip) return a.classList.add("rv-broken"), a.title = "This request is gone";
+    go(chip);
+    setTimeout(() => showPair(a.dataset.rpair, chip, a.dataset.rid), 400);
+  });
   // the box takes a link (as before) or a keyword: matching agents of this tree are listed to pick from
   const isLink = s => /^(https?:|[\/~.])/.test(s) || /index\.html?$/i.test(s);
   let collSeq = 0;

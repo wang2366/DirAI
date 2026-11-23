@@ -40,7 +40,7 @@
     const counts = {};
     allRows().forEach(tr => {
       const s = info(tr), st = s.status;
-      if (s.asking || s.denied) tr.dataset.pin = "1"; else delete tr.dataset.pin;
+      if (s.asking || s.denied || s.requests) tr.dataset.pin = "1"; else delete tr.dataset.pin;
       let b = tr.querySelector(".rv-badge");
       if (!st) { if (b) b.remove(); return; }
       if (!tr.classList.contains("rv-off")) counts[st] = (counts[st] || 0) + 1;
@@ -55,6 +55,9 @@
       b.classList.toggle("rv-tog", tog);
       if (tog && !b.title) b.title = "click: mark read / unread";
       if (s.denied && !s.asking) b.title = s.denied + " refused action" + (s.denied === 1 ? "" : "s") + " to review" + (b.title ? "; " + b.title : "");
+      // requests it drafted to other agents (proposal 77): they wait for your Send on its page's Requests bar
+      if (s.requests) b.textContent += ` · ${s.requests} request${s.requests === 1 ? "" : "s"} waiting`,
+        b.title = (b.title ? b.title + "; " : "") + "requests to other agents, waiting for your Send (its page: Requests)";
       // its own soonest scheduled message (agents.all_status; paused ones don't count)
       const next = s.schedule, nsched = s.schedules || 0;
       let r = tr.querySelector(".rv-rep");

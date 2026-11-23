@@ -49,7 +49,7 @@ from dirai_config import load_json
 from agent_permissions import (ALWAYS_DENY, DEFAULT_ALLOW, SCRIPT_HINT, always_denied, covered, denial_rules,
                                 describe_denial, extra_dirs, is_heredoc, keepable, mcp_config, path_grants,
                                 request_denial, shared_grants, unusable)
-from agent_prompts import (APPROVAL, CARD_FIX, GIT_PROMPT, LIMIT_RETRY, NEW_CHAT_MARK, NOTE_CMD, NOTES_FIX, QUEUED_PROMPT, SEL_MAX,
+from agent_prompts import (ANSWERS_PROMPT, APPROVAL, CARD_FIX, GIT_PROMPT, LIMIT_RETRY, NEW_CHAT_MARK, NOTE_CMD, NOTES_FIX, QUEUED_PROMPT, SEL_MAX,
                             STARTER_INDEX, SYSTEM_PROMPT, fresh_prompt, notes_prompt, selection_lines, selection_prompt)
 import notes as sticky
 
@@ -566,6 +566,7 @@ class Agents:
                     "schedule": soonest(s) and time.strftime("%a %H:%M", time.localtime(soonest(s))),
                     "schedules": len(s.get("schedules", [])), "asking": bool(s.get("asking")),
                     "denied": len(s.get("denials", [])), "inbox": len(s.get("inbox", [])),
+                    "requests": s.get("drafts", 0),
                     "card": len(self.card_problems(p))}
                 for p, s in data.items()}
 
@@ -644,6 +645,10 @@ class Agents:
                                 "granted": covered(granted, d)})
             st["denials"] = denials
         st["notes"] = sticky.load(os.path.join(self.root, agent))   # its sticky notes (notes.py), outside the lock
+        # its drafts' agents: who else has requests open there, shown before you send (R12, proposal 77)
+        st["request_info"] = {to: sorted({y["from"] for y in sticky.load(os.path.join(self.root, to))
+                                          if y.get("from") and y["from"] != agent and y.get("state") in ("open", "sent")})
+                              for to in {x["to"] for x in st["notes"] if x.get("to") and x.get("state") == "draft"}}
         return st
 
     def working(self, agent):
@@ -981,13 +986,16 @@ class Agents:
             return None, []
         sels = []
         for x in taken:     # its lines found now; a file gone since: the quote and heading alone
+            if x.get("from"):       # a request from another agent (proposal 77): no place on this page
+                sels.append((x["n"], None, x, []))
+                continue
             sel = self._selection(agent, x) or {"text": x["text"][:SEL_MAX], "heading": x.get("heading", "")}
             sels.append((x["n"], sel, x.get("note", ""), x.get("thread") or []))
-        return notes_prompt(sels, message), [{"n": x["n"], "text": x["text"][:300], "note": x.get("note", "")}
-                                             for x in taken]
+        return notes_prompt(sels, message), [dict({"n": x["n"], "text": x["text"][:300], "note": x.get("note", "")},
+                                                  **({"from": x["from"]} if x.get("from") else {})) for x in taken]
 
     def comment(self, agent, text, prompt=None, selection=None, scheduled=None, fresh=False, queue=False,
-                catch_up=False, notes=None):
+                catch_up=False, notes=None, from_agent=None):
         """selection: {"text", "heading"} of index.html text the owner selected, quoted in the prompt,
         or {"text", "heading", "file", "lines"} of text in a file of the agent's folder (shown raw at the
         end of index.html, with its line numbers). False if file isn't one of those.
@@ -996,7 +1004,9 @@ class Agents:
         queue: if the agent is busy, keep the message in its inbox (returns "queued") instead of False.
         catch_up: a given prompt still gets the earlier thread quoted when the session is new (send_inbox).
         notes: ids of the owner's sticky notes (notes.py) that go with it, each quoted; text may then be
-        empty. They are marked sent (also while queued), and back to open if it isn't sent."""
+        empty. They are marked sent (also while queued), and back to open if it isn't sent.
+        from_agent: the message comes from that agent, sent by the owner (proposal 77): a request to
+        this agent, or the answers to this agent's requests; the thread shows it as from that agent."""
         raw = selection
         if selection:
             selection = self._selection(agent, selection)
@@ -1010,12 +1020,14 @@ class Agents:
         if selection:
             prompt = prompt or selection_prompt(selection, text)
         ok = self._comment(agent, text, prompt, raw, selection, scheduled, fresh, queue, catch_up, shown_notes,
-                           notes if shown_notes else None)
+                           notes if shown_notes else None, from_agent)
         if not ok and shown_notes:
             sticky.unsend(os.path.join(self.root, agent), notes)
         return ok
 
-    def _comment(self, agent, text, prompt, raw, selection, scheduled, fresh, queue, catch_up, shown_notes, note_ids):
+    def _comment(self, agent, text, prompt, raw, selection, scheduled, fresh, queue, catch_up, shown_notes, note_ids,
+                 from_agent=None):
+        frm = {"from": from_agent} if from_agent else {}
         if fresh:
             prompt = SCHEDULED_PROMPT % scheduled + (prompt or text)
         with self._edit(agent) as st:
@@ -1026,7 +1038,7 @@ class Agents:
                         st.pop("inbox")
                     return False
                 # the selection as sent: its lines are found again when the message goes
-                box.append(dict({"id": secrets.token_hex(4), "time": now(), "text": text},
+                box.append(dict({"id": secrets.token_hex(4), "time": now(), "text": text}, **frm,
                                 **({"selection": raw} if raw else {}),
                                 **({"notes": note_ids, "shown_notes": shown_notes} if note_ids else {})))
                 return "queued"
@@ -1039,7 +1051,7 @@ class Agents:
                 note(st, NEW_CHAT_MARK)
             elif not fresh and not st.get(skey) and st["thread"] and (prompt is None or selection or catch_up):
                 prompt = fresh_prompt(st["thread"], prompt or text)   # New chat: catch up from index.html and the thread
-            st["thread"].append(dict({"role": "user", "time": now(), "text": text},
+            st["thread"].append(dict({"role": "user", "time": now(), "text": text}, **frm,
                                      **({"selection": selection} if selection else {}),
                                      **({"notes": shown_notes} if shown_notes else {}),
                                      **({"scheduled": scheduled} if scheduled else {})))
@@ -1051,7 +1063,9 @@ class Agents:
                 note(st, "Read access for this agent (named in your message): " + ", ".join(named))
             st["denials"] = []
             st["status"] = "working"   # waiting for a free slot counts as working
-            st["working_on"] = text or "%d sticky note%s" % (len(shown_notes), "" if len(shown_notes) == 1 else "s")
+            st["working_on"] = (text if not from_agent else "from %s: %s" % (from_agent, text)) if text else \
+                "%s%d sticky note%s" % ("from %s: " % from_agent if from_agent else "", len(shown_notes),
+                                        "" if len(shown_notes) == 1 else "s")
             st["started"] = None
             page_note = st.pop("page_note", "")
         prompt = page_note + (prompt or text)
@@ -1069,7 +1083,8 @@ class Agents:
         if len(box) == 1:
             m = box[0]
             # its selected file may be gone since: then the text alone
-            sent = self.comment(agent, m["text"], selection=m.get("selection"), notes=m.get("notes")) or \
+            sent = self.comment(agent, m["text"], selection=m.get("selection"), notes=m.get("notes"),
+                                from_agent=m.get("from")) or \
                 (m.get("selection") and self.comment(agent, m["text"], notes=m.get("notes")))
         else:
             parts = []
@@ -1087,6 +1102,123 @@ class Agents:
             with self._edit(agent) as st:
                 st["inbox"] = box + st.get("inbox", [])
         return bool(sent)
+
+    # --- requests between agents (proposal 77, improvement/agent-notes) ---------------------------------
+    # An agent drafts (dirai_note.py ask: notes.ask); only the owner sends (send_request); the asked agent
+    # answers on its copy of the note; when its run ends the answer goes back (_requests_answered) and is
+    # given to the asker (_deliver): one by one, or, after Send all, together when all are in.
+    def _adir(self, agent):
+        return os.path.join(self.root, agent)
+
+    def _count_drafts(self, agent, drafts=None):
+        """The agent list's "N requests waiting" (all_status "requests")."""
+        if drafts is None:
+            drafts = [x for x in sticky.load(self._adir(agent)) if x.get("to") and x.get("state") == "draft"]
+        with self._edit(agent) as st:
+            if drafts:
+                st["drafts"] = len(drafts)
+            else:
+                st.pop("drafts", None)
+
+    def send_request(self, agent, ids, together=False):
+        """The owner's Send ▸ To on the agent's drafts ids: each is copied into the asked agent's notes and
+        sent to it (queued if it is busy). together (Send all, 2 or more): their answers are given to the
+        agent as one message when all are in. Returns (how many went, [why each other one didn't])."""
+        mine = {x["id"]: x for x in sticky.load(self._adir(agent))}
+        todo = [mine[i] for i in ids if i in mine and mine[i].get("to") and mine[i].get("state") == "draft"]
+        group = secrets.token_hex(3) if together and len(todo) > 1 else None
+        sent, errors = 0, ["that request is gone or already sent"] if len(todo) < len(ids) else []
+        for x in todo:
+            to, link = x["to"], x["link"]
+            if to == agent or not os.path.isfile(os.path.join(self._adir(to), "index.html")):
+                errors.append("%s isn't an agent of this tree" % to)
+                continue
+            mark = {"group": group} if group else {}
+            with self._edit(agent) as st:      # the send record (R1): only the server writes agents.json
+                st.setdefault("requests", {})[link] = dict(
+                    {"to": to, "time": now(), "hash": hashlib.sha256(x["note"].encode()).hexdigest()[:16]}, **mark)
+            sticky.update(self._adir(agent), lambda n: n.get("to") == to and n.get("link") == link,
+                          state="sent", sent=now()[:16], **mark)
+            copy = sticky.receive(self._adir(to), agent, x)
+            if not self.comment(to, "", notes=[copy["id"]], queue=True, from_agent=agent):   # R8: B's inbox full
+                sticky.remove(self._adir(to), copy["id"])
+                sticky.update(self._adir(agent), lambda n: n.get("to") == to and n.get("link") == link,
+                              state="draft", sent=None, group=None)
+                with self._edit(agent) as st:
+                    st["requests"].pop(link, None)
+                errors.append("%s has %d messages waiting already: the request stays a draft; send it later"
+                              % (to, INBOX_MAX))
+                continue
+            sent += 1
+        self._count_drafts(agent)
+        return sent, errors
+
+    def reject_request(self, agent, nid, reason=""):
+        """The owner's Reject on a draft: it stays on the note, greyed, with the reason; the agent is told
+        with its next message (R9). False if it isn't a draft (any more)."""
+        reason = (reason or "").strip()[:500]
+        x = sticky.update(self._adir(agent), lambda n: n["id"] == nid and n.get("to") and n.get("state") == "draft",
+                          state="rejected", reason=reason or None)
+        if x is None:
+            return False
+        with self._edit(agent) as st:
+            st["page_note"] = st.get("page_note", "") + "(The owner rejected your request %d to %s%s; it wasn't sent.)\n\n" % (
+                x["n"], x["to"], ": " + reason if reason else "")
+        self._count_drafts(agent)
+        return True
+
+    def _requests_answered(self, agent, result):
+        """When the agent's run ends: each request it was sent goes back to the agent that asked, onto
+        that agent's entry (R5), if the owner's send record has it (R1); then it is given to the asker."""
+        ids = {r["id"] for r in result or []}
+        for x in [x for x in sticky.load(self._adir(agent)) if x["id"] in ids and x.get("from")]:
+            asker, link = x["from"], x["link"]
+            with self._edit(asker) as st:
+                rec = (st.get("requests") or {}).get(link)
+            if not rec or rec["to"] != agent or rec["hash"] != hashlib.sha256(x["note"].encode()).hexdigest()[:16]:
+                continue
+            thread = [dict(e, who=agent) if e.get("who") == "agent" else e for e in x.get("thread") or []]
+            got = sticky.update(self._adir(asker), lambda n: n.get("to") == agent and n.get("link") == link,
+                                state=x["state"], answer=x.get("answer") or "(no answer)", at=x.get("at"),
+                                thread=thread, noanswer=True if x.get("noanswer") else None,
+                                arrived=now()[:16], delivered=None)
+            if got:
+                self._deliver(asker, got.get("group"))
+
+    def _deliver(self, agent, group=None, now_=False):
+        """Give the agent the answers to its requests that are in and not given yet: those sent one by
+        one, or those of group (Send all) once all of it is in (now_: Deliver now, what is in so far).
+        One message (queued if the agent is busy). True if one went."""
+        mine = [x for x in sticky.load(self._adir(agent)) if x.get("to")]
+        members = [x for x in mine if x.get("group") == group] if group else []
+        if group and not now_ and any(not x.get("arrived") for x in members):
+            return False        # "2 of 3 in": wait for the rest
+        out = [x for x in mine if x.get("arrived") and not x.get("delivered") and x.get("group") == group]
+        if not out:
+            return False
+        parts = ["Request %d to %s: %s\n%s's answer (%s): %s%s" % (
+            x["n"], x["to"], x["note"], x["to"], "no answer" if x.get("noanswer") else x["state"], x["answer"],
+            " (see %s on its page, %s/index.html)" % (x["at"], x["to"]) if x.get("at") else "") for x in out]
+        whom = sorted({x["to"] for x in out})
+        text = ANSWERS_PROMPT % ("%s answered" % ", ".join(whom), "\n\n".join(parts))
+        for x in out:
+            sticky.update(self._adir(agent), lambda n, i=x["id"]: n["id"] == i, delivered=now()[:16])
+        if now_:    # the rest of the group comes one by one
+            for x in members:
+                if not x.get("arrived"):
+                    sticky.update(self._adir(agent), lambda n, i=x["id"]: n["id"] == i, group=None)
+        if self.comment(agent, text, queue=True, from_agent=", ".join(whom)):
+            return True
+        for x in out:       # its inbox is full: given with a later answer, or by Deliver now
+            sticky.update(self._adir(agent), lambda n, i=x["id"]: n["id"] == i, delivered=None)
+        with self._edit(agent) as st:
+            note(st, "Answers from %s are in, but %d messages already wait for this agent: they go later."
+                 % (", ".join(whom), INBOX_MAX))
+        return False
+
+    def deliver_now(self, agent, group):
+        """The owner's Deliver now on a Send all group: the answers in so far, the rest one by one."""
+        return self._deliver(agent, group, now_=True)
 
     def change_inbox(self, agent, mid, text=None):
         """Change one queued message's text, or remove it (text None or empty). False if it is gone (sent)."""
@@ -1573,7 +1705,7 @@ class Agents:
                     git=GIT_PROMPT.format(agent_dir=agent_dir) if in_git(agent_dir) else "",
                     approval=APPROVAL[mode], always_denied=", ".join(ALWAYS_DENY), agent_rule_path=AGENT_RULE_MD,
                     agent_rm=os.path.join(dirai_config.SCRIPTS_DIR, "agent_rm.sh"),
-                    card_py=os.path.join(dirai_config.LIB_DIR, "dirai_card.py"))
+                    card_py=os.path.join(dirai_config.LIB_DIR, "dirai_card.py"), note_cmd=NOTE_CMD)
                 + colleagues.prompt_block(self.root, list(colls), os.path.join(dirai_config.LIB_DIR, "dirai_card.py"), modes)
                 + "\n\n" + load_text(AGENT_RULE_MD))
 
@@ -1947,7 +2079,16 @@ class Agents:
         if result and replied:
             entry["notes_result"] = result
             entry["text"] = sticky.strip_reply(entry.get("text") or "", list(nums))
+        # requests the run drafted (dirai_note.py ask): the reply links to them, for the owner to read and send
+        drafts = [x for x in sticky.load(os.path.join(self.root, agent)) if x.get("to") and x.get("state") == "draft"]
         with self._edit(agent) as st:
+            new = [x for x in drafts if x["id"] not in st.get("drafts_seen", [])]
+            if new:
+                entry["requests"] = [{"id": x["id"], "n": x["n"], "to": x["to"]} for x in new]
+            if drafts:
+                st["drafts"], st["drafts_seen"] = len(drafts), [x["id"] for x in drafts]
+            else:
+                st.pop("drafts", None), st.pop("drafts_seen", None)
             st["thread"].append(entry)
             if card_note:
                 st["thread"].append(card_note)
@@ -1960,6 +2101,8 @@ class Agents:
                          "to continue." % (", ".join(ids), MAX_AUTO))
             elif ids:
                 self._start_job_wait(st, ids)
+        if result:      # requests from other agents in this run: back to them (proposal 77)
+            self._requests_answered(agent, result)
 
     # --- waiting on SLURM jobs ------------------------------------------------------------
     def _followups(self, index, snap, agent_dir, nums, asked):
