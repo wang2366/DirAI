@@ -252,6 +252,25 @@ def is_agent(d):
     return os.path.isfile(os.path.join(d, "index.html"))
 
 
+class Clash(str):
+    """A Publish that would replace someone else's work in the repo: the Share popover asks before forcing it."""
+
+
+def own_blobs(clone, rev, slug):
+    """{path: blob} of an agent's own files at rev in a repo clone: agents/<slug>/, without the folders of
+    agents inside it (its children, published on their own). {} if it isn't there (or rev is unknown)."""
+    rc, out = git(clone, "ls-tree", "-r", rev, "--", "agents/" + slug + "/")
+    if rc:
+        return {}
+    pre, files = "agents/%s/" % slug, {}
+    for line in out.splitlines():
+        meta, _, path = line.partition("\t")
+        if path.startswith(pre):
+            files[path[len(pre):]] = meta.split()[-1]
+    kids = {os.path.dirname(p) for p in files if os.path.basename(p) == "index.html" and "/" in p}
+    return {p: b for p, b in files.items() if not any(p.startswith(k + "/") for k in kids)}
+
+
 def clear_snapshot(dest):
     """Empty an agent's published folder before it is copied again, keeping the folders of the agents
     published inside it (its children), which their own Publish writes."""
@@ -530,6 +549,8 @@ class Shares:
             return back
         base = clean_name(os.path.basename(agent) or "tree")
         used = {t[full]["slug"] for a, t in s["targets"].items() if full in t and a != agent}
+        top = os.path.join(self.clone_dir(full, mine=True), "agents")     # and those another tree published
+        used |= set(os.listdir(top)) if os.path.isdir(top) else set()
         slug, i = base, 2
         while slug in used:
             slug, i = "%s-%d" % (base, i), i + 1
@@ -573,9 +594,29 @@ class Shares:
         rc, out = git(path, "reset", "-q", "--hard", "@{u}")      # only Publish writes here
         return None if rc == 0 else out
 
-    def publish(self, agent, repos, children=()):
+    def clash(self, s, agent, slug, full):
+        """Why publishing agent at slug would overwrite someone else's work there (a Clash), or None. Its own
+        files in the repo (its children's folders aside) must be as this tree last published them, or as they
+        were when it was copied (a copy going back); a place this tree never had must be free."""
+        clone = self.clone_dir(full, mine=True)
+        if not os.path.isdir(os.path.join(clone, "agents", slug)):
+            return None
+        t = s["targets"].get(agent, {}).get(full) or {}
+        base = t.get("commit") if t.get("slug") == slug else None
+        if base is None and self.origin_slug(agent, full) == slug:
+            base = (dirai_config.load_json(os.path.join(self.root, agent, ".dirai-origin"), {}) or {}).get("commit")
+        if base is None:
+            return Clash("%s in %s already holds an agent this folder didn't publish: publishing %s there would "
+                         "replace it" % (slug, full, agent))
+        if own_blobs(clone, base, slug) != own_blobs(clone, "HEAD", slug):
+            return Clash("%s in %s was changed by another Publish (another tree or machine) since this folder's "
+                         "last Publish or copy: publishing %s would replace those changes" % (slug, full, agent))
+        return None
+
+    def publish(self, agent, repos, children=(), force=False):
         """Copy the agent's folder into agents/<slug>/ of each repo, and the ticked children inside it at
-        their paths below it (each its own entry), commit and push. A rejected push is rebased on GitHub's and tried once more."""
+        their paths below it (each its own entry), commit and push. A rejected push is rebased on GitHub's and tried once more.
+        Unless force, a place where someone else's work would be replaced is left alone (a Clash, see clash())."""
         with self.lock:
             s = self.state()
             errors = []
@@ -597,6 +638,10 @@ class Shares:
                          if b != a and ts.get(full, {}).get("slug") == slug]
                 if taken:
                     errors.extend(taken)
+                    continue
+                clash = [] if force else [c for c in (self.clash(s, a, slug, full) for a, slug in todo) if c]
+                if clash:
+                    errors.extend(clash)
                     continue
                 for a, slug in todo:
                     old =s["targets"].get(a, {}).get(full, {}).get("slug")
@@ -876,18 +921,50 @@ class Shares:
 
     # --- copies in your tree -----------------------------------------------------------------------
     def copy(self, page, dest):
-        """Copy a shared agent into your tree at dest (a new folder), with .dirai-origin for updates."""
+        """Copy a shared agent into your tree at dest (a new folder), with .dirai-origin for updates. dest may
+        exist when it only holds copies of this agent's children made before (e.g. copies/improvement/ after
+        improvement/share-agents was copied): the parent's files go around them, and those copies and any
+        file already there stay as they are."""
         sp = self.shared_page(page)
         if not sp:
             return "not a shared agent"
         src = os.path.join(self.root, page)
         to = os.path.join(self.root, dest)
         if os.path.exists(to):
-            return "%s/ already exists" % dest
-        shutil.copytree(src, to)
+            if not os.path.isdir(to) or is_agent(to) or os.path.exists(os.path.join(to, ".dirai-origin")):
+                return "%s/ already exists" % dest
+            stray = self.not_copies(to)
+            if stray:
+                return ("%s/ already exists and holds more than copies made with Copy to my tree (e.g. %s): "
+                        "move that away, or copy to another folder" % (dest, stray))
+            for d, dirs, names in os.walk(src):
+                here = os.path.join(to, os.path.relpath(d, src))
+                if d != src and os.path.exists(os.path.join(here, ".dirai-origin")):
+                    dirs[:] = []      # a copy of its own (a child copied before): left alone
+                    continue
+                os.makedirs(here, exist_ok=True)
+                for n in names:
+                    if not os.path.lexists(os.path.join(here, n)):
+                        shutil.copy2(os.path.join(d, n), os.path.join(here, n), follow_symlinks=False)
+        else:
+            shutil.copytree(src, to)
         commit = git(self.clone_dir(sp["full"]), "log", "-1", "--format=%H", "--", "agents/" + sp["slug"])[1]
         dirai_config.save_json(os.path.join(to, ".dirai-origin"),
                                {"repo": sp["full"], "slug": sp["slug"], "commit": commit}, indent=1)
+        return None
+
+    @staticmethod
+    def not_copies(top):
+        """The first file under top (relative) that isn't inside a copy (a folder with .dirai-origin), or None.
+        Hidden files (.DS_Store and the like) don't count."""
+        for d, dirs, names in os.walk(top):
+            dirs.sort()
+            if d != top and ".dirai-origin" in names:
+                dirs[:] = []
+                continue
+            for n in sorted(names):
+                if not n.startswith("."):
+                    return os.path.relpath(os.path.join(d, n), top)
         return None
 
     def origin(self, agent):
@@ -901,7 +978,13 @@ class Shares:
             return dict(o, files=[], new=new)
         rc, names = git(clone, "diff", "--name-only", o["commit"], new, "--", "agents/" + o["slug"])
         pre = "agents/%s/" % o["slug"]
-        return dict(o, new=new, files=[n[len(pre):] for n in names.splitlines() if n.startswith(pre)] if rc == 0 else [])
+        top = os.path.join(self.root, agent)
+
+        def own(rel):       # not inside a copy of its own (a child copied on its own, with its .dirai-origin)
+            parts = rel.split("/")[:-1]
+            return not any(os.path.isfile(os.path.join(top, *parts[:i], ".dirai-origin")) for i in range(1, len(parts) + 1))
+        return dict(o, new=new, files=[n[len(pre):] for n in names.splitlines()
+                                       if n.startswith(pre) and own(n[len(pre):])] if rc == 0 else [])
 
     def removable(self, agent):
         """A copy that may be removed from its Share pill: a folder inside <tree>/copies/ (not copies/ itself,
@@ -1184,8 +1267,11 @@ class Shares:
                 return {"error": "tick a repo to share to"}
             kids = set(self.folder(agent)[2])
             children = [c for c in body.get("children") or [] if c in kids]
-            errors = self.publish(agent, repos, children)
-            return {"error": "; ".join(errors)} if errors else {"ok": True}
+            errors = self.publish(agent, repos, children, force=bool(body.get("force")))
+            if not errors:
+                return {"ok": True}
+            # clash: the popover asks, then sends the same publish with force
+            return {"error": "; ".join(errors), "clash": any(isinstance(e, Clash) for e in errors)}
         if op == "unshare":
             # agents: this one and/or its children (default this one; or child: one of them);
             # repos: the ones to remove them from (or repo: one, "*" every repo each is in)
