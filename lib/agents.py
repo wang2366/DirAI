@@ -47,8 +47,8 @@ from claude_run import (SUBMITTED_RE, Login, LiveRun, RunCancelled, auth_error, 
 from remotes import machine_name
 from dirai_config import load_json
 from agent_permissions import (ALWAYS_DENY, DEFAULT_ALLOW, SCRIPT_HINT, always_denied, covered, denial_rules,
-                                describe_denial, extra_dirs, is_heredoc, keepable, mcp_config, path_grants,
-                                request_denial, shared_grants, unusable)
+                                describe_denial, extra_dirs, folder_covers, is_heredoc, keepable, mcp_config, path_grants,
+                                request_denial, shared_grants, split_command, unusable)
 from agent_prompts import (ANSWERS_PROMPT, APPROVAL, CARD_FIX, GIT_PROMPT, LIMIT_RETRY, NEW_CHAT_MARK, NOTE_CMD, NOTES_FIX, QUEUED_PROMPT, SEL_MAX,
                             STARTER_INDEX, SYSTEM_PROMPT, fresh_prompt, notes_prompt, selection_lines, selection_prompt)
 import notes as sticky
@@ -612,9 +612,6 @@ class Agents:
             st = self._load().get(agent) or {"status": "none", "thread": [], "denials": [], "grants": []}
             st = dict(st)
             st["login"] = login             # the panel's Log in / Retry box while Claude runs are held for it
-            granted = DEFAULT_ALLOW + self.config["allow"] + self._grants(self._load(), agent, st)
-            # "granted": the rule is already allowed yet was refused anyway (built-in safety check,
-            # e.g. ".." in a path), so another grant can't help
             st["context"] = context_tokens(st.get("session_id"))
             st["context_warn"], st["context_high"] = CONTEXT_WARN, CONTEXT_HIGH
             st["auto_compact"] = self._compact_limit(st)
@@ -636,14 +633,10 @@ class Agents:
             # unusable: why no later command can match it (a line of an inline script), for its × to remove it
             st["grant_info"] = [{"rule": r, "denied": always_denied(r), "unusable": unusable(r)}
                                 for r in st.get("grants", [])]
-            denials = []
-            for d in st.get("denials", []):
-                rules = denial_rules(d)
-                # keep: what Always allow keeps (the rest is allowed for the retry only)
-                denials.append({"text": describe_denial(d), "rules": rules, "keep": keepable(rules),
-                                "blocked": any(always_denied(r) for r in rules),
-                                "granted": covered(granted, d)})
-            st["denials"] = denials
+            # keep: what Always allow keeps (the rest is allowed for the retry only); why: S1's reason
+            # (from the saved entry: st's colleagues are the chips' display info by now)
+            data = self._load()
+            st["denials"] = self._denial_info(agent, data.get(agent) or {}, data) if st.get("denials") else []
         st["notes"] = sticky.load(os.path.join(self.root, agent))   # its sticky notes (notes.py), outside the lock
         # its drafts' agents: who else has requests open there, shown before you send (R12, proposal 77)
         st["request_info"] = {to: sorted({y["from"] for y in sticky.load(os.path.join(self.root, to))
@@ -1667,16 +1660,10 @@ class Agents:
         agent's own grants among grants (default all): only they, not colleagues', add working
         directories, so a colleague's Read(//tmp/**) doesn't make /tmp look like a place to work."""
         modes = modes or {}
-        coll_dirs = [(c, colleagues.folder(self.root, c)) for c in colls]
-        coll_dirs = [(c, d) for c, d in coll_dirs if os.path.isdir(d)]
         base = DEFAULT_ALLOW + self.config["allow"] + ["Edit(/%s/**)" % agent_dir]
-        folders = ["Read(/%s/**)" % d for _, d in coll_dirs] + \
-            ["Edit(/%s/**)" % d for c, d in coll_dirs if modes.get(c) in ("own", "all")]
+        folders, chip_deny = self._chip_rules(agent_dir, colls, modes)
         allow = base + grants + folders
-        deny = list(ALWAYS_DENY)
-        for c, d in coll_dirs:
-            if modes.get(c) == "own":
-                deny += ["Edit(/%s/**)" % n for n in colleagues.nested_agents(self.root, c, agent_dir)]
+        deny = list(ALWAYS_DENY) + list(chip_deny)
         read_dirs = [agent_dir] + self.config["read_dirs"]
         dirs = read_dirs + extra_dirs(base + (grants if local is None else local) + folders, agent_dir, read_dirs)
         mode = self.permissions()
@@ -1696,6 +1683,67 @@ class Agents:
         if session:
             cmd += ["--resume", session]
         return cmd
+
+    def _chip_rules(self, agent_dir, colls, modes):
+        """What the colleague chips add to a run (S1: the panel reads the same): (allow, deny).
+        allow: Read for each colleague's folder, Edit for a writable one. deny: {Edit rule: (colleague,
+        that agent's folder)} for each agent inside a ✎ ("own") colleague, kept read-only."""
+        modes = modes or {}
+        coll_dirs = [(c, colleagues.folder(self.root, c)) for c in colls]
+        coll_dirs = [(c, d) for c, d in coll_dirs if os.path.isdir(d)]
+        allow = ["Read(/%s/**)" % d for _, d in coll_dirs] + \
+            ["Edit(/%s/**)" % d for c, d in coll_dirs if modes.get(c) in ("own", "all")]
+        deny = {}
+        for c, d in coll_dirs:
+            if modes.get(c) == "own":
+                deny.update(("Edit(/%s/**)" % n, (c, n)) for n in colleagues.nested_agents(self.root, c, agent_dir))
+        return allow, deny
+
+    def _denial_info(self, agent, st, data):
+        """The panel's entries for the agent's refused actions (S1): checked against the lists its next
+        run gets (defaults, dirai.json, grants, the colleague chips, the never list), so each says why
+        when a grant can't help or isn't needed. Same actions are one entry, with a count. K1: only the
+        never list removes the grant buttons; elsewhere DirAI's check only approximates Claude Code's,
+        so the entry says what it found and keeps them."""
+        agent_dir = os.path.join(self.root, agent)
+        granted = DEFAULT_ALLOW + self.config["allow"] + ["Edit(/%s/**)" % agent_dir] + self._grants(data, agent, st)
+        chip_allow, chip_deny = self._chip_rules(agent_dir, st.get("colleagues", []), st.get("coll_mode"))
+        out, seen = [], {}
+        for d in st.get("denials", []):
+            text = describe_denial(d)
+            if text in seen:
+                seen[text]["count"] += 1
+                continue
+            rules = denial_rules(d)
+            # the never list, also for a command the defaults' prefix covers (git push --force under git push:*),
+            # which leaves no grant rule to test
+            pieces = split_command((d.get("tool_input") or {}).get("command", "")) if d.get("tool_name") == "Bash" else []
+            e = {"text": text, "rules": rules, "keep": keepable(rules), "count": 1, "granted": False, "label": "", "why": "",
+                 "blocked": any(always_denied(r) for r in rules + ["Bash(%s)" % p for p in pieces])}
+            inside = next((v for r, v in chip_deny.items() if folder_covers(r, d)), None)
+            chip = next((r for r in chip_allow if folder_covers(r, d)), None)
+            if e["blocked"]:
+                pass      # the panel's own words: always blocked, run it yourself
+            elif inside:
+                c, n = inside
+                e["label"] = "inside another agent, kept read-only by your ✎ chip; no grant can help"
+                others = [os.path.relpath(x, self.root) for cc, x in chip_deny.values() if cc == c]
+                e["why"] = ("%s is an agent of its own inside %s, and your ✎ chip on %s keeps such agents read-only: "
+                            "that deny beats any grant. To let this agent edit there, set the chip to ✎✎, which "
+                            "opens all %d agent%s inside %s: %s." % (os.path.relpath(n, self.root), c or "(top)", c or "(top)",
+                            len(others), "" if len(others) == 1 else "s", c or "(top)", ", ".join(others)))
+            elif covered(granted, d) or any(folder_covers(r, d) for r in granted):
+                e["granted"] = True
+                e["label"] = "already allowed; refused by a built-in check, so a grant likely won't help"
+                e["why"] = ("already allowed, refused by a built-in safety check (shell constructs like $( ), "
+                            "loops, .., or cd before git); ask the agent to do it another way")
+            elif chip:
+                e["label"] = "allowed by your colleague chip from the next run; no grant needed"
+                e["why"] = ("your chip on this colleague allows it from the agent's next run (the run that was "
+                            "refused started before): no grant needed, Allow once just retries")
+            out.append(e)
+            seen[text] = e
+        return out
 
     def _instructions(self, agent_dir, colls, modes, mode):
         """DirAI's instructions for a run in agent_dir: Claude Code gets them as --append-system-prompt,

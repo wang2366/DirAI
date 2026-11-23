@@ -277,7 +277,7 @@ class Server(unittest.TestCase):
                                         "index.html has no summary card.")
         self.assertEqual(st["session_id"], "sess1")
         self.assertEqual(st["denials"], [{"text": "Read: /etc/hosts", "rules": ["Read(//etc/**)"], "keep": ["Read(//etc/**)"],
-                                          "blocked": False, "granted": False}])
+                                          "blocked": False, "granted": False, "count": 1, "label": "", "why": ""}])
         # index.html as it was before the run, for the panel's highlights
         self.assertEqual(self.get("/_review/prev?agent=p1", owner=True),
                          "<html><head><title>P one</title></head><body><p>hello</p></body></html>")

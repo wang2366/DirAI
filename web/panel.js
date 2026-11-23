@@ -381,14 +381,16 @@
           `<button data-ungrant="${attr(p.rule)}" title="Remove (from the next run)">&times;</button></li>`).join("") + "</ul>"
           : "<i>none: only the defaults and dirai.json</i>");
     }
-    const grantable = st.denials.filter(d => !d.blocked && !d.granted);
-    // one line per denial; click to see the full command
+    // S1 (agents.py _denial_info): each entry is checked against the run's own lists, chips included, and says
+    // why when a grant can't help or isn't needed; K1: only the never list takes the grant buttons away
+    const grantable = st.denials.filter(d => !d.blocked);
+    // one line per denial (the same action refused again: one line, ×N); click to see the full command
     const denialKey = JSON.stringify(st.denials);   // same idea: don't collapse opened entries
     if (denialKey !== render.shownDenials) render.shownDenials = denialKey, $("rv-dlist").innerHTML = st.denials.map(d =>
       `<li><details><summary>${d.blocked ? '<i style="color:#a00">always blocked, run it yourself:</i> '
-        : d.granted ? '<i style="color:#a00">already allowed, refused by a built-in safety check (shell constructs like $( ), loops or ..); ask the agent to do it with a script:</i> '
-        : ""}${esc(d.text.slice(0, 120))}</summary>` +
-      `<pre>${esc(d.text)}</pre>` + (d.blocked || d.granted ? "" : `<div class="rv-meta">Allow grants: ${d.rules.map(r => `<code>${esc(r)}</code>` +
+        : d.label ? `<i style="color:#a00">${esc(d.label)}:</i> ` : ""}${esc(d.text.slice(0, 120))}${d.count > 1 ? ` <b>×${d.count}</b>` : ""}</summary>` +
+      (d.why ? `<div class="rv-meta">${esc(d.why)}</div>` : "") +
+      `<pre>${esc(d.text)}</pre>` + (d.blocked ? "" : `<div class="rv-meta">Allow grants: ${d.rules.map(r => `<code>${esc(r)}</code>` +
         (d.keep && !d.keep.includes(r) ? " <i>(once only: can't recur)</i>" : "")).join(" ")}</div>`) +
       `</details></li>`).join("");
     $("rv-once").style.display = grantable.length ? "" : "none";
@@ -714,7 +716,8 @@
   $("rv-new").onclick = () => { scrollToEnd = true; post("newchat", {}); };
   $("rv-close").onclick = () => post("status", {status: $("rv-close").classList.contains("on") ? "read" : "closed"});
   $("rv-cancel").onclick = () => { if (confirm("Stop this agent?")) { scrollToEnd = true; post("cancel", {}); } };
-  const grant = always => post("grant", {rules: state.denials.filter(d => !d.blocked && !d.granted).flatMap(d => d.rules), always});
+  // one grant per rule, however many times it was refused (S1)
+  const grant = always => post("grant", {rules: [...new Set(state.denials.filter(d => !d.blocked).flatMap(d => d.rules))], always});
   // Highlight the blocks that differ from index.html as it was before the agent's latest edit:
   // a leaf block (paragraph, list item, cell, heading, image...) whose content isn't in the old copy.
   const BLOCKS = "p,li,h1,h2,h3,h4,h5,h6,pre,blockquote,figcaption,caption,td,th,dt,dd,summary,img,svg,video,iframe,div";

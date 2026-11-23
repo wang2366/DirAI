@@ -380,6 +380,36 @@ class AgentsTest(unittest.TestCase):
         self.assertTrue(self.rv.remove_colleague(me, "leaf"))                      # removing drops its mode
         self.assertNotIn("coll_mode", self.data()[me])
 
+    def test_panel_uses_the_runs_lists(self):
+        # S1: the panel's refusal entries are checked against what the next run gets, chips included
+        top = os.path.join(self.root, "d")
+        util.write(os.path.join(top, "index.html"), "<html></html>")
+        util.write(os.path.join(top, "sub", "a", "index.html"), "<html></html>")
+        ed = lambda path: {"tool_name": "Edit", "tool_input": {"file_path": path}}
+        lib, inside = os.path.join(top, "lib", "x.py"), os.path.join(top, "sub", "a", "y.py")
+        force = {"tool_name": "Bash", "tool_input": {"command": "git push --force"}}
+        dots = {"tool_name": "Bash", "tool_input": {"command": "ls /a/../b"}}     # ls: a default
+        data = {"p": dict(agents.Agents._blank(), status="unread", session_id="s1", colleagues=["d"],
+                          coll_mode={"d": "own"},
+                          denials=[ed(lib)] * 8 + [ed(inside), force, dots, ed("/elsewhere/z.py")])}
+        with open(os.path.join(self.root, "www", "agents.json"), "w") as f:
+            json.dump(data, f)
+        ds = self.rv.state("p")["denials"]
+        self.assertEqual([d["count"] for d in ds], [8, 1, 1, 1, 1])               # one entry per action
+        chip, nested, never, builtin, plain = ds
+        self.assertIn("next run", chip["label"])                                  # the chip allows it already
+        self.assertIn("no grant can help", nested["label"])                       # the chip's deny wins
+        self.assertIn("✎✎", nested["why"])
+        self.assertIn("d/sub/a", nested["why"])                                   # R4: names what ✎✎ opens
+        self.assertTrue(never["blocked"])
+        self.assertTrue(builtin["granted"])
+        self.assertEqual((plain["label"], plain["blocked"]), ("", False))
+        # K1: only the never list loses its grant buttons; the others keep their rules (ls has none: a default)
+        self.assertTrue(all(d["rules"] for d in (chip, nested, plain)))
+        self.assertEqual(builtin["rules"], [])
+        self.assertIsNone(self.rv.set_colleague_mode("p", "d", "all"))
+        self.assertEqual(self.rv.state("p")["denials"][1]["label"], "allowed by your colleague chip from the next run; no grant needed")
+
     def test_ask_once_only(self):
         # F2/F3 in ask mode: a heredoc's lines aren't kept by Always, and Deny says to use a file
         sent = []

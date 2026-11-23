@@ -213,6 +213,21 @@ def covered(rules, d):
     return any(rule_covers(r, d.get("tool_name"), want) for r in rules)
 
 
+EDIT_TOOLS, READ_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit"), ("Read", "Grep", "Glob")
+FOLDER_RULE_RE = re.compile(r"^(Edit|Read)\(/(/.+?)/\*\*\)$")
+
+
+def folder_covers(rule, d):
+    """True if a folder rule (Edit(//dir/**) or Read(//dir/**), as the chips and the run's own folder
+    give) covers the refused file action d: an Edit rule its edits (and reads), a Read rule its reads."""
+    m = FOLDER_RULE_RE.match(rule)
+    tool, inp = d.get("tool_name", ""), d.get("tool_input") or {}
+    if not m or tool not in EDIT_TOOLS + READ_TOOLS or (m.group(1) == "Read" and tool in EDIT_TOOLS):
+        return False
+    path = inp.get("file_path") or inp.get("notebook_path") or inp.get("path") or ""
+    return path.startswith("/") and (os.path.normpath(path) + "/").startswith(m.group(2).rstrip("/") + "/")
+
+
 def denial_rule(d):
     """Turn a non-Bash permission_denials entry into an allow rule granting exactly that action."""
     tool, inp = d.get("tool_name", ""), d.get("tool_input", {}) or {}
