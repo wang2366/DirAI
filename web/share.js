@@ -306,6 +306,12 @@
   }
   function act(body) {
     msg = "";
-    return post(body).then(r => { if (r.error) msg = r.error; return load(); });
+    return post(body).then(r => {
+      // a Publish that would replace someone else's work in the repo: only on a yes (their version stays in its history)
+      if (r.clash && confirm(r.error + "\n\nReplace it with this folder's version? Theirs stays in the repo's git history."))
+        return act(Object.assign({}, body, {force: true}));
+      if (r.error) msg = r.error;
+      return load();
+    });
   }
 })();

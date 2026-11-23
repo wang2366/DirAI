@@ -328,6 +328,90 @@ class TestShares(unittest.TestCase):
         p = self.s.page_state("proj/fit")
         self.assertEqual(([r["full"] for r in p["repos"]], p["hidden"]), ([FULL], []))
 
+    def test_copy_parent_after_its_child(self):
+        # a child copied first (copies/fit/demo) leaves copies/fit/ holding it; the parent then goes around it
+        self.assertEqual(self.s.act({"op": "publish", "repos": [FULL], "children": ["proj/fit/demo"]}, "proj/fit"), {"ok": True})
+        reader = shares.Shares(util.new_tree("reader3"))
+        self.assertIsNone(reader.connect(FULL))
+        page = "www/shares/%s/agents/fit" % FULL
+        self.assertIsNone(reader.copy(page + "/demo", "copies/fit/demo"))
+        util.write(os.path.join(reader.root, "copies/fit/demo/index.html"), "<h1>my demo</h1>")
+        self.assertIsNone(reader.copy(page, "copies/fit"))
+        with open(os.path.join(reader.root, "copies/fit/demo/index.html")) as f:
+            self.assertEqual(f.read(), "<h1>my demo</h1>")                       # the child's copy is untouched
+        self.assertTrue(os.path.isfile(os.path.join(reader.root, "copies/fit/fit.py")))
+        self.assertEqual(reader.origin("copies/fit")["slug"], "fit")
+        self.assertEqual(reader.origin("copies/fit/demo")["slug"], "fit/demo")
+        self.assertIn("already exists", reader.copy(page, "copies/fit"))       # now an agent: not again
+        # the owner changes both: the parent's update leaves the child's copy to its own update
+        util.write(os.path.join(self.root, "proj/fit/fit.py"), "print(3)\n")
+        util.write(os.path.join(self.root, "proj/fit/demo/index.html"), "<h1>Demo v2</h1>")
+        self.assertEqual(self.s.act({"op": "publish", "repos": [FULL], "children": ["proj/fit/demo"]}, "proj/fit"), {"ok": True})
+        self.assertIsNone(reader.fetch(FULL))
+        self.assertEqual(reader.origin("copies/fit")["files"], ["fit.py"])
+        self.assertEqual(reader.origin("copies/fit/demo")["files"], ["index.html"])
+
+    def test_copy_refuses_a_folder_with_other_files(self):
+        self.assertEqual(self.s.act({"op": "publish", "repos": [FULL], "children": ["proj/fit/demo"]}, "proj/fit"), {"ok": True})
+        reader = shares.Shares(util.new_tree("reader4"))
+        self.assertIsNone(reader.connect(FULL))
+        page = "www/shares/%s/agents/fit" % FULL
+        util.write(os.path.join(reader.root, "copies/fit/notes.txt"), "mine\n")
+        self.assertIn("notes.txt", reader.copy(page, "copies/fit"))           # not only copies there: refused
+        self.assertFalse(os.path.exists(os.path.join(reader.root, "copies/fit/index.html")))
+        util.write(os.path.join(reader.root, "copies/fit/.DS_Store"), "")      # hidden files don't count
+        os.remove(os.path.join(reader.root, "copies/fit/notes.txt"))
+        self.assertIsNone(reader.copy(page, "copies/fit"))
+        self.assertIn("already exists", reader.copy(page + "/demo", "copies/fit/demo"))   # it came with its parent
+
+    def test_publish_never_silently_replaces_another_trees_work(self):
+        # two trees publish to one repo (the owner on two machines; or a copy going back)
+        self.assertEqual(self.s.act({"op": "publish", "repos": [FULL], "children": ["proj/fit/demo"]}, "proj/fit"), {"ok": True})
+        mine = os.path.join(self.s.clone_dir(FULL, mine=True), "agents")
+
+        def repo(rel):
+            self.s.sync_mine(FULL)
+            with open(os.path.join(mine, rel)) as f:
+                return f.read()
+        other = shares.Shares(util.new_tree("other"))
+        ready(other)
+        # an agent of the same name, never published from there: a free place, not the other's
+        util.write(os.path.join(other.root, "work/fit/index.html"), "<h1>Another fit</h1>")
+        self.assertEqual(other.act({"op": "publish", "repos": [FULL]}, "work/fit"), {"ok": True})
+        self.assertEqual(other.state()["targets"]["work/fit"][FULL]["slug"], "fit-2")
+        self.assertEqual(repo("fit/index.html"), "<h1>Fit <i>results</i></h1>")
+
+        # a copy goes back to its place (nothing changed there since the copy): fine
+        self.assertIsNone(other.connect(FULL))
+        page = "www/shares/%s/agents/fit" % FULL
+        self.assertIsNone(other.copy(page + "/demo", "copies/demo"))
+        util.write(os.path.join(other.root, "copies/demo/index.html"), "<h1>Demo by other</h1>")
+        self.assertEqual(other.act({"op": "publish", "repos": [FULL]}, "copies/demo"), {"ok": True})
+        self.assertEqual(repo("fit/demo/index.html"), "<h1>Demo by other</h1>")
+        # the owner publishes the parent alone: its own files are as it left them, the child's folder is kept
+        util.write(os.path.join(self.root, "proj/fit/fit.py"), "print(5)\n")
+        self.assertEqual(self.s.act({"op": "publish", "repos": [FULL]}, "proj/fit"), {"ok": True})
+        self.assertEqual(repo("fit/demo/index.html"), "<h1>Demo by other</h1>")
+        # with its child ticked, the owner's demo would replace the other's: asked, not done
+        r = self.s.act({"op": "publish", "repos": [FULL], "children": ["proj/fit/demo"]}, "proj/fit")
+        self.assertTrue(r.get("clash"), r)
+        self.assertEqual(repo("fit/demo/index.html"), "<h1>Demo by other</h1>")
+        # on a yes, it is (force)
+        r = self.s.act({"op": "publish", "repos": [FULL], "children": ["proj/fit/demo"], "force": True}, "proj/fit")
+        self.assertEqual(r, {"ok": True})
+        self.assertEqual(repo("fit/demo/index.html"), "<h1>Demo</h1>")
+        # the other's copy, now behind the owner's newer publish, can't go back over it either
+        util.write(os.path.join(other.root, "copies/demo/index.html"), "<h1>Demo by other, v2</h1>")
+        r = other.act({"op": "publish", "repos": [FULL]}, "copies/demo")
+        self.assertTrue(r.get("clash"), r)
+        self.assertEqual(repo("fit/demo/index.html"), "<h1>Demo</h1>")
+        # automatic republish never forces
+        s = other.state()
+        s["mode"]["copies/demo"] = "run"
+        other.save(s)
+        other.republish_changed()
+        self.assertEqual(repo("fit/demo/index.html"), "<h1>Demo</h1>")
+
     def test_readers_with_pending_invitations(self):
         # readers: the collaborators (not you), then the invitations not yet accepted
         api = {"repos/%s/collaborators?affiliation=direct" % FULL: [{"login": "wang", "role_name": "admin"},
