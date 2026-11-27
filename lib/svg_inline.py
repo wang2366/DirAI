@@ -74,6 +74,27 @@ def prefix_ids(svg, prefix):
     return re.sub(r'(\sid="|url\(#|(?:xlink:)?href="#)([^")]+)("|\))', ref, svg)
 
 
+def natural_width(svg):
+    """The viewBox width (px, as text) of an SVG whose root <svg> would fill its container: width="100%",
+    or no width or height. index.css lets a page be as wide as the window, so such a diagram (drawn for
+    820 units, say) grew with it, text and all (1.7x at 1400 px). With this width it shows at its drawn
+    size at most, and index.css (max-width: 100%) still shrinks it in a narrow window. None otherwise."""
+    m = re.search(r"<svg\b[^>]*>", svg)
+    if not m:
+        return None
+    root = m.group(0)
+    w, h = attr(root, "width"), attr(root, "height")
+    fills = (w is None and (h is None or h.strip().endswith("%"))) or (w is not None and w.strip().endswith("%"))
+    vb = attr(root, "viewBox")
+    if not fills or not vb:
+        return None
+    try:
+        vbw = float(vb.replace(",", " ").split()[2])
+    except (IndexError, ValueError):
+        return None
+    return ("%g" % vbw) if vbw > 0 else None
+
+
 def for_page(svg, prefix):
     """An SVG file's text made fit to sit inside a page: the three steps above."""
     return prefix_ids(mpl_style_to_attrs(strip_header(svg)), prefix)
@@ -134,7 +155,7 @@ def expand(html, folder, root, report=None, snapshot=None, id_prefix=""):
         if svg is None:
             if report is not None and src and src.lower().endswith(".svg"):
                 report.append((src, why))
-            return tag
+            return _sized_img(tag, src, folder, root)
         stem = re.sub(r"\W", "_", os.path.splitext(os.path.basename(src))[0])
         seen[stem] = seen.get(stem, 0) + 1
         prefix = id_prefix + (stem if seen[stem] == 1 else "%s%d" % (stem, seen[stem]))
@@ -144,6 +165,7 @@ def expand(html, folder, root, report=None, snapshot=None, id_prefix=""):
         if alt:
             add.update({"role": "img", "aria-label": alt})
         drop = set(add)
+        width = width or natural_width(svg)   # else a width="100%" diagram grows with the window
         if width:       # the <img>'s width wins; height follows from the viewBox (index.css: height auto)
             add["width"] = width
             drop |= {"width", "height"}
@@ -154,6 +176,23 @@ def expand(html, folder, root, report=None, snapshot=None, id_prefix=""):
         return svg[:m.start()] + new + svg[m.end():]
 
     return IMG.sub(one, html)
+
+
+def _sized_img(tag, src, folder, root):
+    """An <img> of a local SVG that stays a picture, with width="<viewBox width>" added when it has no
+    width and the SVG would fill its container (natural_width()): the same size as when inlined."""
+    if attr(tag, "width") is not None:
+        return tag
+    path = _local(src, folder, root)
+    if path is None:
+        return tag
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            head = f.read(8192)        # the root <svg> tag is near the top
+    except OSError:
+        return tag
+    w = natural_width(strip_header(head))
+    return tag if not w else re.sub(r"^<img\b", '<img width="%s"' % w, tag, flags=re.I)
 
 
 def inline_one(src, folder, root, id_prefix):

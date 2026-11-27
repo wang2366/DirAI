@@ -96,6 +96,25 @@ class Expand(unittest.TestCase):
         self.assertIn(("big.svg", "over 300 kB"), report)
         self.assertIn(("o.svg", "has an on…= handler"), report)
 
+    def test_natural_width(self):
+        """A diagram with width="100%" or no size shows at most at its viewBox width, not the window's."""
+        fill = SVG.replace('width="200" height="100" ', 'width="100%" ')
+        util.write(os.path.join(self.p, "w.svg"), fill)
+        util.write(os.path.join(self.p, "n.svg"), SVG.replace('width="200" height="100" ', ""))
+        for name in ("w.svg", "n.svg"):
+            out = self.expand('<img src="%s">' % name)
+            self.assertIn('data-dirai-src="%s" width="200"' % name, out)
+            self.assertNotIn("100%", out)
+        self.assertIn('width="50%"', self.expand('<img src="w.svg" width="50%">'))   # the <img>'s width wins
+        self.assertIn('width="200"', svg_inline.inline_one("w.svg", self.p, self.root, "js1-"))
+        self.assertIn('width="200" height="100"', self.expand('<img src="d.svg">'))    # absolute: as drawn
+        self.assertIsNone(svg_inline.natural_width(MPL))
+        self.assertIsNone(svg_inline.natural_width('<svg viewBox="0 0 9 9" height="9">'))
+        # one that stays a picture gets the same width on its <img>
+        util.write(os.path.join(self.p, "ws.svg"), fill.replace("<text", "<script>x()</script><text"))
+        self.assertEqual(self.expand('<img src="ws.svg">'), '<img width="200" src="ws.svg">')
+        self.assertEqual(self.expand('<img src="ws.svg" width="9">'), '<img src="ws.svg" width="9">')
+
     def test_inline_one(self):
         """A figure a page's script adds: the same <svg>, with the ids kept apart by the given prefix."""
         out = svg_inline.inline_one("d.svg", self.p, self.root, "js1-")
