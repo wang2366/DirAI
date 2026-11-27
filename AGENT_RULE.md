@@ -49,6 +49,10 @@ at this file; the agents' own runs get them directly).
   agent's jobs) counts the jobs whose working directory is in the agent's folder. When the agent's
   work runs jobs in other folders, e.g. a test sweep in another checkout, put those folders in
   the agent folder's `job_dirs.txt`, one absolute path per line.
+- **Background work is a tracked job.** SLURM jobs (`sbatch`), local jobs started with
+  `python3 <DirAI>/scripts/dirai_job.py run -- <command>` (on a machine without SLURM; not `nohup … &`),
+  and Modal calls whose `fc-…` id the run printed keep the agent "working"; when they have all ended,
+  the server messages the agent with their exit codes and log tails, so it continues on its own.
 - **The text files in your folder are shown to the owner** at the end of your `index.html`, raw, with
   line numbers, one collapsed section per file (scripts, notes, configs; not images, binaries or files
   over 1 MB; a `.md` rendered, raw HTML in it shown as text). The owner can select lines there and ask

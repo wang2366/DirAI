@@ -49,14 +49,25 @@ draft a request: {note_cmd} ask <its folder> "<what you need>" (see its --help).
 sends it; its answer comes back to you as a message. Don't wait for it in this run.
 {git}To delete files or folders, run "{agent_rm} <path>...": it works only inside your folder and
 deletes immediately, no trash (plain rm -r / rm -rf stay blocked).
-Rules: don't delete anything outside this folder; long or heavy work goes to
-SLURM (sbatch), not this process. Don't wait for or poll SLURM jobs (no squeue loops, no sleep):
-submit them, say what you submitted, and end your reply. The server watches the jobs you submit and
-jobs running in this folder, and messages you here when they have all finished. If the work runs
+Rules: don't delete anything outside this folder; {long_work} Don't wait for or poll jobs (no squeue
+loops, no sleep, no tail -f): start them, say what you started, and end your reply. The server watches
+the jobs you start and jobs running in this folder (it also watches a Modal call whose fc-... id your
+output shows, e.g. from .spawn()), keeps you "working" meanwhile, and messages you here when they have
+all finished, with their exit codes and the end of their logs (to see your jobs now, of every kind:
+python3 {dirai_job} list). If the work runs
 jobs in other folders (e.g. a job that submits a test sweep in another checkout), list those
 folders in this folder's job_dirs.txt (one absolute path per line), so the server keeps waiting
 for them and shows them in the status bar of your index.html. {approval} Exception: these are blocked permanently and can
 never be granted, so don't ask; give the owner the exact command to run themselves instead: {always_denied}."""
+
+
+LONG_WORK = {   # the {long_work} of SYSTEM_PROMPT, by whether this machine has SLURM
+    "slurm": "long or heavy work goes to SLURM (sbatch), not this process.",
+    "local": ("long work goes in the background as a tracked job: python3 {dirai_job} run [--name NAME] "
+              "[--log FILE] [--mem 2G] -- <command> (detached, survives your run, prints \"Submitted local job L<n>\"; "
+              "this machine has no SLURM; memory is capped at 80% of RAM unless --mem says otherwise, and a job "
+              "over its cap is killed). Don't start background work any other way (no nohup, setsid or &)."),
+}
 
 
 APPROVAL = {

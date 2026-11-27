@@ -30,7 +30,12 @@ LIMIT_MARGIN_S = 120        # send this long after the stated reset time
 LIMIT_FALLBACK_S = 1800     # retry after this when the reset time can't be read
 
 
-SUBMITTED_RE = re.compile(r"Submitted batch job (\d+)")
+SUBMITTED_RE = re.compile(r"Submitted batch job (\d+)|Submitted local job (L\d+)|\b(fc-[0-9A-Za-z]{26})\b")
+
+
+def job_ids(text):
+    """Ids of the jobs a run's output names: sbatch's, dirai_job's (L<n>) and Modal calls' (fc-...)."""
+    return list(dict.fromkeys(next(g for g in m if g) for m in SUBMITTED_RE.findall(text)))
 
 
 # Claude Code's replies for a login that only /login fixes (2.1.308): "Failed to authenticate: OAuth
@@ -202,7 +207,7 @@ def transcript(session_id):
 
 
 def submitted_jobs(session_id, offset):
-    """Job ids sbatch printed in the session's transcript after byte offset (this run's part)."""
+    """Job ids (job_ids) in the session's transcript after byte offset (this run's part)."""
     path = transcript(session_id)
     if not path:
         return []
@@ -212,7 +217,7 @@ def submitted_jobs(session_id, offset):
             text = f.read().decode("utf-8", "replace")
     except OSError:
         return []
-    return list(dict.fromkeys(SUBMITTED_RE.findall(text)))
+    return job_ids(text)
 
 
 class RunCancelled(Exception):

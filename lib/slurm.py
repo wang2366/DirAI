@@ -1,6 +1,6 @@
 """The owner's SLURM jobs (from sacct), which agents.py waits on, and the status bar server.py puts
-at the top of every agent's index.html: what the agent is working on and the jobs whose working
-directory is inside its folder (open items are in its summary card).
+at the top of every agent's index.html: what the agent is working on and its running jobs (SLURM,
+local and Modal: jobs.py merges them; open items are in its summary card).
 """
 import html
 import os
@@ -143,14 +143,17 @@ def status_bar(agent_dir, work=None):
     """HTML for the status bar of the agent in agent_dir (work = Agents.working(agent) or None): what
     the agent is working on and its SLURM jobs, each only when there is one; "" when there is
     neither (its summary card says what is open)."""
+    import jobs     # jobs.py builds on this module
     parts = [working_html(work)] if work else []
-    js = agent_jobs(agent_dir)
+    js = jobs.agent_jobs(agent_dir, poll=False)     # SLURM, local and Modal jobs
     if js:
-        parts.append("<div><b>Jobs in the queue:</b><ul style=\"margin:2px 0 0;padding-left:22px\">%s</ul></div>" % "".join(
-            "<li><code>%s</code> %s &middot; %s %s%s &middot; %s%s</li>" % (
-                html.escape(j["id"]), html.escape(j["name"]), html.escape(j["state"]),
+        parts.append("<div><b>Running jobs:</b><ul style=\"margin:2px 0 0;padding-left:22px\">%s</ul></div>" % "".join(
+            "<li><code>%s</code> %s%s &middot; %s %s%s &middot; %s%s</li>" % (
+                html.escape(j["id"]), html.escape(j["name"]),
+                " &middot; %s" % j["kind"] if j.get("kind", "slurm") != "slurm" else "",
+                html.escape(j["state"]),
                 html.escape(j["time"]),
-                (" (%s left)" % html.escape(j["left"])) if j["state"] == "RUNNING" else "",
+                (" (%s left)" % html.escape(j["left"])) if j["state"] == "RUNNING" and j.get("left") else "",
                 html.escape(j["where"]),
                 (" &middot; in <code>%s/</code>" % html.escape(j["sub"])) if j["sub"] != "." else "")
             for j in js))

@@ -39,17 +39,18 @@ import colleagues
 import dirai_config
 import dirai_card
 import genai_relay
+import jobs
 import page_undo
 import slurm
 import svg_inline
-from claude_run import (SUBMITTED_RE, Login, LiveRun, RunCancelled, auth_error, context_tokens, limit_reset,
+from claude_run import (Login, LiveRun, RunCancelled, auth_error, context_tokens, job_ids, limit_reset,
                         signal_group, stop_process, submitted_jobs, transcript)
 from remotes import machine_name
 from dirai_config import load_json
 from agent_permissions import (ALWAYS_DENY, DEFAULT_ALLOW, SCRIPT_HINT, always_denied, covered, denial_rules,
                                 describe_denial, extra_dirs, folder_covers, is_heredoc, keepable, mcp_config, path_grants,
                                 request_denial, shared_grants, split_command, unusable)
-from agent_prompts import (ANSWERS_PROMPT, APPROVAL, CARD_FIX, GIT_PROMPT, LIMIT_RETRY, NEW_CHAT_MARK, NOTE_CMD, NOTES_FIX, QUEUED_PROMPT, SEL_MAX,
+from agent_prompts import (ANSWERS_PROMPT, APPROVAL, CARD_FIX, GIT_PROMPT, LIMIT_RETRY, LONG_WORK, NEW_CHAT_MARK, NOTE_CMD, NOTES_FIX, QUEUED_PROMPT, SEL_MAX,
                             STARTER_INDEX, SYSTEM_PROMPT, fresh_prompt, notes_prompt, selection_lines, selection_prompt)
 import notes as sticky
 
@@ -135,10 +136,11 @@ ASK_DENIED = {
     "timeout": "No answer from the owner within %d h of waiting, so this was denied. Don't ask again "
                "in this run; finish and say in your reply what is still needed." % (ASK_WAIT_S // 3600),
 }
-# After a run, the agent stays "working" while SLURM jobs it submitted, or the agent's jobs
-# (slurm.job_dirs: its folder plus the folders in its job_dirs.txt), are in the queue (st["job_wait"]);
-# when they have all left, the agent is messaged to check the results. server.py's housekeeping
-# loop calls check_job_waits(); at most MAX_AUTO automatic
+# After a run, the agent stays "working" while jobs it started, or the agent's jobs (slurm.job_dirs:
+# its folder plus the folders in its job_dirs.txt), are running (st["job_wait"]): SLURM jobs, local
+# jobs (scripts/dirai_job.py, or processes the run left behind) and Modal calls; see jobs.py. When
+# they have all ended, the agent is messaged to check the results. server.py calls check_job_waits()
+# every minute (Modal calls are asked at most every jobs.MODAL_POLL_S); at most MAX_AUTO automatic
 # messages in a row (a comment from the owner resets the count), so a run that keeps resubmitting
 # can't loop.
 MAX_AUTO = 5
@@ -469,6 +471,8 @@ class Agents:
         self.genai_claim = None  # its genai_relay.claim(), so other trees' servers wait for it
         self.genai_timer = None
         self.procs = {}         # agent -> its running claude process (for Cancel)
+        self.run_pids = {}      # agent -> pids of the processes its current run started (session leaders), for
+                                # jobs.adopt_strays: what they leave running becomes the agent's local jobs
         self.live = {}          # agent -> its run's LiveRun (stdin, prompts waiting for the owner)
         self.cancelled = set()  # agents whose run the owner cancelled
         self.hold_until = 0     # no Claude run starts before this (usage limit, login)
@@ -1753,6 +1757,9 @@ class Agents:
                     git=GIT_PROMPT.format(agent_dir=agent_dir) if in_git(agent_dir) else "",
                     approval=APPROVAL[mode], always_denied=", ".join(ALWAYS_DENY), agent_rule_path=AGENT_RULE_MD,
                     agent_rm=os.path.join(dirai_config.SCRIPTS_DIR, "agent_rm.sh"),
+                    long_work=LONG_WORK["slurm" if shutil.which("sbatch") else "local"].format(
+                        dirai_job=os.path.join(dirai_config.SCRIPTS_DIR, "dirai_job.py")),
+                    dirai_job=os.path.join(dirai_config.SCRIPTS_DIR, "dirai_job.py"),
                     card_py=os.path.join(dirai_config.LIB_DIR, "dirai_card.py"), note_cmd=NOTE_CMD)
                 + colleagues.prompt_block(self.root, list(colls), os.path.join(dirai_config.LIB_DIR, "dirai_card.py"), modes)
                 + "\n\n" + load_text(AGENT_RULE_MD))
@@ -1785,6 +1792,7 @@ class Agents:
         replied = False
         try:
             session, grants, model, colls, modes, local, engine, thread = self._begin(agent)
+            run_start = time.time()
             agent_dir = os.path.join(self.root, agent)
             sent = prompt       # what the run gets; prompt itself is kept for a retry
             if engine == "codex":
@@ -1844,7 +1852,7 @@ class Agents:
                 self._hold_for_login(agent, prompt, entry, session)
                 return
             ids = [] if entry["text"] == "Cancelled by the owner." else self._jobs_to_wait_for(
-                agent_dir, session, offset, submitted)
+                agent_dir, session, offset, submitted, run_start, agent)
             self._finish(agent, entry, card_note, denials, session, ids, engine, sticky.prompt_notes(prompt))
             if is_compact(prompt) and not until:
                 self._auto_compact_done(agent, before, context_tokens(session), replied)
@@ -1863,6 +1871,7 @@ class Agents:
                 self.running -= 1
                 self._genai_done(agent)
                 self.procs.pop(agent, None)
+                self.run_pids.pop(agent, None)
                 self.cancelled.discard(agent)
                 if self.live.pop(agent, None):
                     with self._changes() as data:
@@ -1917,6 +1926,7 @@ class Agents:
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
             with self.lock:
                 self.procs[agent] = p
+                self.run_pids.setdefault(agent, []).append(p.pid)
                 if agent in self.cancelled:
                     stop_process(p)
             err = []
@@ -1944,7 +1954,7 @@ class Agents:
         try:
             out = one(prompt, session)
             session = out["session_id"] or session
-            jobs = [j for c in out["commands"] for j in SUBMITTED_RE.findall(c)]
+            submitted = [j for c in out["commands"] for j in job_ids(c)]
             if session:
                 codex_engine.record_usage(session)
             reply = out["result"] or out["error"] or out["stderr"][-2000:] or "(no reply)"
@@ -1959,14 +1969,14 @@ class Agents:
                 fix = self._followups(index, snap, agent_dir, sticky.prompt_notes(prompt), asked)(out["result"] or "")
                 if fix and session:
                     more = one(fix, session)
-                    jobs += [j for c in more["commands"] for j in SUBMITTED_RE.findall(c)]
+                    submitted += [j for c in more["commands"] for j in job_ids(c)]
                     if asked.get("card"):
                         left = dirai_card.problems(index, now()[:10])
                         card_note = system_entry("The summary card needed fixing; " + (
                             "the agent fixed it." if not left else "it still has problems: " + "; ".join(left) + "."))
             model = (codex_engine.usage().get("model") or "codex")
             entry = {"role": "claude", "time": now(), "text": reply, "engine": "codex", "model": "codex:" + model
-                     if model != "codex" else "codex", "jobs": list(dict.fromkeys(jobs))}
+                     if model != "codex" else "codex", "jobs": list(dict.fromkeys(submitted))}
             if out.get("usage"):
                 entry["tokens"] = out["usage"]
             return entry, card_note, [], session
@@ -1994,6 +2004,7 @@ class Agents:
             live = LiveRun(p)
             with self.lock:
                 self.procs[agent], self.live[agent] = p, live
+                self.run_pids.setdefault(agent, []).append(p.pid)
                 if agent in self.cancelled:      # cancelled before it started
                     stop_process(p)
             live.send({"type": "control_request", "request_id": "init", "request": {"subtype": "initialize"}})
@@ -2144,7 +2155,7 @@ class Agents:
             st["codex_session" if engine == "codex" else "session_id"] = session
             st["status"] = "unread"
             if ids and st.get("auto_runs", 0) >= MAX_AUTO:
-                note(st, "SLURM jobs %s are still queued, but the agent has already been "
+                note(st, "Jobs %s are still running, but the agent has already been "
                          "messaged automatically %d times in a row; not watching them. Comment "
                          "to continue." % (", ".join(ids), MAX_AUTO))
             elif ids:
@@ -2183,49 +2194,64 @@ class Agents:
         left = dirai_card.problems(index, now()[:10])
         return CARD_FIX % "; ".join(left) if left else None
 
-    def _jobs_to_wait_for(self, agent_dir, session, offset, submitted=None):
-        """Jobs still queued that this run submitted, plus the owner's jobs in the agent's folder.
-        submitted: the job ids a Codex run printed (else read from Claude's transcript)."""
-        live = slurm.live_ids()
-        if live is None:
+    def _jobs_to_wait_for(self, agent_dir, session, offset, submitted=None, since=None, agent=None):
+        """Jobs still running that this run started, plus every running job of the agent (jobs.agent_jobs:
+        SLURM jobs in its folders, local and Modal jobs recorded there). submitted: the job ids a Codex
+        run printed (else read from Claude's transcript). Modal call ids among them are recorded first,
+        and processes the run left behind are adopted as local jobs (since: the run's start)."""
+        sl = jobs.slurm_active()
+        if sl is None:
             return []
-        ids = [i for i in (submitted_jobs(session, offset) if submitted is None else submitted) if i in live]
-        for j in slurm.agent_jobs(agent_dir, fresh=True):
-            if slurm.base_id(j["id"]) not in ids:
-                ids.append(slurm.base_id(j["id"]))
+        cand = submitted_jobs(session, offset) if submitted is None else submitted
+        jobs.register_modal(agent_dir, [i for i in cand if jobs.kind(i) == "modal"])
+        if since is not None:
+            with self.lock:
+                mine = tuple(self.run_pids.get(agent, ()))
+                others = tuple(p.pid for a, p in self.procs.items() if a != agent)
+            jobs.adopt_strays(agent_dir, since, mine, others)
+        running = [jobs.base_id(j["id"]) for j in jobs.agent_jobs(agent_dir, fresh=True, slurm_jobs=sl)]
+        live = {slurm.base_id(j["id"]) for j in sl} | set(running)
+        ids = [i for i in dict.fromkeys(cand) if i in live]
+        for i in running:
+            if i not in ids:
+                ids.append(i)
         return ids
 
     def _start_job_wait(self, st, ids):
-        """Keep the agent "working" until jobs ids leave the queue; caller holds the lock."""
+        """Keep the agent "working" until jobs ids have ended; caller holds the lock."""
         st["status"], st["started"] = "working", time.time()
         st["job_wait"] = {"jobs": ids, "since": st["started"]}
         st["working_on"] = self._waiting_text(ids)
-        note(st, "Waiting for SLURM jobs %s. When they have all left the queue, the agent will be "
+        note(st, "Waiting for jobs %s. When they have all ended, the agent will be "
                  "asked to check the results and update index.html." % ", ".join(ids))
 
     @staticmethod
     def _waiting_text(ids):
         shown = ", ".join(ids[:6]) + (" and %d more" % (len(ids) - 6) if len(ids) > 6 else "")
-        return "Waiting for %d SLURM job%s (%s); the agent is messaged when they finish" % (
-            len(ids), "" if len(ids) == 1 else "s", shown)
+        kinds = sorted({jobs.kind(i) for i in ids})
+        what = {"slurm": "SLURM", "local": "local", "modal": "Modal"}
+        label = (what[kinds[0]] + " ") if len(kinds) == 1 else ""
+        return "Waiting for %d %sjob%s (%s); the agent is messaged when they finish" % (
+            len(ids), label, "" if len(ids) == 1 else "s", shown)
 
     def check_job_waits(self):
-        """One pass over the agents waiting on SLURM jobs: message each agent
-        whose jobs have all left the queue."""
+        """One pass over the agents waiting on jobs (SLURM, local, Modal): message each agent
+        whose jobs have all ended."""
         with self.lock:
             watched = {p: st["job_wait"]["jobs"] for p, st in self._load().items() if st.get("job_wait")}
         if not watched:
             return
-        active = slurm.active_jobs()
+        active = jobs.slurm_active()
         if active is None:
             return
         live = {slurm.base_id(j["id"]) for j in active}
         done, waiting = {}, {}
         for p, ids in watched.items():
-            mine = [i for i in ids if i in live]
-            for j in slurm.agent_jobs(os.path.join(self.root, p), all_jobs=active):
-                if slurm.base_id(j["id"]) not in mine:
-                    mine.append(slurm.base_id(j["id"]))
+            running = [jobs.base_id(j["id"]) for j in jobs.agent_jobs(os.path.join(self.root, p), slurm_jobs=active)]
+            mine = [i for i in ids if i in live or i in running]
+            for i in running:
+                if i not in mine:
+                    mine.append(i)
             (waiting if mine else done)[p] = mine or ids
         with self._edit() as data:     # keep the status bar's "Waiting for ..." line current
             for p, mine in waiting.items():
@@ -2233,16 +2259,16 @@ class Agents:
                 if st and st.get("job_wait"):
                     st["working_on"] = self._waiting_text(mine)
         for agent, ids in done.items():
-            report = slurm.job_report(ids)
+            report = jobs.report(ids, os.path.join(self.root, agent))
             with self._edit(agent) as st:
                 if not st.get("job_wait"):
                     continue
                 st.pop("job_wait")
                 st["auto_runs"] = st.get("auto_runs", 0) + 1
-                note(st, "SLURM jobs finished:\n" + report)
-                st["working_on"], st["started"] = "Check the finished SLURM jobs %s" % ", ".join(ids), None
-                text = ("(Automatic message from the DirAI server, not the owner.) The SLURM jobs you were "
-                        "waiting on have left the queue:\n%s\n\nCheck their output and logs, update index.html "
+                note(st, "Jobs finished:\n" + report)
+                st["working_on"], st["started"] = "Check the finished jobs %s" % ", ".join(ids), None
+                text = ("(Automatic message from the DirAI server, not the owner.) The jobs you were "
+                        "waiting on have ended:\n%s\n\nCheck their output and logs, update index.html "
                         "and its summary card with the results, and reply with a short summary. If you submit new "
                         "jobs, end your reply; you will be messaged again when they finish." % report)
                 prompt = text if st.get("session_id") or not st["thread"] else fresh_prompt(st["thread"], text)

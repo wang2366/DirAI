@@ -171,13 +171,22 @@ def housekeeping():
 
 
 def repeats():
-    """Send the agents' scheduled messages (agents.check_schedules) as they come due."""
+    """Send the agents' scheduled messages (agents.check_schedules) as they come due, and check the
+    jobs agents wait on (agents.check_job_waits: local jobs end unnoticed otherwise until the 10-minute
+    housekeeping pass)."""
     while True:
         time.sleep(REPEAT_CHECK_S)
         try:
             AGENTS.check_schedules()
         except Exception as e:
             print("schedule check failed: %s" % e, flush=True)
+        if HOUSEKEEP_LOCK.acquire(blocking=False):     # not while housekeeping does the same
+            try:
+                AGENTS.check_job_waits()
+            except Exception as e:
+                print("job check failed: %s" % e, flush=True)
+            finally:
+                HOUSEKEEP_LOCK.release()
 
 
 class HtmlOnlyHandler(http.server.SimpleHTTPRequestHandler):
