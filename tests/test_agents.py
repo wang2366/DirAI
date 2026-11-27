@@ -641,12 +641,12 @@ class AgentsTest(unittest.TestCase):
         with self.rv._edit("p") as st:
             self.rv._start_job_wait(st, ["11", "12"])
         queue = [{"id": "12", "workdir": "/elsewhere"}]
-        stubs = {"active_jobs": lambda: list(queue), "agent_jobs": lambda d, all_jobs=None, fresh=False: [],
-                 "job_report": lambda ids: "report for " + ",".join(ids)}
-        saved = {k: getattr(agents.slurm, k) for k in stubs}
+        stubs = {"slurm_active": lambda: list(queue), "agent_jobs": lambda d, slurm_jobs=None, fresh=False: [],
+                 "report": lambda ids, d: "report for " + ",".join(ids)}
+        saved = {k: getattr(agents.jobs, k) for k in stubs}
         try:
             for k, f in stubs.items():
-                setattr(agents.slurm, k, f)
+                setattr(agents.jobs, k, f)
             self.rv.check_job_waits()                      # 12 still queued: keep waiting
             st = self.data()["p"]
             self.assertEqual(st["job_wait"]["jobs"], ["11", "12"])
@@ -656,11 +656,48 @@ class AgentsTest(unittest.TestCase):
             st = self.data()["p"]
         finally:
             for k, f in saved.items():
-                setattr(agents.slurm, k, f)
+                setattr(agents.jobs, k, f)
         self.assertNotIn("job_wait", st)
         self.assertEqual(st["auto_runs"], 1)
-        self.assertIn("SLURM jobs finished:\nreport for 11,12", self.texts())
-        self.assertIn("The SLURM jobs you were waiting on have left the queue:\nreport for 11,12", st["pending"])
+        self.assertIn("Jobs finished:\nreport for 11,12", self.texts())
+        self.assertIn("The jobs you were waiting on have ended:\nreport for 11,12", st["pending"])
+
+    def test_check_job_waits_local_job_without_slurm(self):
+        """No SLURM on the machine: a local job keeps the agent working; its end messages the agent
+        with the exit code and the log's last lines."""
+        import subprocess
+        import jobs
+        self.rv.comment("p", "submit")
+        self.rv.cancel("p")
+        agent_dir = os.path.join(self.root, "p")
+        log = os.path.join(agent_dir, "run.log")
+        util.write(log, "step 1\nBAD FIT 4.67 px\n")
+        proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+        try:
+            jid = jobs.new_local_id(agent_dir)
+            jobs._write(os.path.join(jobs.records_dir(agent_dir), jid + ".json"), {
+                "id": jid, "kind": "local", "name": "fit", "cmd": "bash fit.sh", "workdir": agent_dir,
+                "log": log, "pid": proc.pid, "start": jobs.proc_start(proc.pid), "started": time.time()})
+            with mock.patch.object(agents.jobs, "slurm_active", lambda: []):
+                with self.rv._edit("p") as st:
+                    self.rv._start_job_wait(st, [jid])
+                self.rv.check_job_waits()
+                st = self.data()["p"]
+                self.assertEqual((st["status"], st["job_wait"]["jobs"]), ("working", [jid]))
+                self.assertTrue(st["working_on"].startswith("Waiting for 1 local job (L1)"), st["working_on"])
+                proc.kill()
+                proc.wait()
+                util.write(os.path.join(jobs.records_dir(agent_dir), jid + ".exit"), "3 %f\n" % time.time())
+                self.rv.check_job_waits()
+                st = self.data()["p"]
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        self.assertNotIn("job_wait", st)
+        self.assertIn("L1  fit  FAILED", st["pending"])
+        self.assertIn("exit 3", st["pending"])
+        self.assertIn("BAD FIT 4.67 px", st["pending"])
 
     def test_retry_after_limit(self):
         self.rv.hold_until = 0
@@ -687,7 +724,7 @@ class AgentsTest(unittest.TestCase):
         st = self.data()["p"]
         self.assertEqual(st["status"], "unread")
         self.assertNotIn("job_wait", st)
-        self.assertTrue(self.texts()[-1].startswith("SLURM jobs 8 are still queued"))
+        self.assertTrue(self.texts()[-1].startswith("Jobs 8 are still running"))
 
     def test_migrates_old_state(self):
         """A tree served before 2026-10: reviews.json, page_prev/ and the "watch" key, renamed."""
